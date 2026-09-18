@@ -311,4 +311,14 @@ describe("validateDocument", () => {
     expect(issues).toEqual([]);
     expect(document?.parts[0].stock).toBe("bracket-l-2x2");
   });
+
+  it("accepts a flat L-bracket as a placed part", () => {
+    const { document, issues } = validateDocument({
+      ...base,
+      parts: [{ label: "Flat bracket", stock: "bracket-flat-l-2x1" }],
+      components: [{ label: "Box", parts: [{ part: "flat-bracket-1" }] }],
+    });
+    expect(issues).toEqual([]);
+    expect(document?.parts[0].stock).toBe("bracket-flat-l-2x1");
+  });
 });

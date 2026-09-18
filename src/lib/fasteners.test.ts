@@ -119,12 +119,47 @@ components:
     expect(result.scene?.fasteners).toHaveLength(1);
   });
 
+  it("meshes flat L-brackets as parts and lets screws go through them", () => {
+    const result = compileDocument(`
+version: 1
+name: FlatBracket
+parts:
+  - { label: Leg, stock: 2x4x8 }
+  - { label: Flat bracket, stock: bracket-flat-l-2x1 }
+components:
+  - label: Box
+    parts:
+      - { part: leg-1, position: [0, 0, 0] }
+      - { part: flat-bracket-1, position: [0, 0, 0] }
+    fasteners:
+      - stock: screw-wood-8x1.25
+        members:
+          - { part: flat-bracket-1, at: [0.5, 0.5, 0.125], direction: [0, 0, -1] }
+          - { part: leg-1, at: [0.5, 0.5, 1.5], direction: [0, 0, 1] }
+`);
+    expect(result.diagnostics.filter((item) => item.severity === "error")).toEqual([]);
+    expect(result.scene?.components[0].parts).toHaveLength(2);
+    expect(result.scene?.components[0].parts.every((part) => part.fastened)).toBe(true);
+    expect(result.scene?.fasteners).toHaveLength(1);
+  });
+
   it("rejects cuts on an L-bracket", () => {
     const result = compileDocument(`
 version: 1
 name: Bad
 parts:
   - { label: Corner bracket, stock: bracket-l-2x2, cuts: [{ axis: 0, angle: 90, at: 1 }] }
+`);
+    expect(result.scene).toBeUndefined();
+    expect(result.diagnostics.some((item) => item.message.includes("cannot take planar cuts"))).toBe(true);
+  });
+
+  it("rejects cuts on a flat L-bracket", () => {
+    const result = compileDocument(`
+version: 1
+name: Bad
+parts:
+  - { label: Flat bracket, stock: bracket-flat-l-2x1, cuts: [{ axis: 0, angle: 90, at: 1 }] }
 `);
     expect(result.scene).toBeUndefined();
     expect(result.diagnostics.some((item) => item.message.includes("cannot take planar cuts"))).toBe(true);

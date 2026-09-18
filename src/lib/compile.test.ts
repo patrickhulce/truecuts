@@ -103,6 +103,14 @@ describe("compileDocument", () => {
     expect(byId.get("brace-1")?.fastened).toBe(true);
     expect(byId.get("spare-block-1")?.fastened).toBe(false);
 
+    const leg1 = byId.get("leg-1");
+    expect(leg1?.worldCenter[0]).toBeCloseTo(1.75, 5);
+    expect(leg1?.worldCenter[1]).toBeCloseTo(15, 5);
+    expect(leg1?.worldCenter[2]).toBeCloseTo(0.75, 5);
+    expect(result.scene!.center[0]).toBeGreaterThan(0);
+    expect(result.scene!.center[1]).toBeGreaterThan(0);
+    expect(result.scene!.center[2]).toBeGreaterThan(0);
+
     const screws = result.scene!.fasteners.filter((fastener) => fastener.subtype === "screw");
     for (const screw of screws) {
       const [a, b] = screw.members;

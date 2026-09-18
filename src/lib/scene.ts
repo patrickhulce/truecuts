@@ -1,13 +1,15 @@
-import { getCatalogPart, isLBracket, type CatalogPart } from "./catalog";
+import { getCatalogPart, isFlatLBracket, isLBracket, type CatalogPart } from "./catalog";
 import {
   fastenedFromSeed,
   instanceKey,
   resolveFasteners,
+  worldPoint,
   type SceneFastener,
 } from "./fasteners";
 import {
   applyCuts,
   boundingBox,
+  flatLBracketPolyhedron,
   lBracketPolyhedron,
   polyhedronVolume,
   type Polyhedron,
@@ -27,6 +29,7 @@ export type ScenePartInstance = {
   position: Vec3;
   rotation: Vec3;
   bounds: { min: Vec3; max: Vec3 };
+  worldCenter: Vec3;
   finished: { length: number; width: number; thickness: number };
   fastened: boolean;
 };
@@ -41,6 +44,7 @@ export type SceneComponent = {
 
 export type SceneModel = {
   name: string;
+  center: Vec3;
   components: SceneComponent[];
   fasteners: SceneFastener[];
 };
@@ -83,12 +87,31 @@ function assertCutInBounds(cut: ResolvedCut, size: Vec3, partId: string): void {
   }
 }
 
+function midpoint(min: Vec3, max: Vec3): Vec3 {
+  return [(min[0] + max[0]) / 2, (min[1] + max[1]) / 2, (min[2] + max[2]) / 2];
+}
+
+function centerFromWorldCenters(centers: Vec3[]): Vec3 {
+  if (centers.length === 0) return [0, 0, 0];
+  const min: Vec3 = [Infinity, Infinity, Infinity];
+  const max: Vec3 = [-Infinity, -Infinity, -Infinity];
+  for (const point of centers) {
+    min[0] = Math.min(min[0], point[0]);
+    min[1] = Math.min(min[1], point[1]);
+    min[2] = Math.min(min[2], point[2]);
+    max[0] = Math.max(max[0], point[0]);
+    max[1] = Math.max(max[1], point[1]);
+    max[2] = Math.max(max[2], point[2]);
+  }
+  return midpoint(min, max);
+}
+
 export function meshPart(part: ResolvedPart, stock: CatalogPart): Polyhedron {
-  if (isLBracket(stock)) {
+  if (isLBracket(stock) || isFlatLBracket(stock)) {
     if (part.cuts.length > 0) {
       throw new Error(`L-bracket ${part.id} cannot take planar cuts`);
     }
-    const poly = lBracketPolyhedron(stock.size);
+    const poly = isFlatLBracket(stock) ? flatLBracketPolyhedron(stock.size) : lBracketPolyhedron(stock.size);
     if (polyhedronVolume(poly) < 1e-6) {
       throw new Error(`L-bracket ${part.id} has no volume`);
     }
@@ -163,6 +186,7 @@ export function buildScene(document: ResolvedDocument): {
           position: placement.position,
           rotation: placement.rotation,
           bounds,
+          worldCenter: worldPoint(midpoint(bounds.min, bounds.max), placement, component),
           finished: finishedFromBounds(bounds),
           fastened: false,
         },
@@ -188,8 +212,14 @@ export function buildScene(document: ResolvedDocument): {
     }
   }
 
+  const allParts = components.flatMap((component) => component.parts);
   return {
-    scene: { name: document.name, components, fasteners: resolved.fasteners },
+    scene: {
+      name: document.name,
+      center: centerFromWorldCenters(allParts.map((part) => part.worldCenter)),
+      components,
+      fasteners: resolved.fasteners,
+    },
     issues,
   };
 }

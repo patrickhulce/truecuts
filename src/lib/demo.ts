@@ -1,0 +1,81 @@
+export const DEMO_YAML = `# TrueCuts demo — Assembly Bench
+# Left: edit this YAML. Right: the 3D scene updates live.
+# See SPEC.md for the full document format.
+
+version: 1
+name: Assembly Bench
+
+parts:
+  - label: Leg
+    stock: 2x4x8
+    cuts:
+      - { axis: 0, angle: 90, at: 30 }
+
+  - label: Leg
+    stock: 2x4x8
+    cuts:
+      - { axis: 0, angle: 90, at: 30 }
+
+  - label: Leg
+    stock: 2x4x8
+    cuts:
+      - { axis: 0, angle: 90, at: 30 }
+
+  - label: Leg
+    stock: 2x4x8
+    cuts:
+      - { axis: 0, angle: 90, at: 30 }
+
+  - label: Long apron
+    stock: 2x4x8
+    cuts:
+      - { axis: 0, angle: 90, at: 33 }
+
+  - label: Long apron
+    stock: 2x4x8
+    cuts:
+      - { axis: 0, angle: 90, at: 33 }
+
+  - label: Short apron
+    stock: 2x4x8
+    cuts:
+      - { axis: 0, angle: 90, at: 21 }
+
+  - label: Short apron
+    stock: 2x4x8
+    cuts:
+      - { axis: 0, angle: 90, at: 21 }
+
+  - label: Brace
+    stock: 2x4x8
+    cuts:
+      - { axis: 0, angle: 45, at: [36.5, 40] }
+      - { axis: 0, angle: 45, at: [0, 3.5], side: start }
+
+  - id: top-1
+    label: Top
+    stock: plywood-3/4-4x8
+    cuts:
+      - { axis: 0, angle: 90, at: 40 }
+      - { axis: 1, angle: 90, at: 24 }
+
+components:
+  - label: Bench
+    position: [0, 0, 0]
+    rotation: [0, 0, 0]
+    parts:
+      # Standing 2x4s: rotate 90° around Z so length (axis 0) stands up world Y.
+      - { part: leg-1, position: [3.5, 0, 0], rotation: [0, 0, 90] }
+      - { part: leg-2, position: [40, 0, 0], rotation: [0, 0, 90] }
+      - { part: leg-3, position: [3.5, 0, 22.5], rotation: [0, 0, 90] }
+      - { part: leg-4, position: [40, 0, 22.5], rotation: [0, 0, 90] }
+      # Aprons sit on the 1.5" face, 3.5" tall, flush under the top.
+      - { part: long-apron-1, position: [3.5, 26.5, 0], rotation: [0, 0, 0] }
+      - { part: long-apron-2, position: [3.5, 26.5, 22.5], rotation: [0, 0, 0] }
+      - { part: short-apron-1, position: [0, 26.5, 22.5], rotation: [0, 90, 0] }
+      - { part: short-apron-2, position: [38.5, 26.5, 22.5], rotation: [0, 90, 0] }
+      # Mitered stretcher along the front, showing short/long-point cuts.
+      - { part: brace-1, position: [0, 10, 0], rotation: [0, 0, 0] }
+      # Plywood laid flat: rotate 90° around X so thickness stands on world Y.
+      - { part: top-1, position: [0, 30.75, 0], rotation: [90, 0, 0] }
+`;

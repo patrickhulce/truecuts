@@ -1,0 +1,43 @@
+@import "tailwindcss";
+
+:root {
+  --walnut: #1a120b;
+  --walnut-panel: #241a10;
+  --amber: #d97706;
+  --amber-bright: #f59e0b;
+  --sawdust: #d6c3a3;
+  --sawdust-dim: #a89070;
+  --kerf: #3d2a18;
+  --background: #1a120b;
+  --foreground: #d6c3a3;
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --font-sans: var(--font-ibm-plex-mono);
+  --font-mono: var(--font-ibm-plex-mono);
+}
+
+html,
+body {
+  height: 100%;
+}
+
+body {
+  background:
+    radial-gradient(1200px 600px at 80% -10%, #3d2a1844, transparent 55%),
+    repeating-linear-gradient(
+      90deg,
+      #1a120b 0px,
+      #1c140c 2px,
+      #1a120b 4px
+    );
+  color: var(--sawdust);
+  font-family: var(--font-ibm-plex-mono), ui-monospace, monospace;
+}
+
+#__next,
+[data-nextjs-scroll-focus-boundary] {
+  height: 100%;
+}

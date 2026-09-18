@@ -231,7 +231,7 @@ Each cut clips whatever remains. Both ends of a board can be mitered by followin
 
 ## Catalog
 
-v1 ships a small built-in dataset in `src/lib/catalog.ts`. Lumber uses **actual** dimensions (a 2×4 is 1.5″ × 3.5″). Sheet goods use listed thickness × 48″ × 96″. L-brackets are renderable hardware parts (two square flanges; they do not take planar cuts). Fasteners (screws, glue) are rendered as instances. Other hardware is catalogued for later rendering and procedural use.
+v1 ships a small built-in dataset in `src/lib/catalog.ts`. Lumber uses **actual** dimensions (a 2×4 is 1.5″ × 3.5″). Sheet goods use listed thickness × 48″ × 96″. Angle L-brackets (`bracket-l-*`, two square flanges at 90°) and flat L-brackets (`bracket-flat-l-*`, a single-plane L plate) are renderable hardware parts; they do not take planar cuts. Fasteners (screws, glue) are rendered as instances. Other hardware is catalogued for later rendering and procedural use.
 
 | id | kind | actual L × W × T (in) | notes |
 | --- | --- | --- | --- |
@@ -246,8 +246,10 @@ v1 ships a small built-in dataset in `src/lib/catalog.ts`. Lumber uses **actual*
 | `screw-wood-8x2.5` | fastener | #8 × 2½″ wood screw | rendered as a fastener |
 | `screw-wood-10x3` | fastener | #10 × 3″ wood screw | rendered as a fastener |
 | `wood-glue` | fastener | wood glue bead | rendered as a fastener |
-| `bracket-l-1.5x1.5` | hardware | 1½″ × 1½″ L-bracket | placed as a part |
-| `bracket-l-2x2` | hardware | 2″ × 2″ L-bracket | placed as a part |
+| `bracket-l-1.5x1.5` | hardware | 1½″ × 1½″ angle L-bracket | placed as a part |
+| `bracket-l-2x2` | hardware | 2″ × 2″ angle L-bracket | placed as a part |
+| `bracket-flat-l-2x1` | hardware | 2″ × 1″ flat L-bracket | placed as a part |
+| `bracket-flat-l-3x1` | hardware | 3″ × 1″ flat L-bracket | placed as a part |
 | `bolt-1/4-20x3` | hardware | ¼-20 × 3″ hex bolt | not rendered in v1 |
 | `hinge-overlay-35mm` | hardware | 35 mm overlay hinge | not rendered in v1 |
 | `drawer-slide-18` | hardware | 18″ side-mount slide (pair) | not rendered in v1 |
@@ -255,6 +257,8 @@ v1 ships a small built-in dataset in `src/lib/catalog.ts`. Lumber uses **actual*
 Catalog entries have `material` and `color` used by the viewport for lumber, sheet goods, L-brackets, and fastener solids.
 
 L-bracket part axes: origin at the inside corner. Axis 0 is the first flange (+X), axis 1 is the fold width (+Y), axis 2 is the second flange (+Z). Plate thickness is `size[2]`. Planar cuts are not allowed.
+
+Flat L-bracket part axes: origin at the outer corner of a single-plane L in XY. Axis 0 is the first leg (+X), axis 1 is the second leg (+Y), axis 2 is plate thickness (+Z). `size` is `[leg, arm width, thickness]`. Planar cuts are not allowed.
 
 ## Procedural components
 
@@ -307,8 +311,9 @@ components:
 
 - Left pane: YAML editor (CodeMirror) with a walnut/amber theme and lint markers on diagnostics.
 - Right pane: react-three-fiber scene — warm hemisphere + shadowed directional light, 1″ grid with 12″ sections, orbit controls, wood-tone materials with CAD edges.
-- Click a part to inspect `id`, stock, finished AABB (length × width × thickness of the cut solid), and whether it is fastened.
+- Click a part to inspect `id`, stock, finished AABB (length × width × thickness of the cut solid), whether it is fastened, and the fasteners attached to it. Non-selected parts fade so fasteners inside the assembly stay visible; attached fasteners highlight.
 - Fasteners render as solids: screws (head + shank) and glue beads at each member `at`. L-brackets render as ordinary steel parts.
+- An explode slider radiates parts from the scene center (distance-proportional); fasteners travel with their members.
 - Any part not reachable from the first part of the first component is drawn with red/white hazard stripes.
 - The document autosaves to `localStorage`. **Reset demo** restores `examples/demo.yaml`.
 - Invalid YAML or validation errors keep the last good scene from rendering; the viewport shows a placeholder until the document compiles.

@@ -147,7 +147,7 @@ export const CATALOG: CatalogPart[] = [
   {
     id: "bracket-l-1.5x1.5",
     kind: "hardware",
-    label: "1½″ × 1½″ L-bracket",
+    label: "1½″ × 1½″ angle L-bracket",
     subtype: "bracket",
     size: [1.5, 1.5, 0.125],
     material: "steel",
@@ -158,12 +158,34 @@ export const CATALOG: CatalogPart[] = [
   {
     id: "bracket-l-2x2",
     kind: "hardware",
-    label: "2″ × 2″ L-bracket",
+    label: "2″ × 2″ angle L-bracket",
     subtype: "bracket",
     size: [2, 2, 0.125],
     material: "steel",
     color: STEEL,
     notes: "Placed as a part. Fasten with screws through each flange.",
+    renderable: true,
+  },
+  {
+    id: "bracket-flat-l-2x1",
+    kind: "hardware",
+    label: "2″ × 1″ flat L-bracket",
+    subtype: "bracket-flat",
+    size: [2, 1, 0.125],
+    material: "steel",
+    color: STEEL,
+    notes: "Single-plane L plate. Placed as a part. Fasten with screws through each leg.",
+    renderable: true,
+  },
+  {
+    id: "bracket-flat-l-3x1",
+    kind: "hardware",
+    label: "3″ × 1″ flat L-bracket",
+    subtype: "bracket-flat",
+    size: [3, 1, 0.125],
+    material: "steel",
+    color: STEEL,
+    notes: "Single-plane L plate. Placed as a part. Fasten with screws through each leg.",
     renderable: true,
   },
   {
@@ -221,4 +243,8 @@ export function getFastenerSubtype(id: string): FastenerSubtype | undefined {
 
 export function isLBracket(part: CatalogPart): boolean {
   return part.subtype === "bracket";
+}
+
+export function isFlatLBracket(part: CatalogPart): boolean {
+  return part.subtype === "bracket-flat";
 }

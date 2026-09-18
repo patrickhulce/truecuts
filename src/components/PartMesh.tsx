@@ -3,7 +3,7 @@
 import { Edges } from "@react-three/drei";
 import { useMemo } from "react";
 import * as THREE from "three";
-import { faceNormal, type Polyhedron } from "@/lib/geometry";
+import { faceNormal, type Polyhedron, type Vec3 } from "@/lib/geometry";
 import type { ScenePartInstance } from "@/lib/scene";
 
 function facesToGeometry(faces: Polyhedron): THREE.BufferGeometry {
@@ -55,27 +55,41 @@ function applyStripeShader(shader: THREE.WebGLProgramParametersWithUniforms): vo
     );
 }
 
+const ZERO: Vec3 = [0, 0, 0];
+
 type PartMeshProps = {
   instance: ScenePartInstance;
   selected: boolean;
+  dimmed?: boolean;
+  offset?: Vec3;
   onSelect: (key: string) => void;
 };
 
-export function PartMesh({ instance, selected, onSelect }: PartMeshProps) {
+export function PartMesh({ instance, selected, dimmed = false, offset = ZERO, onSelect }: PartMeshProps) {
   const geometry = useMemo(() => facesToGeometry(instance.faces), [instance.faces]);
   const rotation: [number, number, number] = [
     THREE.MathUtils.degToRad(instance.rotation[0]),
     THREE.MathUtils.degToRad(instance.rotation[1]),
     THREE.MathUtils.degToRad(instance.rotation[2]),
   ];
+  const position: Vec3 = [
+    instance.position[0] + offset[0],
+    instance.position[1] + offset[1],
+    instance.position[2] + offset[2],
+  ];
+  // Keep `transparent` always on. Three.js compiles `#define OPAQUE` into the
+  // shader when transparent is false; R3F does not set `needsUpdate` when that
+  // flag later flips, so opacity would otherwise be ignored and parts stay solid.
+  const opacity = dimmed ? 0.22 : 1;
 
   return (
     <mesh
       geometry={geometry}
-      position={instance.position}
+      position={position}
       rotation={rotation}
-      castShadow
-      receiveShadow
+      renderOrder={dimmed ? 1 : 0}
+      castShadow={!dimmed}
+      receiveShadow={!dimmed}
       onClick={(event) => {
         event.stopPropagation();
         onSelect(instance.key);
@@ -84,8 +98,11 @@ export function PartMesh({ instance, selected, onSelect }: PartMeshProps) {
       {instance.fastened ? (
         <meshStandardMaterial
           color={instance.color}
-          roughness={0.55}
+          roughness={dimmed ? 0.4 : 0.55}
           metalness={0.04}
+          transparent
+          opacity={opacity}
+          depthWrite={!dimmed}
           emissive={selected ? "#d97706" : "#000000"}
           emissiveIntensity={selected ? 0.35 : 0}
         />
@@ -93,15 +110,24 @@ export function PartMesh({ instance, selected, onSelect }: PartMeshProps) {
         <meshStandardMaterial
           key="stripes"
           color="#ffffff"
-          roughness={0.45}
+          roughness={dimmed ? 0.35 : 0.45}
           metalness={0.04}
+          transparent
+          opacity={opacity}
+          depthWrite={!dimmed}
           emissive={selected ? "#d97706" : "#000000"}
           emissiveIntensity={selected ? 0.25 : 0}
           onBeforeCompile={applyStripeShader}
           customProgramCacheKey={stripeCacheKey}
         />
       )}
-      <Edges threshold={20} color={selected ? "#f59e0b" : instance.fastened ? "#3b2410" : "#7f1d1d"} />
+      <Edges
+        threshold={20}
+        color={selected ? "#f59e0b" : instance.fastened ? "#3b2410" : "#7f1d1d"}
+        transparent
+        opacity={dimmed ? 0.18 : 1}
+        depthWrite={!dimmed}
+      />
     </mesh>
   );
 }

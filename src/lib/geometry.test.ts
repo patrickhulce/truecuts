@@ -3,7 +3,9 @@ import {
   applyCuts,
   boundingBox,
   boxPolyhedron,
+  lBracketPolyhedron,
   polyhedronVolume,
+  rotateEulerXYZ,
 } from "./geometry";
 import type { ResolvedCut } from "./schema";
 
@@ -61,5 +63,26 @@ describe("applyCuts", () => {
     const { min, max } = boundingBox(poly);
     expect(min[0]).toBeCloseTo(2, 6);
     expect(max[0]).toBeCloseTo(8, 6);
+  });
+});
+
+describe("rotateEulerXYZ", () => {
+  it("applies intrinsic XYZ rotations", () => {
+    const p = rotateEulerXYZ([2, 0, 0], [0, 90, 0]);
+    expect(p[0]).toBeCloseTo(0, 6);
+    expect(p[1]).toBeCloseTo(0, 6);
+    expect(p[2]).toBeCloseTo(-2, 6);
+  });
+});
+
+describe("lBracketPolyhedron", () => {
+  it("is two square flanges sharing the fold", () => {
+    const poly = lBracketPolyhedron([2, 2, 0.125]);
+    const { min, max } = boundingBox(poly);
+    expect(min).toEqual([0, 0, 0]);
+    expect(max[0]).toBeCloseTo(2, 6);
+    expect(max[1]).toBeCloseTo(2, 6);
+    expect(max[2]).toBeCloseTo(2, 6);
+    expect(polyhedronVolume(poly)).toBeGreaterThan(0.4);
   });
 });

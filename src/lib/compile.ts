@@ -81,13 +81,14 @@ export function compileDocument(text: string): CompileResult {
   for (const issue of built.issues) {
     diagnostics.push({
       message: issue.message,
-      severity: "error",
+      severity: issue.severity ?? "error",
       path: issue.path,
       ...locate(yamlDoc, lineCounter, issue.path),
     });
   }
 
-  if (!built.scene || built.issues.length > 0) {
+  const sceneErrors = built.issues.some((issue) => (issue.severity ?? "error") === "error");
+  if (!built.scene || sceneErrors) {
     return { document: validated.document, diagnostics };
   }
 

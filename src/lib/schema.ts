@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { getCatalogPart, getFastenerSubtype } from "./catalog";
 import { assignIds, isValidId } from "./identity";
 import { parseAt, parseDimension, type DimensionInput } from "./units";
 
@@ -49,10 +50,24 @@ const PlacementSchema = z.object({
   rotation: Vec3InputSchema.optional(),
 });
 
+const FastenerMemberSchema = z.object({
+  component: z.string().min(1).optional(),
+  part: z.string().min(1),
+  index: z.number().int().nonnegative().optional(),
+  at: Vec3InputSchema,
+  direction: Vec3InputSchema.optional(),
+});
+
+const FastenerSchema = z.object({
+  stock: z.string().min(1),
+  members: z.array(FastenerMemberSchema).min(2),
+});
+
 const ComponentSchema = z.object({
   id: z.string().optional(),
   label: z.string().min(1),
   parts: z.array(PlacementSchema).default([]),
+  fasteners: z.array(FastenerSchema).default([]),
   position: Vec3InputSchema.optional(),
   rotation: Vec3InputSchema.optional(),
 });
@@ -62,6 +77,7 @@ export const DocumentSchema = z.object({
   name: z.string().min(1),
   parts: z.array(PartSchema).default([]),
   components: z.array(ComponentSchema).default([]),
+  fasteners: z.array(FastenerSchema).default([]),
 });
 
 export type RawDocument = z.infer<typeof DocumentSchema>;
@@ -69,6 +85,8 @@ export type RawCut = z.infer<typeof CutSchema>;
 export type RawPart = z.infer<typeof PartSchema>;
 export type RawComponent = z.infer<typeof ComponentSchema>;
 export type RawPlacement = z.infer<typeof PlacementSchema>;
+export type RawFastener = z.infer<typeof FastenerSchema>;
+export type RawFastenerMember = z.infer<typeof FastenerMemberSchema>;
 
 export type ResolvedCut = {
   axis: Axis;
@@ -91,10 +109,24 @@ export type ResolvedPlacement = {
   rotation: [number, number, number];
 };
 
+export type ResolvedFastenerMember = {
+  component: string;
+  part: string;
+  index: number;
+  at: [number, number, number];
+  direction?: [number, number, number];
+};
+
+export type ResolvedFastener = {
+  stock: string;
+  members: ResolvedFastenerMember[];
+};
+
 export type ResolvedComponent = {
   id: string;
   label: string;
   parts: ResolvedPlacement[];
+  fasteners: ResolvedFastener[];
   position: [number, number, number];
   rotation: [number, number, number];
 };
@@ -104,6 +136,7 @@ export type ResolvedDocument = {
   name: string;
   parts: ResolvedPart[];
   components: ResolvedComponent[];
+  fasteners: ResolvedFastener[];
 };
 
 export type ValidationIssue = {
@@ -131,6 +164,160 @@ function resolveCut(cut: RawCut): ResolvedCut {
     side: cut.side ?? "end",
     around: cut.around,
   };
+}
+
+function vecLength(v: [number, number, number]): number {
+  return Math.hypot(v[0], v[1], v[2]);
+}
+
+function occurrenceCount(placements: { part: string }[], partId: string): number {
+  return placements.filter((placement) => placement.part === partId).length;
+}
+
+function resolveFastener(
+  raw: RawFastener,
+  path: Array<string | number>,
+  options: {
+    impliedComponentId?: string;
+    requireComponent: boolean;
+    partIds: Set<string>;
+    componentById: Map<string, { id: string; parts: { part: string }[] }>;
+  },
+  issues: ValidationIssue[],
+): ResolvedFastener | undefined {
+  const catalog = getCatalogPart(raw.stock);
+  const subtype = getFastenerSubtype(raw.stock);
+  if (!catalog || catalog.kind !== "fastener" || !subtype) {
+    issues.push({
+      message: `Unknown fastener stock "${raw.stock}". Fasteners must use a catalog id of kind fastener.`,
+      path: [...path, "stock"],
+    });
+    return undefined;
+  }
+
+  if (subtype === "screw") {
+    if (raw.members.length !== 2) {
+      issues.push({
+        message: `Screws require exactly two members, got ${raw.members.length}`,
+        path: [...path, "members"],
+      });
+      return undefined;
+    }
+  }
+
+  const members: ResolvedFastenerMember[] = [];
+  for (const [mIndex, member] of raw.members.entries()) {
+    const memberPath = [...path, "members", mIndex];
+    if (options.requireComponent) {
+      if (!member.component) {
+        issues.push({
+          message: "Document-level fastener members must include `component`",
+          path: [...memberPath, "component"],
+        });
+        continue;
+      }
+    } else if (member.component) {
+      issues.push({
+        message: "Component-level fastener members must not include `component` (it is implied)",
+        path: [...memberPath, "component"],
+      });
+      continue;
+    }
+
+    const componentId = options.requireComponent ? member.component : options.impliedComponentId;
+    if (!componentId) {
+      issues.push({
+        message: "Fastener member is missing a component",
+        path: memberPath,
+      });
+      continue;
+    }
+
+    const component = options.componentById.get(componentId);
+    if (!component) {
+      issues.push({
+        message: `Unknown component "${componentId}"`,
+        path: [...memberPath, "component"],
+      });
+      continue;
+    }
+
+    if (!options.partIds.has(member.part)) {
+      issues.push({
+        message: `Unknown part "${member.part}". Fastener members reference part ids, not labels.`,
+        path: [...memberPath, "part"],
+      });
+      continue;
+    }
+
+    const placed = occurrenceCount(component.parts, member.part);
+    if (placed === 0) {
+      issues.push({
+        message: `Part "${member.part}" is not placed in component "${componentId}"`,
+        path: [...memberPath, "part"],
+      });
+      continue;
+    }
+
+    const index = member.index ?? 0;
+    if (index >= placed) {
+      issues.push({
+        message: `Placement index ${index} is out of range for part "${member.part}" in "${componentId}" (${placed} placement${placed === 1 ? "" : "s"})`,
+        path: [...memberPath, "index"],
+      });
+      continue;
+    }
+
+    let at: [number, number, number];
+    let direction: [number, number, number] | undefined;
+    try {
+      at = parseVec3(member.at);
+      direction = member.direction ? parseVec3(member.direction) : undefined;
+    } catch (error) {
+      issues.push({
+        message: error instanceof Error ? error.message : String(error),
+        path: memberPath,
+      });
+      continue;
+    }
+
+    if (subtype === "screw") {
+      if (!direction) {
+        issues.push({
+          message: "Screw members require `direction` (part-local, head → tip)",
+          path: [...memberPath, "direction"],
+        });
+        continue;
+      }
+      if (vecLength(direction) < 1e-8) {
+        issues.push({
+          message: "Screw `direction` must be a non-zero vector",
+          path: [...memberPath, "direction"],
+        });
+        continue;
+      }
+    } else if (direction && vecLength(direction) < 1e-8) {
+      issues.push({
+        message: "Fastener `direction` must be a non-zero vector when provided",
+        path: [...memberPath, "direction"],
+      });
+      continue;
+    }
+
+    members.push({
+      component: componentId,
+      part: member.part,
+      index,
+      at,
+      direction,
+    });
+  }
+
+  if (members.length !== raw.members.length) {
+    return undefined;
+  }
+
+  return { stock: raw.stock, members };
 }
 
 /**
@@ -188,6 +375,7 @@ export function validateDocument(input: unknown): {
   }
 
   const partIds = new Set(identifiedParts.map((part) => part.id));
+  const componentById = new Map(identifiedComponents.map((component) => [component.id, component]));
 
   const parts: ResolvedPart[] = [];
   for (const [index, part] of identifiedParts.entries()) {
@@ -230,11 +418,29 @@ export function validateDocument(input: unknown): {
         });
       }
     }
+
+    const fasteners: ResolvedFastener[] = [];
+    for (const [fIndex, fastener] of component.fasteners.entries()) {
+      const resolved = resolveFastener(
+        fastener,
+        ["components", cIndex, "fasteners", fIndex],
+        {
+          impliedComponentId: component.id,
+          requireComponent: false,
+          partIds,
+          componentById,
+        },
+        issues,
+      );
+      if (resolved) fasteners.push(resolved);
+    }
+
     try {
       components.push({
         id: component.id,
         label: component.label,
         parts: placements,
+        fasteners,
         position: parseVec3(component.position),
         rotation: parseVec3(component.rotation),
       });
@@ -244,6 +450,21 @@ export function validateDocument(input: unknown): {
         path: ["components", cIndex],
       });
     }
+  }
+
+  const fasteners: ResolvedFastener[] = [];
+  for (const [fIndex, fastener] of raw.fasteners.entries()) {
+    const resolved = resolveFastener(
+      fastener,
+      ["fasteners", fIndex],
+      {
+        requireComponent: true,
+        partIds,
+        componentById,
+      },
+      issues,
+    );
+    if (resolved) fasteners.push(resolved);
   }
 
   if (issues.length > 0) {
@@ -256,6 +477,7 @@ export function validateDocument(input: unknown): {
       name: raw.name,
       parts,
       components,
+      fasteners,
     },
     issues,
   };

@@ -93,4 +93,222 @@ describe("validateDocument", () => {
     });
     expect(issues.some((issue) => issue.message.includes("short point"))).toBe(true);
   });
+
+  const twoParts = {
+    ...base,
+    parts: [
+      { label: "A", stock: "2x4x8" },
+      { label: "B", stock: "2x4x8" },
+    ],
+    components: [
+      {
+        label: "Box",
+        parts: [{ part: "a-1", position: [0, 0, 0] }, { part: "b-1", position: [4, 0, 0] }],
+      },
+    ],
+  };
+
+  it("accepts a component-level screw fastener", () => {
+    const { document, issues } = validateDocument({
+      ...twoParts,
+      components: [
+        {
+          ...twoParts.components[0],
+          fasteners: [
+            {
+              stock: "screw-wood-8x2.5",
+              members: [
+                { part: "a-1", at: [4, 1.75, 0.75], direction: [1, 0, 0] },
+                { part: "b-1", at: [0, 1.75, 0.75], direction: [-1, 0, 0] },
+              ],
+            },
+          ],
+        },
+      ],
+    });
+    expect(issues).toEqual([]);
+    expect(document?.components[0].fasteners).toHaveLength(1);
+    expect(document?.components[0].fasteners[0].members[0].component).toBe("box-1");
+  });
+
+  it("accepts a document-level glue fastener across components", () => {
+    const { document, issues } = validateDocument({
+      ...twoParts,
+      components: [
+        twoParts.components[0],
+        { label: "Other", parts: [{ part: "b-1", position: [0, 0, 0] }] },
+      ],
+      fasteners: [
+        {
+          stock: "wood-glue",
+          members: [
+            { component: "box-1", part: "a-1", at: [0, 0, 0] },
+            { component: "other-1", part: "b-1", at: [0, 0, 0] },
+          ],
+        },
+      ],
+    });
+    expect(issues).toEqual([]);
+    expect(document?.fasteners).toHaveLength(1);
+  });
+
+  it("rejects an unknown fastener part", () => {
+    const { issues } = validateDocument({
+      ...twoParts,
+      components: [
+        {
+          ...twoParts.components[0],
+          fasteners: [
+            {
+              stock: "screw-wood-8x2.5",
+              members: [
+                { part: "missing-1", at: [0, 0, 0], direction: [1, 0, 0] },
+                { part: "b-1", at: [0, 0, 0], direction: [-1, 0, 0] },
+              ],
+            },
+          ],
+        },
+      ],
+    });
+    expect(issues.some((issue) => issue.message.includes("Unknown part"))).toBe(true);
+  });
+
+  it("rejects a one-member fastener", () => {
+    const { issues } = validateDocument({
+      ...twoParts,
+      components: [
+        {
+          ...twoParts.components[0],
+          fasteners: [
+            {
+              stock: "wood-glue",
+              members: [{ part: "a-1", at: [0, 0, 0] }],
+            },
+          ],
+        },
+      ],
+    });
+    expect(issues.length).toBeGreaterThan(0);
+  });
+
+  it("rejects using a screw as part stock", () => {
+    const { document, issues } = validateDocument({
+      ...base,
+      parts: [{ label: "Bad", stock: "screw-wood-8x2.5" }],
+    });
+    expect(issues).toEqual([]);
+    expect(document?.parts[0].stock).toBe("screw-wood-8x2.5");
+  });
+
+  it("rejects fastener stock that is not kind fastener", () => {
+    const { issues } = validateDocument({
+      ...twoParts,
+      components: [
+        {
+          ...twoParts.components[0],
+          fasteners: [
+            {
+              stock: "2x4x8",
+              members: [
+                { part: "a-1", at: [0, 0, 0], direction: [1, 0, 0] },
+                { part: "b-1", at: [0, 0, 0], direction: [-1, 0, 0] },
+              ],
+            },
+          ],
+        },
+      ],
+    });
+    expect(issues.some((issue) => issue.message.includes("kind fastener"))).toBe(true);
+  });
+
+  it("rejects a glue fastener with one member after catalog check", () => {
+    const { issues } = validateDocument({
+      ...twoParts,
+      fasteners: [
+        {
+          stock: "wood-glue",
+          members: [
+            { component: "box-1", part: "a-1", at: [0, 0, 0] },
+            { component: "box-1", part: "b-1", at: [0, 0, 0] },
+          ],
+        },
+      ],
+    });
+    // two members is valid glue
+    expect(issues.filter((issue) => issue.message.toLowerCase().includes("member")).length).toBe(0);
+  });
+
+  it("rejects a screw missing direction", () => {
+    const { issues } = validateDocument({
+      ...twoParts,
+      components: [
+        {
+          ...twoParts.components[0],
+          fasteners: [
+            {
+              stock: "screw-wood-8x2.5",
+              members: [
+                { part: "a-1", at: [0, 0, 0] },
+                { part: "b-1", at: [0, 0, 0], direction: [-1, 0, 0] },
+              ],
+            },
+          ],
+        },
+      ],
+    });
+    expect(issues.some((issue) => issue.message.includes("direction"))).toBe(true);
+  });
+
+  it("rejects a screw with three members", () => {
+    const { issues } = validateDocument({
+      ...twoParts,
+      components: [
+        {
+          ...twoParts.components[0],
+          fasteners: [
+            {
+              stock: "screw-wood-8x2.5",
+              members: [
+                { part: "a-1", at: [0, 0, 0], direction: [1, 0, 0] },
+                { part: "b-1", at: [0, 0, 0], direction: [-1, 0, 0] },
+                { part: "a-1", at: [1, 0, 0], direction: [1, 0, 0] },
+              ],
+            },
+          ],
+        },
+      ],
+    });
+    expect(issues.some((issue) => issue.message.includes("exactly two members"))).toBe(true);
+  });
+
+  it("rejects a bracket used as fastener stock", () => {
+    const { issues } = validateDocument({
+      ...twoParts,
+      components: [
+        {
+          ...twoParts.components[0],
+          fasteners: [
+            {
+              stock: "bracket-l-2x2",
+              members: [
+                { part: "a-1", at: [0, 0, 0], direction: [1, 0, 0] },
+                { part: "b-1", at: [0, 0, 0], direction: [0, 1, 0] },
+              ],
+            },
+          ],
+        },
+      ],
+    });
+    expect(issues.some((issue) => issue.message.includes("kind fastener"))).toBe(true);
+  });
+
+  it("accepts a bracket as a placed part", () => {
+    const { document, issues } = validateDocument({
+      ...base,
+      parts: [{ label: "Corner bracket", stock: "bracket-l-2x2" }],
+      components: [{ label: "Box", parts: [{ part: "corner-bracket-1" }] }],
+    });
+    expect(issues).toEqual([]);
+    expect(document?.parts[0].stock).toBe("bracket-l-2x2");
+  });
 });

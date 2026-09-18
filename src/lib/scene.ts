@@ -1,7 +1,14 @@
-import { getCatalogPart, type CatalogPart } from "./catalog";
+import { getCatalogPart, isLBracket, type CatalogPart } from "./catalog";
+import {
+  fastenedFromSeed,
+  instanceKey,
+  resolveFasteners,
+  type SceneFastener,
+} from "./fasteners";
 import {
   applyCuts,
   boundingBox,
+  lBracketPolyhedron,
   polyhedronVolume,
   type Polyhedron,
   type Vec3,
@@ -21,6 +28,7 @@ export type ScenePartInstance = {
   rotation: Vec3;
   bounds: { min: Vec3; max: Vec3 };
   finished: { length: number; width: number; thickness: number };
+  fastened: boolean;
 };
 
 export type SceneComponent = {
@@ -34,11 +42,15 @@ export type SceneComponent = {
 export type SceneModel = {
   name: string;
   components: SceneComponent[];
+  fasteners: SceneFastener[];
 };
+
+export type { SceneFastener, SceneFastenerMember } from "./fasteners";
 
 export type SceneIssue = {
   message: string;
   path: Array<string | number>;
+  severity?: "error" | "warning";
 };
 
 function finishedFromBounds(bounds: { min: Vec3; max: Vec3 }): {
@@ -72,6 +84,16 @@ function assertCutInBounds(cut: ResolvedCut, size: Vec3, partId: string): void {
 }
 
 export function meshPart(part: ResolvedPart, stock: CatalogPart): Polyhedron {
+  if (isLBracket(stock)) {
+    if (part.cuts.length > 0) {
+      throw new Error(`L-bracket ${part.id} cannot take planar cuts`);
+    }
+    const poly = lBracketPolyhedron(stock.size);
+    if (polyhedronVolume(poly) < 1e-6) {
+      throw new Error(`L-bracket ${part.id} has no volume`);
+    }
+    return poly;
+  }
   for (const cut of part.cuts) {
     assertCutInBounds(cut, stock.size, part.id);
   }
@@ -100,7 +122,7 @@ export function buildScene(document: ResolvedDocument): {
     }
     if (!stock.renderable) {
       issues.push({
-        message: `Stock "${part.stock}" is catalogued but not renderable in v1`,
+        message: `Stock "${part.stock}" is catalogued but not renderable as part stock`,
         path: ["parts", index, "stock"],
       });
       continue;
@@ -130,7 +152,7 @@ export function buildScene(document: ResolvedDocument): {
       const bounds = boundingBox(mesh.faces);
       return [
         {
-          key: `${component.id}/${placement.part}#${index}`,
+          key: instanceKey(component.id, placement.part, index),
           partId: mesh.part.id,
           label: mesh.part.label,
           stockId: mesh.stock.id,
@@ -142,13 +164,32 @@ export function buildScene(document: ResolvedDocument): {
           rotation: placement.rotation,
           bounds,
           finished: finishedFromBounds(bounds),
+          fastened: false,
         },
       ];
     }),
   }));
 
+  const resolved = resolveFasteners(document);
+  issues.push(...resolved.issues);
+
+  const errors = issues.filter((issue) => (issue.severity ?? "error") === "error");
+  if (errors.length > 0) {
+    return { issues };
+  }
+
+  const nodes = components.flatMap((component) => component.parts.map((part) => part.key));
+  const seed = components[0]?.parts[0]?.key;
+  const fastened = fastenedFromSeed(nodes, resolved.edges, seed);
+
+  for (const component of components) {
+    for (const part of component.parts) {
+      part.fastened = fastened.has(part.key);
+    }
+  }
+
   return {
-    scene: { name: document.name, components },
+    scene: { name: document.name, components, fasteners: resolved.fasteners },
     issues,
   };
 }

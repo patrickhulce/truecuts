@@ -1,8 +1,8 @@
 # TrueCuts Specification
 
-TrueCuts is a carpenter's CAD planner. A project is a YAML document: a list of **parts** cut from catalog stock, assembled into **components** in 3D. The editor is the source of truth in v1. The 3D view is a live visualization of that document.
+TrueCuts is a carpenter's CAD planner. A project is a YAML document: a list of **parts** cut from catalog stock, assembled into **components** in 3D, then joined with **fasteners**. The editor is the source of truth in v1. The 3D view is a live visualization of that document.
 
-This document is the format reference. v1 implements parts (lumber and sheet goods), planar cuts, components, and rendering. Hardware catalog entries and procedural components are specified here for later versions.
+This document is the format reference. v1 implements parts (lumber, sheet goods, and L-brackets), planar cuts, components, fasteners (screws, wood glue), and rendering. Remaining hardware catalog entries and procedural components are specified here for later versions.
 
 ## Concepts
 
@@ -11,6 +11,7 @@ This document is the format reference. v1 implements parts (lumber and sheet goo
 | Catalog part | A predefined stock item (a 2×4×8, a ¾″ 4×8 plywood sheet, a hinge, …). Identified by a catalog id such as `2x4x8`. |
 | Part | One piece of the project, made by applying an ordered list of cuts to a catalog part. |
 | Component | A named assembly: placed parts (and, later, nested components) relative to a local origin, then placed in world space. |
+| Fastener | A catalogued connector (screw or glue). It references two or more placed parts at a centerpoint on each, and is never cut stock. |
 | Procedural component | A generator that emits a component from parameters (a drawer of given W×D×H). Specified below; not implemented in v1. |
 
 ## Identity
@@ -99,6 +100,7 @@ components:
 - `name` — project title.
 - `parts` — list of parts (default empty).
 - `components` — list of components (default empty). Only parts referenced by a component are drawn.
+- `fasteners` — document-level fasteners that may join parts in different components (default empty).
 
 ### Part fields
 
@@ -133,7 +135,55 @@ cuts:
 
 - `label` / `id` — as for parts.
 - `parts` — placements. `part` is a part **id**. `position` and `rotation` are relative to the component origin (defaults `[0, 0, 0]`).
+- `fasteners` — fasteners whose members are parts of this component. Members omit `component` (it is implied).
 - `position` / `rotation` — place the component in world space.
+
+## Fasteners
+
+A fastener is catalogued hardware that joins placed parts. It is never a `parts[]` entry (`renderable` is false for stock use). Two YAML homes share the same member idea:
+
+**Inside a component** — two (or more, for glue) parts, each with a part-local centerpoint and optional direction:
+
+```yaml
+components:
+  - label: Bench
+    parts: [...]
+    fasteners:
+      - stock: screw-wood-8x2.5
+        members:
+          - { part: leg-1, at: [0.75, 28.25, 0.75], direction: [0, 0, 1] }
+          - { part: long-apron-1, at: [2, 1.75, 0], direction: [0, 0, -1] }
+```
+
+**Document-level** — same `at` / `direction`, plus `component` and `part` so a glue-up can span assemblies:
+
+```yaml
+fasteners:
+  - stock: wood-glue
+    members:
+      - { component: bench-1, part: top-1, at: [20, 12, 0], direction: [0, 0, 1] }
+      - { component: shelf-1, part: shelf-board-1, at: [10, 6, 0.75], direction: [0, 0, -1] }
+```
+
+### Fastener fields
+
+- `stock` — catalog id of kind `fastener` (`screw` or `glue`).
+- `members` — two or more attachments.
+
+### Member fields
+
+- `part` — part **id**.
+- `component` — required on document-level members; forbidden on component-level members (implied).
+- `index` — 0-based occurrence of that part id in the component's `parts` list (default `0`).
+- `at` — fastener centerpoint in **part-local** space (min-corner origin, same as cuts).
+- `direction` — part-local vector. For screws, first member is the **head side** and the vector points **head → tip**. Required on every screw member; optional for glue.
+
+Rules:
+
+- Screws require exactly two members. Glue requires two or more.
+- Members must name a part that is actually placed in the referenced component, including L-bracket hardware parts (a screw through a bracket names the bracket and the wood it bites).
+
+Connectivity: fasteners are undirected edges between member instances (glue with N members is a clique). The **seed** is the first part of the first component. Any instance not reachable from the seed is drawn with red/white hazard stripes. The seed itself is always treated as fastened.
 
 ## Cut semantics
 
@@ -181,7 +231,7 @@ Each cut clips whatever remains. Both ends of a board can be mitered by followin
 
 ## Catalog
 
-v1 ships a small built-in dataset in `src/lib/catalog.ts`. Lumber uses **actual** dimensions (a 2×4 is 1.5″ × 3.5″). Sheet goods use listed thickness × 48″ × 96″. Hardware is catalogued for later rendering and procedural use.
+v1 ships a small built-in dataset in `src/lib/catalog.ts`. Lumber uses **actual** dimensions (a 2×4 is 1.5″ × 3.5″). Sheet goods use listed thickness × 48″ × 96″. L-brackets are renderable hardware parts (two square flanges; they do not take planar cuts). Fasteners (screws, glue) are rendered as instances. Other hardware is catalogued for later rendering and procedural use.
 
 | id | kind | actual L × W × T (in) | notes |
 | --- | --- | --- | --- |
@@ -190,13 +240,21 @@ v1 ships a small built-in dataset in `src/lib/catalog.ts`. Lumber uses **actual*
 | `plywood-1/2-4x8` | sheet | 96 × 48 × 0.5 | |
 | `plywood-3/4-4x8` | sheet | 96 × 48 × 0.75 | |
 | `mdf-3/4-4x8` | sheet | 96 × 48 × 0.75 | |
-| `screw-wood-8x2.5` | hardware | #8 × 2½″ wood screw | not rendered in v1 |
+| `screw-wood-6x1.25` | fastener | #6 × 1¼″ wood screw | rendered as a fastener |
+| `screw-wood-8x1.25` | fastener | #8 × 1¼″ wood screw | rendered as a fastener |
+| `screw-wood-8x2` | fastener | #8 × 2″ wood screw | rendered as a fastener |
+| `screw-wood-8x2.5` | fastener | #8 × 2½″ wood screw | rendered as a fastener |
+| `screw-wood-10x3` | fastener | #10 × 3″ wood screw | rendered as a fastener |
+| `wood-glue` | fastener | wood glue bead | rendered as a fastener |
+| `bracket-l-1.5x1.5` | hardware | 1½″ × 1½″ L-bracket | placed as a part |
+| `bracket-l-2x2` | hardware | 2″ × 2″ L-bracket | placed as a part |
 | `bolt-1/4-20x3` | hardware | ¼-20 × 3″ hex bolt | not rendered in v1 |
-| `bracket-l-2x2` | hardware | 2″ × 2″ L-bracket | not rendered in v1 |
 | `hinge-overlay-35mm` | hardware | 35 mm overlay hinge | not rendered in v1 |
 | `drawer-slide-18` | hardware | 18″ side-mount slide (pair) | not rendered in v1 |
 
-Catalog entries have `material` and `color` used by the viewport for lumber and sheet goods.
+Catalog entries have `material` and `color` used by the viewport for lumber, sheet goods, L-brackets, and fastener solids.
+
+L-bracket part axes: origin at the inside corner. Axis 0 is the first flange (+X), axis 1 is the fold width (+Y), axis 2 is the second flange (+Z). Plate thickness is `size[2]`. Planar cuts are not allowed.
 
 ## Procedural components
 
@@ -249,7 +307,9 @@ components:
 
 - Left pane: YAML editor (CodeMirror) with a walnut/amber theme and lint markers on diagnostics.
 - Right pane: react-three-fiber scene — warm hemisphere + shadowed directional light, 1″ grid with 12″ sections, orbit controls, wood-tone materials with CAD edges.
-- Click a part to inspect `id`, stock, and finished AABB (length × width × thickness of the cut solid).
+- Click a part to inspect `id`, stock, finished AABB (length × width × thickness of the cut solid), and whether it is fastened.
+- Fasteners render as solids: screws (head + shank) and glue beads at each member `at`. L-brackets render as ordinary steel parts.
+- Any part not reachable from the first part of the first component is drawn with red/white hazard stripes.
 - The document autosaves to `localStorage`. **Reset demo** restores `examples/demo.yaml`.
 - Invalid YAML or validation errors keep the last good scene from rendering; the viewport shows a placeholder until the document compiles.
 
@@ -263,5 +323,5 @@ Edits are one-way in v1 (YAML → 3D). GUI → YAML round-trip is on the roadmap
 - Cut-list optimizer (nest parts onto stock, kerf, waste).
 - CSV / STL export.
 - Implement procedural `drawer` and `cabinet-door`.
-- Render hardware as solids / instances.
+- Render remaining hardware (bolts, hinges, slides) as solids / instances.
 - Species / grain materials and joinery annotations.

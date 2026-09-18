@@ -73,6 +73,21 @@ export function boxPolyhedron(size: Vec3): Polyhedron {
   ];
 }
 
+/** Axis-aligned box with min-corner `origin` and size `size`. */
+export function boxPolyhedronAt(origin: Vec3, size: Vec3): Polyhedron {
+  return boxPolyhedron(size).map((face) => face.map((point) => add(point, origin)));
+}
+
+/**
+ * L-bracket: flange A in XY (thin +Z), flange B in YZ (thin +X).
+ * `size` is [flange length along +X, fold width along +Y, thickness].
+ * The second flange runs the same length along +Z.
+ */
+export function lBracketPolyhedron(size: Vec3): Polyhedron {
+  const [leg, fold, thickness] = size;
+  return [...boxPolyhedron([leg, fold, thickness]), ...boxPolyhedronAt([0, 0, 0], [thickness, fold, leg])];
+}
+
 function classify(p: Vec3, plane: Plane): number {
   return dot(plane.normal, p) - plane.d;
 }
@@ -245,4 +260,40 @@ export function polyhedronVolume(poly: Polyhedron): number {
 
 export function vertexCount(poly: Polyhedron): number {
   return uniquePoints(poly.flat()).length;
+}
+
+export function degToRad(degrees: number): number {
+  return (degrees * Math.PI) / 180;
+}
+
+/** Rotate `v` by Euler XYZ in degrees (same convention as THREE.Euler default). */
+export function rotateEulerXYZ(v: Vec3, rotationDeg: Vec3): Vec3 {
+  const rx = degToRad(rotationDeg[0]);
+  const ry = degToRad(rotationDeg[1]);
+  const rz = degToRad(rotationDeg[2]);
+  let x = v[0];
+  let y = v[1];
+  let z = v[2];
+
+  const cy = Math.cos(rx);
+  const sy = Math.sin(rx);
+  const y1 = y * cy - z * sy;
+  const z1 = y * sy + z * cy;
+  y = y1;
+  z = z1;
+
+  const cx = Math.cos(ry);
+  const sx = Math.sin(ry);
+  const x2 = x * cx + z * sx;
+  const z2 = -x * sx + z * cx;
+  x = x2;
+  z = z2;
+
+  const cz = Math.cos(rz);
+  const sz = Math.sin(rz);
+  return [x * cz - y * sz, x * sz + y * cz, z];
+}
+
+export function applyPose(point: Vec3, position: Vec3, rotationDeg: Vec3): Vec3 {
+  return add(rotateEulerXYZ(point, rotationDeg), position);
 }

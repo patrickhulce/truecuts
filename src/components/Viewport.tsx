@@ -5,6 +5,7 @@ import { Canvas } from "@react-three/fiber";
 import * as THREE from "three";
 import { formatInches } from "@/lib/units";
 import type { SceneModel, ScenePartInstance } from "@/lib/scene";
+import { FastenerMesh } from "./FastenerMesh";
 import { PartMesh } from "./PartMesh";
 
 type ViewportProps = {
@@ -35,6 +36,8 @@ function SelectionCard({ instance }: { instance: ScenePartInstance }) {
           {formatInches(instance.finished.length)} × {formatInches(instance.finished.width)} ×{" "}
           {formatInches(instance.finished.thickness)}
         </dd>
+        <dt>fastened</dt>
+        <dd className="text-[#d6c3a3]">{instance.fastened ? "yes" : "no"}</dd>
       </dl>
     </aside>
   );
@@ -96,6 +99,9 @@ export function Viewport({ scene, selectedKey, onSelect }: ViewportProps) {
               />
             ))}
           </group>
+        ))}
+        {scene?.fasteners.map((fastener) => (
+          <FastenerMesh key={fastener.key} fastener={fastener} />
         ))}
         <OrbitControls makeDefault target={[20, 16, 12]} maxPolarAngle={Math.PI / 2.05} />
         <GizmoHelper alignment="bottom-right" margin={[64, 64]}>

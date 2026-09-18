@@ -1,6 +1,8 @@
 export type Vec3 = [number, number, number];
 
-export type CatalogKind = "lumber" | "sheet" | "hardware";
+export type CatalogKind = "lumber" | "sheet" | "hardware" | "fastener";
+
+export type FastenerSubtype = "screw" | "glue";
 
 export type CatalogPart = {
   id: string;
@@ -21,6 +23,7 @@ const PINE = "#c4a36a";
 const PLYWOOD = "#d2b48c";
 const MDF = "#cbb892";
 const STEEL = "#8a9096";
+const GLUE = "#e6c35c";
 
 export const CATALOG: CatalogPart[] = [
   {
@@ -76,25 +79,81 @@ export const CATALOG: CatalogPart[] = [
     renderable: true,
   },
   {
+    id: "screw-wood-6x1.25",
+    kind: "fastener",
+    label: "#6 × 1¼″ wood screw",
+    subtype: "screw",
+    size: [1.25, 0.138, 0.138],
+    material: "steel",
+    color: STEEL,
+    notes: "Rendered as a fastener instance; not valid as part stock.",
+    renderable: false,
+  },
+  {
+    id: "screw-wood-8x1.25",
+    kind: "fastener",
+    label: "#8 × 1¼″ wood screw",
+    subtype: "screw",
+    size: [1.25, 0.164, 0.164],
+    material: "steel",
+    color: STEEL,
+    notes: "Rendered as a fastener instance; not valid as part stock.",
+    renderable: false,
+  },
+  {
+    id: "screw-wood-8x2",
+    kind: "fastener",
+    label: "#8 × 2″ wood screw",
+    subtype: "screw",
+    size: [2, 0.164, 0.164],
+    material: "steel",
+    color: STEEL,
+    notes: "Rendered as a fastener instance; not valid as part stock.",
+    renderable: false,
+  },
+  {
     id: "screw-wood-8x2.5",
-    kind: "hardware",
+    kind: "fastener",
     label: "#8 × 2½″ wood screw",
     subtype: "screw",
     size: [2.5, 0.164, 0.164],
     material: "steel",
     color: STEEL,
-    notes: "Documented in the catalog; hardware is not rendered as solids in v1.",
+    notes: "Rendered as a fastener instance; not valid as part stock.",
     renderable: false,
   },
   {
-    id: "bolt-1/4-20x3",
-    kind: "hardware",
-    label: "¼-20 × 3″ hex bolt",
-    subtype: "bolt",
-    size: [3, 0.25, 0.25],
+    id: "screw-wood-10x3",
+    kind: "fastener",
+    label: "#10 × 3″ wood screw",
+    subtype: "screw",
+    size: [3, 0.19, 0.19],
     material: "steel",
     color: STEEL,
+    notes: "Rendered as a fastener instance; not valid as part stock.",
     renderable: false,
+  },
+  {
+    id: "wood-glue",
+    kind: "fastener",
+    label: "Wood glue",
+    subtype: "glue",
+    size: [0.5, 0.5, 0.1],
+    material: "glue",
+    color: GLUE,
+    notes: "Adhesive bead. Connects two or more members; direction is optional.",
+    renderable: false,
+  },
+  {
+    id: "bracket-l-1.5x1.5",
+    kind: "hardware",
+    label: "1½″ × 1½″ L-bracket",
+    subtype: "bracket",
+    size: [1.5, 1.5, 0.125],
+    material: "steel",
+    color: STEEL,
+    notes: "Placed as a part. Fasten with screws through each flange.",
+    renderable: true,
   },
   {
     id: "bracket-l-2x2",
@@ -102,6 +161,17 @@ export const CATALOG: CatalogPart[] = [
     label: "2″ × 2″ L-bracket",
     subtype: "bracket",
     size: [2, 2, 0.125],
+    material: "steel",
+    color: STEEL,
+    notes: "Placed as a part. Fasten with screws through each flange.",
+    renderable: true,
+  },
+  {
+    id: "bolt-1/4-20x3",
+    kind: "hardware",
+    label: "¼-20 × 3″ hex bolt",
+    subtype: "bolt",
+    size: [3, 0.25, 0.25],
     material: "steel",
     color: STEEL,
     renderable: false,
@@ -138,4 +208,17 @@ export function getCatalogPart(id: string): CatalogPart | undefined {
 
 export function listCatalog(kind?: CatalogKind): CatalogPart[] {
   return kind ? CATALOG.filter((part) => part.kind === kind) : CATALOG;
+}
+
+export function getFastenerSubtype(id: string): FastenerSubtype | undefined {
+  const item = byId.get(id);
+  if (!item || item.kind !== "fastener") return undefined;
+  if (item.subtype === "screw" || item.subtype === "glue") {
+    return item.subtype;
+  }
+  return undefined;
+}
+
+export function isLBracket(part: CatalogPart): boolean {
+  return part.subtype === "bracket";
 }

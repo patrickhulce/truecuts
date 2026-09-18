@@ -3,6 +3,7 @@ import {
   applyCuts,
   boundingBox,
   boxPolyhedron,
+  flatLBracketPolyhedron,
   lBracketPolyhedron,
   polyhedronVolume,
   rotateEulerXYZ,
@@ -84,5 +85,20 @@ describe("lBracketPolyhedron", () => {
     expect(max[1]).toBeCloseTo(2, 6);
     expect(max[2]).toBeCloseTo(2, 6);
     expect(polyhedronVolume(poly)).toBeGreaterThan(0.4);
+  });
+});
+
+describe("flatLBracketPolyhedron", () => {
+  it("is a single-plane L of two overlapping plates", () => {
+    const leg = 2;
+    const arm = 1;
+    const thickness = 0.125;
+    const poly = flatLBracketPolyhedron([leg, arm, thickness]);
+    const { min, max } = boundingBox(poly);
+    expect(min).toEqual([0, 0, 0]);
+    expect(max[0]).toBeCloseTo(leg, 6);
+    expect(max[1]).toBeCloseTo(leg, 6);
+    expect(max[2]).toBeCloseTo(thickness, 6);
+    expect(polyhedronVolume(poly)).toBeCloseTo(thickness * (2 * leg * arm - arm * arm), 6);
   });
 });

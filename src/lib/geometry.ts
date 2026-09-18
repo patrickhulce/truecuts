@@ -88,6 +88,19 @@ export function lBracketPolyhedron(size: Vec3): Polyhedron {
   return [...boxPolyhedron([leg, fold, thickness]), ...boxPolyhedronAt([0, 0, 0], [thickness, fold, leg])];
 }
 
+/**
+ * Flat L-bracket: a single-plane L in XY.
+ * `size` is [leg length along +X/+Y, arm width, thickness along +Z].
+ * Origin at the outer corner; both legs run from that corner.
+ */
+export function flatLBracketPolyhedron(size: Vec3): Polyhedron {
+  const [leg, arm, thickness] = size;
+  return [
+    ...boxPolyhedron([leg, arm, thickness]),
+    ...boxPolyhedronAt([0, arm, 0], [arm, Math.max(leg - arm, 0), thickness]),
+  ];
+}
+
 function classify(p: Vec3, plane: Plane): number {
   return dot(plane.normal, p) - plane.d;
 }

@@ -3,7 +3,8 @@
 import { yaml } from "@codemirror/lang-yaml";
 import { HighlightStyle, syntaxHighlighting } from "@codemirror/language";
 import { linter, lintGutter, type Diagnostic as CmDiagnostic } from "@codemirror/lint";
-import { EditorView } from "@codemirror/view";
+import { Prec } from "@codemirror/state";
+import { EditorView, keymap } from "@codemirror/view";
 import { tags as t } from "@lezer/highlight";
 import CodeMirror from "@uiw/react-codemirror";
 import { useMemo } from "react";
@@ -83,7 +84,14 @@ export function YamlEditor({ value, onChange, diagnostics }: YamlEditorProps) {
         };
       });
     });
-    return [yaml(), woodTheme, syntaxHighlighting(woodHighlight), lintGutter(), lintExt];
+    const blockHistory = Prec.highest(
+      keymap.of([
+        { key: "Mod-z", run: () => true },
+        { key: "Mod-Shift-z", run: () => true },
+        { key: "Mod-y", run: () => true },
+      ]),
+    );
+    return [yaml(), woodTheme, syntaxHighlighting(woodHighlight), lintGutter(), lintExt, blockHistory];
   }, [diagnostics, value]);
 
   return (

@@ -2,18 +2,24 @@
 
 import { GizmoHelper, GizmoViewport, Grid, OrbitControls } from "@react-three/drei";
 import { Canvas } from "@react-three/fiber";
-import { useMemo, useState } from "react";
+import { useMemo, useRef, useState, type KeyboardEvent, type PointerEvent } from "react";
 import * as THREE from "three";
+import { parseInstanceKey } from "@/lib/fasteners";
 import type { Vec3 } from "@/lib/geometry";
 import type { SceneFastener, SceneModel, ScenePartInstance } from "@/lib/scene";
 import { formatInches } from "@/lib/units";
 import { FastenerMesh } from "./FastenerMesh";
+import { PartGizmo, type PartPose } from "./PartGizmo";
 import { PartMesh } from "./PartMesh";
+
+type DraftPose = PartPose & { key: string };
 
 type ViewportProps = {
   scene?: SceneModel;
   selectedKey: string | null;
   onSelect: (key: string | null) => void;
+  onDeletePart?: (partId: string) => void;
+  onChangePose?: (componentId: string, placementIndex: number, position: Vec3, rotation: Vec3) => void;
 };
 
 const ZERO: Vec3 = [0, 0, 0];
@@ -95,10 +101,62 @@ function SelectionCard({
   );
 }
 
-export function Viewport({ scene, selectedKey, onSelect }: ViewportProps) {
+export function Viewport({ scene, selectedKey, onSelect, onDeletePart, onChangePose }: ViewportProps) {
+  const rootRef = useRef<HTMLDivElement>(null);
   const [explode, setExplode] = useState(0);
+  const [dragging, setDragging] = useState(false);
+  const [draft, setDraft] = useState<DraftPose | null>(null);
+
   const selected = scene?.components.flatMap((component) => component.parts).find((part) => part.key === selectedKey);
   const hasSelection = selectedKey !== null;
+  const activeDraft = draft?.key === selectedKey ? draft : null;
+
+  const posed = (part: ScenePartInstance): ScenePartInstance => {
+    if (activeDraft?.key !== part.key) return part;
+    return { ...part, position: activeDraft.position, rotation: activeDraft.rotation };
+  };
+
+  const gizmoPose: PartPose | undefined = selected
+    ? activeDraft
+      ? activeDraft
+      : { position: selected.position, rotation: selected.rotation }
+    : undefined;
+
+  const selectPart = (key: string | null) => {
+    setDraft(null);
+    setDragging(false);
+    onSelect(key);
+  };
+
+  const handlePointerDown = (event: PointerEvent<HTMLDivElement>) => {
+    if (event.target instanceof HTMLElement && (event.target.tagName === "INPUT" || event.target.tagName === "TEXTAREA")) {
+      return;
+    }
+    rootRef.current?.focus();
+  };
+
+  const handleKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
+    if (event.key !== "Backspace" && event.key !== "Delete") return;
+    const target = event.target;
+    if (
+      target instanceof HTMLElement &&
+      (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.isContentEditable)
+    ) {
+      return;
+    }
+    if (!selected || !onDeletePart) return;
+    event.preventDefault();
+    onDeletePart(selected.partId);
+  };
+
+  const commitDraft = (position: Vec3, rotation: Vec3) => {
+    setDragging(false);
+    if (selected && onChangePose) {
+      const { componentId, placementIndex } = parseInstanceKey(selected.key);
+      onChangePose(componentId, placementIndex, position, rotation);
+    }
+    setDraft(null);
+  };
 
   const attachedFasteners = useMemo(() => {
     if (!scene || !selectedKey) return [];
@@ -128,11 +186,17 @@ export function Viewport({ scene, selectedKey, onSelect }: ViewportProps) {
   }, [scene, explode]);
 
   return (
-    <div className="relative h-full w-full bg-[#1a120b]">
+    <div
+      ref={rootRef}
+      tabIndex={0}
+      className="relative h-full w-full bg-[#1a120b] outline-none"
+      onPointerDown={handlePointerDown}
+      onKeyDown={handleKeyDown}
+    >
       <Canvas
         shadows
         camera={{ position: [90, 55, 90], fov: 35, near: 0.1, far: 4000 }}
-        onPointerMissed={() => onSelect(null)}
+        onPointerMissed={() => selectPart(null)}
         gl={{ antialias: true }}
         onCreated={({ gl }) => {
           gl.shadowMap.enabled = true;
@@ -171,18 +235,33 @@ export function Viewport({ scene, selectedKey, onSelect }: ViewportProps) {
         />
         {scene?.components.map((component) => {
           const qInv = quaternionInverse(component.rotation);
+          const showGizmo = Boolean(
+            selected && gizmoPose && onChangePose && parseInstanceKey(selected.key).componentId === component.id,
+          );
           return (
             <group key={component.id} position={component.position} rotation={deg(component.rotation)}>
               {component.parts.map((part) => (
                 <PartMesh
                   key={part.key}
-                  instance={part}
+                  instance={posed(part)}
                   selected={part.key === selectedKey}
                   dimmed={hasSelection && part.key !== selectedKey}
                   offset={toLocalOffset(worldOffsets.get(part.key) ?? ZERO, qInv)}
-                  onSelect={onSelect}
+                  onSelect={selectPart}
                 />
               ))}
+              {showGizmo && selected && gizmoPose ? (
+                <group position={toLocalOffset(worldOffsets.get(selected.key) ?? ZERO, qInv)}>
+                  <PartGizmo
+                    key={`${selected.key}-${selected.position.join(",")}-${selected.rotation.join(",")}`}
+                    pose={gizmoPose}
+                    bounds={selected.bounds}
+                    onDragStart={() => setDragging(true)}
+                    onDraft={(position, rotation) => setDraft({ key: selected.key, position, rotation })}
+                    onCommit={commitDraft}
+                  />
+                </group>
+              ) : null}
             </group>
           );
         })}
@@ -194,7 +273,7 @@ export function Viewport({ scene, selectedKey, onSelect }: ViewportProps) {
             offset={averageOffset(fastener, worldOffsets)}
           />
         ))}
-        <OrbitControls makeDefault target={[20, 16, 12]} maxPolarAngle={Math.PI / 2.05} />
+        <OrbitControls makeDefault enabled={!dragging} target={[20, 16, 12]} maxPolarAngle={Math.PI / 2.05} />
         <GizmoHelper alignment="bottom-right" margin={[64, 64]}>
           <GizmoViewport axisColors={["#b45309", "#ca8a04", "#92400e"]} labelColor="#d6c3a3" />
         </GizmoHelper>

@@ -17,6 +17,7 @@ type DraftPose = PartPose & { key: string };
 type ViewportProps = {
   scene?: SceneModel;
   selectedKey: string | null;
+  hoveredKey: string | null;
   onSelect: (key: string | null) => void;
   onDeletePart?: (partId: string) => void;
   onChangePose?: (componentId: string, placementIndex: number, position: Vec3, rotation: Vec3) => void;
@@ -101,7 +102,7 @@ function SelectionCard({
   );
 }
 
-export function Viewport({ scene, selectedKey, onSelect, onDeletePart, onChangePose }: ViewportProps) {
+export function Viewport({ scene, selectedKey, hoveredKey, onSelect, onDeletePart, onChangePose }: ViewportProps) {
   const rootRef = useRef<HTMLDivElement>(null);
   const [explode, setExplode] = useState(0);
   const [dragging, setDragging] = useState(false);
@@ -245,7 +246,8 @@ export function Viewport({ scene, selectedKey, onSelect, onDeletePart, onChangeP
                   key={part.key}
                   instance={posed(part)}
                   selected={part.key === selectedKey}
-                  dimmed={hasSelection && part.key !== selectedKey}
+                  preview={part.key === hoveredKey && part.key !== selectedKey}
+                  dimmed={hasSelection && part.key !== selectedKey && part.key !== hoveredKey}
                   offset={toLocalOffset(worldOffsets.get(part.key) ?? ZERO, qInv)}
                   onSelect={selectPart}
                 />

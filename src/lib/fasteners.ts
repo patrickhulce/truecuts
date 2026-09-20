@@ -32,6 +32,27 @@ export function instanceKey(componentId: string, partId: string, placementIndex:
   return `${componentId}/${partId}#${placementIndex}`;
 }
 
+export function parseInstanceKey(key: string): {
+  componentId: string;
+  partId: string;
+  placementIndex: number;
+} {
+  const slash = key.indexOf("/");
+  const hash = key.lastIndexOf("#");
+  if (slash <= 0 || hash <= slash + 1 || hash === key.length - 1) {
+    throw new Error(`Invalid instance key "${key}"`);
+  }
+  const placementIndex = Number(key.slice(hash + 1));
+  if (!Number.isInteger(placementIndex) || placementIndex < 0) {
+    throw new Error(`Invalid instance key "${key}"`);
+  }
+  return {
+    componentId: key.slice(0, slash),
+    partId: key.slice(slash + 1, hash),
+    placementIndex,
+  };
+}
+
 /** 0-based occurrence of `partId` in the component → index in `component.parts`. */
 export function placementIndexFor(
   component: { parts: ResolvedPlacement[] },

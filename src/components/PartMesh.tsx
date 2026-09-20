@@ -1,7 +1,7 @@
 "use client";
 
-import { Edges } from "@react-three/drei";
-import { useMemo } from "react";
+import { Edges, useCursor } from "@react-three/drei";
+import { useMemo, useState } from "react";
 import * as THREE from "three";
 import { faceNormal, type Polyhedron, type Vec3 } from "@/lib/geometry";
 import type { ScenePartInstance } from "@/lib/scene";
@@ -60,13 +60,23 @@ const ZERO: Vec3 = [0, 0, 0];
 type PartMeshProps = {
   instance: ScenePartInstance;
   selected: boolean;
+  preview?: boolean;
   dimmed?: boolean;
   offset?: Vec3;
   onSelect: (key: string) => void;
 };
 
-export function PartMesh({ instance, selected, dimmed = false, offset = ZERO, onSelect }: PartMeshProps) {
+export function PartMesh({
+  instance,
+  selected,
+  preview = false,
+  dimmed = false,
+  offset = ZERO,
+  onSelect,
+}: PartMeshProps) {
   const geometry = useMemo(() => facesToGeometry(instance.faces), [instance.faces]);
+  const [hovered, setHovered] = useState(false);
+  useCursor(hovered);
   const rotation: [number, number, number] = [
     THREE.MathUtils.degToRad(instance.rotation[0]),
     THREE.MathUtils.degToRad(instance.rotation[1]),
@@ -81,6 +91,10 @@ export function PartMesh({ instance, selected, dimmed = false, offset = ZERO, on
   // shader when transparent is false; R3F does not set `needsUpdate` when that
   // flag later flips, so opacity would otherwise be ignored and parts stay solid.
   const opacity = dimmed ? 0.22 : 1;
+  const emissive = selected ? "#d97706" : preview ? "#c4a36a" : "#000000";
+  const fastenedIntensity = selected ? 0.35 : preview ? 0.18 : 0;
+  const stripeIntensity = selected ? 0.25 : preview ? 0.12 : 0;
+  const edgeColor = selected ? "#f59e0b" : preview ? "#d6c3a3" : instance.fastened ? "#3b2410" : "#7f1d1d";
 
   return (
     <mesh
@@ -90,6 +104,11 @@ export function PartMesh({ instance, selected, dimmed = false, offset = ZERO, on
       renderOrder={dimmed ? 1 : 0}
       castShadow={!dimmed}
       receiveShadow={!dimmed}
+      onPointerOver={(event) => {
+        event.stopPropagation();
+        setHovered(true);
+      }}
+      onPointerOut={() => setHovered(false)}
       onClick={(event) => {
         event.stopPropagation();
         onSelect(instance.key);
@@ -103,8 +122,8 @@ export function PartMesh({ instance, selected, dimmed = false, offset = ZERO, on
           transparent
           opacity={opacity}
           depthWrite={!dimmed}
-          emissive={selected ? "#d97706" : "#000000"}
-          emissiveIntensity={selected ? 0.35 : 0}
+          emissive={emissive}
+          emissiveIntensity={fastenedIntensity}
         />
       ) : (
         <meshStandardMaterial
@@ -115,15 +134,15 @@ export function PartMesh({ instance, selected, dimmed = false, offset = ZERO, on
           transparent
           opacity={opacity}
           depthWrite={!dimmed}
-          emissive={selected ? "#d97706" : "#000000"}
-          emissiveIntensity={selected ? 0.25 : 0}
+          emissive={emissive}
+          emissiveIntensity={stripeIntensity}
           onBeforeCompile={applyStripeShader}
           customProgramCacheKey={stripeCacheKey}
         />
       )}
       <Edges
         threshold={20}
-        color={selected ? "#f59e0b" : instance.fastened ? "#3b2410" : "#7f1d1d"}
+        color={edgeColor}
         transparent
         opacity={dimmed ? 0.18 : 1}
         depthWrite={!dimmed}

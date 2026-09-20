@@ -6,9 +6,9 @@ import { applyPose, type Vec3 } from "./geometry";
 import type { SceneComponent, ScenePartInstance } from "./scene";
 
 const UNDERSIDE_ORIGINS: Record<string, { position: Vec3; side: "left" | "right" }> = {
-  "corner-bracket-1": { position: [3.5, 26.5, 0], side: "left" },
+  "corner-bracket-1": { position: [3.5, 26.5, 1.5], side: "left" },
   "corner-bracket-2": { position: [36.5, 26.5, 0], side: "right" },
-  "corner-bracket-3": { position: [3.5, 26.5, 22.5], side: "left" },
+  "corner-bracket-3": { position: [3.5, 26.5, 24], side: "left" },
   "corner-bracket-4": { position: [36.5, 26.5, 22.5], side: "right" },
 };
 

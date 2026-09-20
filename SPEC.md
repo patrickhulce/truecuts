@@ -42,8 +42,14 @@ Part ids and component ids share one document-wide namespace. Duplicate ids are 
 
 - Internal unit: **inches**.
 - World: right-handed, **Y-up**.
-- Part local axes: **0 = length** (grain, +X), **1 = width** (+Y), **2 = thickness** (+Z).
-- Part origin is the **min corner** of the uncut stock. `at` is measured from that origin along the cut axis.
+- Parts keep their **trade names** (a 2×4 is still called a 2×4). Every **numeric** dimension is **L×W×T**, longest → shortest. A 2×4×8 is `[96, 3.5, 1.5]` = 8′ × 3.5″ × 1.5″.
+- Cut axes index that tuple: **0 = length (L)**, **1 = width (W)**, **2 = thickness (T)**.
+- Default local frame: **X = L**, **Z = W**, **Y = T**. Default placement sits the L×W face on the ground, thickness along +Y.
+- Faces are named by the dimensions that span them:
+  - **L×W** — wide face, normal ±Y
+  - **L×T** — edge, normal ±Z
+  - **W×T** — end, normal ±X
+- Part origin is the **min corner** of the uncut stock. `at` is measured from that origin along the cut axis (L, W, or T — not a world XYZ coordinate).
 - Rotations are Euler **XYZ** in **degrees**.
 - Positions are `[x, y, z]` in inches (numbers or dimension strings).
 
@@ -71,9 +77,9 @@ version: 1
 name: Sawhorse
 parts:
   - label: Leg                 # id defaults to leg-1
-    stock: 2x4x8
+    stock: 2x4x8               # L×W×T = 8′ × 3.5″ × 1.5″
     cuts:
-      - { axis: 0, angle: 90, at: 34 }
+      - { axis: 0, angle: 90, at: 34 }   # square cut on L
   - label: Rail                # id defaults to rail-1
     stock: 2x4x8
     cuts:
@@ -81,14 +87,16 @@ parts:
       - { axis: 0, angle: 45, at: [0, 4], side: start }
   - id: top-1                  # explicit id (must still end in -<index>)
     label: Top
-    stock: plywood-3/4-4x8
+    stock: plywood-3/4-4x8     # L×W×T = 8′ × 4′ × ¾″; L×W face is default-down
     cuts:
       - { axis: 0, angle: 90, at: 60 }
       - { axis: 1, angle: 90, at: 30 }
 components:
   - label: Horse               # id defaults to horse-1
     parts:
-      - { part: leg-1, position: [0, 0, 0], rotation: [0, 0, 0] }
+      # Standing 2×4: rotation [90, 90, 0] sends L up world Y.
+      - { part: leg-1, position: [0, 0, 0], rotation: [90, 90, 0] }
+      # Sheet goods sit flat by default (T along +Y); no rotation needed.
       - { part: top-1, position: [0, 34, 0], rotation: [0, 0, 0] }
     position: [0, 0, 0]
     rotation: [0, 0, 0]
@@ -111,11 +119,11 @@ components:
 
 ### Cut fields
 
-- `axis` — `0`, `1`, or `2`. The axis the cut plane is **perpendicular to at 90°**.
+- `axis` — `0` (L), `1` (W), or `2` (T). The dimension the cut plane is **perpendicular to at 90°**. Not a world XYZ index.
 - `angle` — degrees. `90` is square. Other values tilt the plane away from square (miter / bevel).
 - `at` — a single measurement for square cuts, or `[short, long]` short-point / long-point for angled cuts.
 - `side` — `end` (default) or `start`. `end` keeps material from the origin up to the plane; `start` keeps material past the plane.
-- `around` — optional tilt axis. Default is a **miter across the width face** (`around: 2` when `axis` is not 2; `around: 1` when cutting on thickness). Set `around: 1` on a length cut for a **bevel**.
+- `around` — optional tilt axis (also L/W/T). Default is a **miter across the L×W face** (`around: 2` — the T axis — when `axis` is not 2; `around: 1` when cutting on thickness). Set `around: 1` on a length cut for a **bevel** (short/long vary across T).
 
 Validation:
 
@@ -206,24 +214,24 @@ X=0                         X=34              X=96
 
 ### Miter (short / long point)
 
-`at: [short, long]` places the short point on the **min** face of the span axis and the long point on the **max** face. For a default length-axis miter, the span is width (axis 1):
+`at: [short, long]` places the short point on the **min** face of the span axis and the long point on the **max** face. For a default length-axis miter, the span is width (axis 1, local +Z):
 
 ```
-Y = width
+Z = width
  *------------------------------------*
  |                                    \
  |                                     \
  |                                      \
  *---------------------------------------*
  X=0                                  short  long
-                                      (Y=0)  (Y=width)
+                                      (Z=0)  (Z=width)
 ```
 
-The plane contains both points and is parallel to `around` (thickness, by default). `angle` records the carpenter's miter angle; the plane is built from the short/long points. For a 45° miter across a 3.5″ 2×4, `long - short` should be 3.5″.
+The plane contains both points and is parallel to `around` (thickness / local +Y, by default). `angle` records the carpenter's miter angle; the plane is built from the short/long points. For a 45° miter across a 3.5″ 2×4, `long - short` should be 3.5″.
 
 ### Bevel
 
-Same as a miter, but `around` is the width axis so short/long vary across thickness.
+Same as a miter, but `around` is the width axis so short/long vary across thickness (local +Y).
 
 ### Sequential cuts
 
@@ -231,7 +239,7 @@ Each cut clips whatever remains. Both ends of a board can be mitered by followin
 
 ## Catalog
 
-v1 ships a small built-in dataset in `src/lib/catalog.ts`. Lumber uses **actual** dimensions (a 2×4 is 1.5″ × 3.5″). Sheet goods use listed thickness × 48″ × 96″. Angle L-brackets (`bracket-l-*`, two square flanges at 90°) and flat L-brackets (`bracket-flat-l-*`, a single-plane L plate) are renderable hardware parts; they do not take planar cuts. Fasteners (screws, glue) are rendered as instances. Other hardware is catalogued for later rendering and procedural use.
+v1 ships a small built-in dataset in `src/lib/catalog.ts`. Catalog `size` is always **actual L×W×T**, longest → shortest (a 2×4×8 is 8′ × 3.5″ × 1.5″). Trade names stay (it is still a 2×4). Sheet goods are 96″ × 48″ × listed thickness. Angle L-brackets (`bracket-l-*`, two square flanges at 90°) and flat L-brackets (`bracket-flat-l-*`, a single-plane L plate) are renderable hardware parts; they do not take planar cuts. Fasteners (screws, glue) are rendered as instances. Other hardware is catalogued for later rendering and procedural use.
 
 | id | kind | actual L × W × T (in) | notes |
 | --- | --- | --- | --- |
@@ -252,13 +260,13 @@ v1 ships a small built-in dataset in `src/lib/catalog.ts`. Lumber uses **actual*
 | `bracket-flat-l-3x1` | hardware | 3″ × 1″ flat L-bracket | placed as a part |
 | `bolt-1/4-20x3` | hardware | ¼-20 × 3″ hex bolt | not rendered in v1 |
 | `hinge-overlay-35mm` | hardware | 35 mm overlay hinge | not rendered in v1 |
-| `drawer-slide-18` | hardware | 18″ side-mount slide (pair) | not rendered in v1 |
+| `drawer-slide-18` | hardware | 18 × 1.5 × 0.5 | 18″ side-mount slide (pair); not rendered in v1 |
 
 Catalog entries have `material` and `color` used by the viewport for lumber, sheet goods, L-brackets, and fastener solids.
 
-L-bracket part axes: origin at the inside corner. Axis 0 is the first flange (+X), axis 1 is the fold width (+Y), axis 2 is the second flange (+Z). Plate thickness is `size[2]`. Planar cuts are not allowed.
+L-bracket part axes: origin at the inside corner. Axis 0 is the first flange along +X, axis 1 is the fold along +Z, axis 2 is plate thickness along +Y. The second flange rises along +Y (thin +X). Default pose sits the first flange on the L×W plane with the second flange standing. Planar cuts are not allowed.
 
-Flat L-bracket part axes: origin at the outer corner of a single-plane L in XY. Axis 0 is the first leg (+X), axis 1 is the second leg (+Y), axis 2 is plate thickness (+Z). `size` is `[leg, arm width, thickness]`. Planar cuts are not allowed.
+Flat L-bracket part axes: origin at the outer corner of a single-plane L in the XZ (L×W) plane. Axis 0 is the first leg (+X), axis 1 is the second leg (+Z), axis 2 is plate thickness (+Y). `size` is `[leg, arm width, thickness]`. Planar cuts are not allowed.
 
 ## Procedural components
 
@@ -311,7 +319,7 @@ components:
 
 - Left pane: YAML editor (CodeMirror) with a walnut/amber theme and lint markers on diagnostics.
 - Right pane: react-three-fiber scene — warm hemisphere + shadowed directional light, 1″ grid with 12″ sections, orbit controls, wood-tone materials with CAD edges.
-- Click a part to inspect `id`, stock, finished AABB (length × width × thickness of the cut solid), whether it is fastened, and the fasteners attached to it. Non-selected parts fade so fasteners inside the assembly stay visible; attached fasteners highlight.
+- Click a part to inspect `id`, stock, finished AABB (L × W × T of the cut solid), whether it is fastened, and the fasteners attached to it. Non-selected parts fade so fasteners inside the assembly stay visible; attached fasteners highlight.
 - Fasteners render as solids: screws (head + shank) and glue beads at each member `at`. L-brackets render as ordinary steel parts.
 - An explode slider radiates parts from the scene center (distance-proportional); fasteners travel with their members.
 - Any part not reachable from the first part of the first component is drawn with red/white hazard stripes.

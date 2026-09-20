@@ -16,6 +16,14 @@ describe("boxPolyhedron", () => {
   it("has the volume of the AABB", () => {
     expect(polyhedronVolume(boxPolyhedron(BOX))).toBeCloseTo(80, 6);
   });
+
+  it("maps L×W×T onto X/Z/Y", () => {
+    const { min, max } = boundingBox(boxPolyhedron(BOX));
+    expect(min).toEqual([0, 0, 0]);
+    expect(max[0]).toBeCloseTo(10, 6);
+    expect(max[1]).toBeCloseTo(2, 6);
+    expect(max[2]).toBeCloseTo(4, 6);
+  });
 });
 
 describe("applyCuts", () => {
@@ -26,8 +34,8 @@ describe("applyCuts", () => {
     const { min, max } = boundingBox(poly);
     expect(min[0]).toBeCloseTo(0, 6);
     expect(max[0]).toBeCloseTo(5, 6);
-    expect(max[1]).toBeCloseTo(4, 6);
-    expect(max[2]).toBeCloseTo(2, 6);
+    expect(max[1]).toBeCloseTo(2, 6);
+    expect(max[2]).toBeCloseTo(4, 6);
   });
 
   it("square-cuts the start side", () => {
@@ -45,8 +53,8 @@ describe("applyCuts", () => {
     // Wedge is 0.5 * 4 * 4 * 2 = 16
     expect(polyhedronVolume(poly)).toBeCloseTo(64, 5);
     const verts = poly.flat();
-    const has = (x: number, y: number) =>
-      verts.some((v) => Math.abs(v[0] - x) < 1e-4 && Math.abs(v[1] - y) < 1e-4);
+    const has = (x: number, z: number) =>
+      verts.some((v) => Math.abs(v[0] - x) < 1e-4 && Math.abs(v[2] - z) < 1e-4);
     expect(has(6, 0)).toBe(true); // short point
     expect(has(10, 4)).toBe(true); // long point
     expect(has(10, 0)).toBe(false); // discarded far corner on the min-width edge
@@ -97,8 +105,8 @@ describe("flatLBracketPolyhedron", () => {
     const { min, max } = boundingBox(poly);
     expect(min).toEqual([0, 0, 0]);
     expect(max[0]).toBeCloseTo(leg, 6);
-    expect(max[1]).toBeCloseTo(leg, 6);
-    expect(max[2]).toBeCloseTo(thickness, 6);
+    expect(max[1]).toBeCloseTo(thickness, 6);
+    expect(max[2]).toBeCloseTo(leg, 6);
     expect(polyhedronVolume(poly)).toBeCloseTo(thickness * (2 * leg * arm - arm * arm), 6);
   });
 });

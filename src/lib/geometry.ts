@@ -4,6 +4,16 @@ export type Vec3 = [number, number, number];
 export type Face = Vec3[];
 export type Polyhedron = Face[];
 
+/**
+ * Map a cut/size axis (0=L, 1=W, 2=T) onto a local XYZ coordinate.
+ * Default frame: L along +X, W along +Z, T along +Y.
+ */
+export const AXIS_TO_COORD = [0, 2, 1] as const;
+
+export function axisCoord(axis: Axis): 0 | 1 | 2 {
+  return AXIS_TO_COORD[axis];
+}
+
 export type Plane = {
   /** Keep the half-space n·x <= d. */
   normal: Vec3;
@@ -56,20 +66,20 @@ export function boxPolyhedron(size: Vec3): Polyhedron {
   const v: Vec3[] = [
     [0, 0, 0],
     [l, 0, 0],
-    [l, w, 0],
-    [0, w, 0],
-    [0, 0, t],
-    [l, 0, t],
-    [l, w, t],
-    [0, w, t],
+    [l, 0, w],
+    [0, 0, w],
+    [0, t, 0],
+    [l, t, 0],
+    [l, t, w],
+    [0, t, w],
   ];
   return [
-    [v[0], v[1], v[5], v[4]],
-    [v[3], v[7], v[6], v[2]],
-    [v[0], v[4], v[7], v[3]],
-    [v[1], v[2], v[6], v[5]],
-    [v[0], v[3], v[2], v[1]],
-    [v[4], v[5], v[6], v[7]],
+    [v[0], v[1], v[2], v[3]],
+    [v[4], v[7], v[6], v[5]],
+    [v[0], v[4], v[5], v[1]],
+    [v[3], v[2], v[6], v[7]],
+    [v[0], v[3], v[7], v[4]],
+    [v[1], v[5], v[6], v[2]],
   ];
 }
 
@@ -79,9 +89,9 @@ export function boxPolyhedronAt(origin: Vec3, size: Vec3): Polyhedron {
 }
 
 /**
- * L-bracket: flange A in XY (thin +Z), flange B in YZ (thin +X).
- * `size` is [flange length along +X, fold width along +Y, thickness].
- * The second flange runs the same length along +Z.
+ * L-bracket: flange A in XZ (thin +Y), flange B rising along +Y (thin +X).
+ * `size` is [flange length along +X, fold width along +Z, thickness along +Y].
+ * The second flange runs the same length along +Y. Origin at the inside corner.
  */
 export function lBracketPolyhedron(size: Vec3): Polyhedron {
   const [leg, fold, thickness] = size;
@@ -89,15 +99,15 @@ export function lBracketPolyhedron(size: Vec3): Polyhedron {
 }
 
 /**
- * Flat L-bracket: a single-plane L in XY.
- * `size` is [leg length along +X/+Y, arm width, thickness along +Z].
+ * Flat L-bracket: a single-plane L in the XZ (L×W) plane.
+ * `size` is [leg length along +X/+Z, arm width, thickness along +Y].
  * Origin at the outer corner; both legs run from that corner.
  */
 export function flatLBracketPolyhedron(size: Vec3): Polyhedron {
   const [leg, arm, thickness] = size;
   return [
     ...boxPolyhedron([leg, arm, thickness]),
-    ...boxPolyhedronAt([0, arm, 0], [arm, Math.max(leg - arm, 0), thickness]),
+    ...boxPolyhedronAt([0, 0, arm], [arm, Math.max(leg - arm, 0), thickness]),
   ];
 }
 
@@ -193,6 +203,7 @@ export function clipPolyhedron(poly: Polyhedron, plane: Plane): Polyhedron {
   return faces;
 }
 
+/** Default miter is parallel to the T axis (2), spanning W. When cutting on T, span W (1). */
 export function defaultAround(cutAxis: Axis): Axis {
   return cutAxis === 2 ? 1 : 2;
 }
@@ -205,14 +216,18 @@ export function cutToPlane(cut: ResolvedCut, size: Vec3): Plane {
     throw new Error("`around` must be different from the cut axis");
   }
 
+  const axisXyz = axisCoord(axis);
+  const aroundXyz = axisCoord(around);
+  const spanXyz = axisCoord(spanAxis);
+
   const square = Math.abs(cut.angle - 90) < 1e-6 || typeof cut.at === "number";
   if (square) {
     const at = cut.at as number;
     const n: Vec3 = [0, 0, 0];
-    n[axis] = 1;
+    n[axisXyz] = 1;
     let d = at;
     if (cut.side === "start") {
-      n[axis] = -1;
+      n[axisXyz] = -1;
       d = -at;
     }
     return { normal: n, d };
@@ -220,15 +235,15 @@ export function cutToPlane(cut: ResolvedCut, size: Vec3): Plane {
 
   const [short, long] = cut.at as [number, number];
   const pShort: Vec3 = [0, 0, 0];
-  pShort[axis] = short;
+  pShort[axisXyz] = short;
   const pLong: Vec3 = [0, 0, 0];
-  pLong[axis] = long;
-  pLong[spanAxis] = size[spanAxis];
+  pLong[axisXyz] = long;
+  pLong[spanXyz] = size[spanAxis];
   const p3: Vec3 = [...pShort];
-  p3[around] = (size[around] || 1) + 1;
+  p3[aroundXyz] = (size[around] || 1) + 1;
 
   let n = normalize(cross(sub(pLong, pShort), sub(p3, pShort)));
-  if (n[axis] < 0) n = scale(n, -1);
+  if (n[axisXyz] < 0) n = scale(n, -1);
   let d = dot(n, pShort);
   if (cut.side === "start") {
     n = scale(n, -1);
@@ -279,7 +294,10 @@ export function degToRad(degrees: number): number {
   return (degrees * Math.PI) / 180;
 }
 
-/** Rotate `v` by Euler XYZ in degrees (same convention as THREE.Euler default). */
+/**
+ * Rotate `v` by Euler XYZ in degrees (same convention as THREE.Euler default).
+ * THREE applies Rz then Ry then Rx (matrix Rx Ry Rz on column vectors).
+ */
 export function rotateEulerXYZ(v: Vec3, rotationDeg: Vec3): Vec3 {
   const rx = degToRad(rotationDeg[0]);
   const ry = degToRad(rotationDeg[1]);
@@ -288,23 +306,25 @@ export function rotateEulerXYZ(v: Vec3, rotationDeg: Vec3): Vec3 {
   let y = v[1];
   let z = v[2];
 
-  const cy = Math.cos(rx);
-  const sy = Math.sin(rx);
-  const y1 = y * cy - z * sy;
-  const z1 = y * sy + z * cy;
+  const cz = Math.cos(rz);
+  const sz = Math.sin(rz);
+  const x1 = x * cz - y * sz;
+  const y1 = x * sz + y * cz;
+  x = x1;
   y = y1;
-  z = z1;
 
-  const cx = Math.cos(ry);
-  const sx = Math.sin(ry);
-  const x2 = x * cx + z * sx;
-  const z2 = -x * sx + z * cx;
+  const cy = Math.cos(ry);
+  const sy = Math.sin(ry);
+  const x2 = x * cy + z * sy;
+  const z2 = -x * sy + z * cy;
   x = x2;
   z = z2;
 
-  const cz = Math.cos(rz);
-  const sz = Math.sin(rz);
-  return [x * cz - y * sz, x * sz + y * cz, z];
+  const cx = Math.cos(rx);
+  const sx = Math.sin(rx);
+  const y3 = y * cx - z * sx;
+  const z3 = y * sx + z * cx;
+  return [x, y3, z3];
 }
 
 export function applyPose(point: Vec3, position: Vec3, rotationDeg: Vec3): Vec3 {

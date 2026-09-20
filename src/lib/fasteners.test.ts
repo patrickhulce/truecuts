@@ -1,7 +1,8 @@
 import { describe, expect, it } from "vitest";
+import * as THREE from "three";
 import { compileDocument } from "./compile";
 import { fastenedFromSeed, worldPoint } from "./fasteners";
-import { rotateEulerXYZ } from "./geometry";
+import { degToRad, rotateEulerXYZ, type Vec3 } from "./geometry";
 import { validateDocument } from "./schema";
 
 describe("rotateEulerXYZ", () => {
@@ -12,11 +13,28 @@ describe("rotateEulerXYZ", () => {
     expect(rotated[2]).toBeCloseTo(0, 6);
   });
 
-  it("lays plywood flat: +X 90° sends +Z toward -Y", () => {
-    const rotated = rotateEulerXYZ([0, 0, 1], [90, 0, 0]);
+  it("lays plywood flat: identity keeps T along +Y", () => {
+    const rotated = rotateEulerXYZ([0, 1, 0], [0, 0, 0]);
     expect(rotated[0]).toBeCloseTo(0, 6);
-    expect(rotated[1]).toBeCloseTo(-1, 6);
+    expect(rotated[1]).toBeCloseTo(1, 6);
     expect(rotated[2]).toBeCloseTo(0, 6);
+  });
+
+  it("matches THREE.Euler XYZ for combined rotations", () => {
+    const sample: Vec3 = [30, 1.5, 3.5];
+    for (const rot of [
+      [90, 0, 90],
+      [90, 90, 0],
+      [90, 0, -90],
+    ] as Vec3[]) {
+      const ours = rotateEulerXYZ(sample, rot);
+      const three = new THREE.Vector3(...sample).applyEuler(
+        new THREE.Euler(degToRad(rot[0]), degToRad(rot[1]), degToRad(rot[2]), "XYZ"),
+      );
+      expect(ours[0], `${rot}`).toBeCloseTo(three.x, 6);
+      expect(ours[1], `${rot}`).toBeCloseTo(three.y, 6);
+      expect(ours[2], `${rot}`).toBeCloseTo(three.z, 6);
+    }
   });
 });
 
@@ -38,8 +56,8 @@ describe("fastenedFromSeed", () => {
 describe("worldPoint", () => {
   it("places a point on a standing 2x4", () => {
     const point = worldPoint(
-      [28.25, 0, 0.75],
-      { part: "leg-1", position: [3.5, 0, 0], rotation: [0, 0, 90] },
+      [28.25, 0.75, 3.5],
+      { part: "leg-1", position: [0, 0, 0], rotation: [90, 90, 0] },
       { position: [0, 0, 0], rotation: [0, 0, 0] },
     );
     expect(point[0]).toBeCloseTo(3.5, 6);
@@ -134,8 +152,8 @@ components:
     fasteners:
       - stock: screw-wood-8x1.25
         members:
-          - { part: flat-bracket-1, at: [0.5, 0.5, 0.125], direction: [0, 0, -1] }
-          - { part: leg-1, at: [0.5, 0.5, 1.5], direction: [0, 0, 1] }
+          - { part: flat-bracket-1, at: [0.5, 0.125, 0.5], direction: [0, -1, 0] }
+          - { part: leg-1, at: [0.5, 1.5, 0.5], direction: [0, 1, 0] }
 `);
     expect(result.diagnostics.filter((item) => item.severity === "error")).toEqual([]);
     expect(result.scene?.components[0].parts).toHaveLength(2);

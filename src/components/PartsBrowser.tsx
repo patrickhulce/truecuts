@@ -14,7 +14,7 @@ type PartsBrowserProps = {
   onHover: (key: string | null) => void;
 };
 
-const AXIS_NAME = ["length", "width", "thickness"] as const;
+const AXIS_NAME = ["length (L)", "width (W)", "thickness (T)"] as const;
 
 function formatFinished(finished: ScenePartInstance["finished"]): string {
   return `${formatInches(finished.length)} × ${formatInches(finished.width)} × ${formatInches(finished.thickness)}`;
@@ -274,7 +274,7 @@ function PartDetail({
 
         <SectionLabel>Dimensions</SectionLabel>
         <p className="px-3 text-sm text-[#d6c3a3]">{formatFinished(instance.finished)}</p>
-        <p className="px-3 text-[11px] text-[#8a7355]">length × width × thickness</p>
+        <p className="px-3 text-[11px] text-[#8a7355]">L × W × T (length × width × thickness)</p>
 
         <SectionLabel>Cuts</SectionLabel>
         {cuts.length === 0 ? (

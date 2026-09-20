@@ -9,8 +9,12 @@ export type CatalogPart = {
   kind: CatalogKind;
   label: string;
   subtype?: string;
-  /** Actual size in inches: [length (axis 0), width (axis 1), thickness (axis 2)]. */
+  /**
+   * Actual size in inches, longest → shortest: [L (axis 0, +X), W (axis 1, +Z), T (axis 2, +Y)].
+   * Trade names stay (a 2×4 is still a 2×4); numeric dimensions are always L×W×T.
+   */
   size: Vec3;
+  /** Nominal trade sizes (thickness × width × length), distinct from actual L×W×T. */
   nominal?: { thickness: number; width: number; length?: number };
   material: string;
   color: string;
@@ -34,7 +38,7 @@ export const CATALOG: CatalogPart[] = [
     nominal: { thickness: 2, width: 4, length: 96 },
     material: "pine",
     color: PINE,
-    notes: "Dimensional lumber. Actual 1.5″ × 3.5″ × 8′.",
+    notes: "Dimensional lumber. Actual 8′ × 3.5″ × 1.5″ (L×W×T).",
     renderable: true,
   },
   {
@@ -45,7 +49,7 @@ export const CATALOG: CatalogPart[] = [
     nominal: { thickness: 2, width: 4, length: 120 },
     material: "pine",
     color: PINE,
-    notes: "Dimensional lumber. Actual 1.5″ × 3.5″ × 10′.",
+    notes: "Dimensional lumber. Actual 10′ × 3.5″ × 1.5″ (L×W×T).",
     renderable: true,
   },
   {
@@ -214,7 +218,7 @@ export const CATALOG: CatalogPart[] = [
     kind: "hardware",
     label: "18″ side-mount drawer slide (pair)",
     subtype: "drawer-slide",
-    size: [18, 0.5, 1.5],
+    size: [18, 1.5, 0.5],
     material: "steel",
     color: STEEL,
     notes: "Used by the drawer procedural component (v2).",

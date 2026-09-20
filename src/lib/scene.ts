@@ -64,17 +64,18 @@ function finishedFromBounds(bounds: { min: Vec3; max: Vec3 }): {
 } {
   return {
     length: bounds.max[0] - bounds.min[0],
-    width: bounds.max[1] - bounds.min[1],
-    thickness: bounds.max[2] - bounds.min[2],
+    width: bounds.max[2] - bounds.min[2],
+    thickness: bounds.max[1] - bounds.min[1],
   };
 }
 
 function assertCutInBounds(cut: ResolvedCut, size: Vec3, partId: string): void {
+  const dimName = (["L", "W", "T"] as const)[cut.axis];
   const limit = size[cut.axis];
   if (typeof cut.at === "number") {
     if (cut.at < -1e-6 || cut.at > limit + 1e-6) {
       throw new Error(
-        `Cut on ${partId} at ${cut.at} is outside stock axis ${cut.axis} (0–${limit})`,
+        `Cut on ${partId} at ${cut.at} is outside stock axis ${cut.axis} (${dimName}, 0–${limit})`,
       );
     }
     return;
@@ -82,7 +83,7 @@ function assertCutInBounds(cut: ResolvedCut, size: Vec3, partId: string): void {
   const [short, long] = cut.at;
   if (short < -1e-6 || long > limit + 1e-6) {
     throw new Error(
-      `Cut on ${partId} [${short}, ${long}] is outside stock axis ${cut.axis} (0–${limit})`,
+      `Cut on ${partId} [${short}, ${long}] is outside stock axis ${cut.axis} (${dimName}, 0–${limit})`,
     );
   }
 }

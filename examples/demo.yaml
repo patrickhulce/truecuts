@@ -1,5 +1,5 @@
 # TrueCuts demo — Assembly Bench
-# Left: edit this YAML. Right: the 3D scene updates live.
+# Left: browse parts, or edit YAML. Right: the 3D scene updates live.
 # See SPEC.md for the full document format.
 #
 # Fasteners (screws, glue) join parts, including through L-bracket parts.

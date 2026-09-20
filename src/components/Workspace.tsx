@@ -6,8 +6,7 @@ import { Group, Panel, Separator } from "react-resizable-panels";
 import { useDocument } from "@/hooks/useDocument";
 import { deletePart, setPlacementPose } from "@/lib/edit";
 import type { Vec3 } from "@/lib/geometry";
-import { DiagnosticsPanel } from "./DiagnosticsPanel";
-import { YamlEditor } from "./YamlEditor";
+import { EditorPanel } from "./EditorPanel";
 
 const Viewport = dynamic(() => import("./Viewport").then((mod) => mod.Viewport), {
   ssr: false,
@@ -19,11 +18,17 @@ const Viewport = dynamic(() => import("./Viewport").then((mod) => mod.Viewport),
 });
 
 const headerButtonClass =
-  "rounded border border-[#6b4a2b] bg-[#1a120b] px-2.5 py-1 text-[#d6c3a3] hover:border-[#f59e0b] hover:text-[#f59e0b] disabled:cursor-not-allowed disabled:border-[#3d2a18] disabled:text-[#8a7355] disabled:hover:border-[#3d2a18] disabled:hover:text-[#8a7355]";
+  "cursor-pointer rounded border border-[#6b4a2b] bg-[#1a120b] px-2.5 py-1 text-[#d6c3a3] hover:border-[#f59e0b] hover:text-[#f59e0b] disabled:cursor-not-allowed disabled:border-[#3d2a18] disabled:text-[#8a7355] disabled:hover:border-[#3d2a18] disabled:hover:text-[#8a7355]";
 
 export function Workspace() {
   const { text, setText, commit, compiled, reset, undo, redo, canUndo, canRedo } = useDocument();
   const [selectedKey, setSelectedKey] = useState<string | null>(null);
+  const [hoveredKey, setHoveredKey] = useState<string | null>(null);
+
+  const handleSelect = useCallback((key: string | null) => {
+    setHoveredKey(null);
+    setSelectedKey(key);
+  }, []);
   const partCount = compiled.document?.parts.length ?? 0;
   const componentCount = compiled.document?.components.length ?? 0;
   const errorCount = compiled.diagnostics.filter((item) => item.severity === "error").length;
@@ -33,6 +38,7 @@ export function Workspace() {
       if (!compiled.document) return;
       try {
         commit(deletePart(text, partId));
+        setHoveredKey(null);
         setSelectedKey(null);
       } catch {
         // Leave the YAML alone if the AST cannot be updated.
@@ -105,17 +111,22 @@ export function Workspace() {
       </header>
       <Group orientation="horizontal" className="min-h-0 flex-1" defaultLayout={{ editor: 40, viewport: 60 }}>
         <Panel id="editor" minSize={22} className="flex min-h-0 flex-col bg-[#1a120b]">
-          <div className="min-h-0 flex-1">
-            <YamlEditor value={text} onChange={setText} diagnostics={compiled.diagnostics} />
-          </div>
-          <DiagnosticsPanel diagnostics={compiled.diagnostics} />
+          <EditorPanel
+            text={text}
+            onChangeText={setText}
+            compiled={compiled}
+            selectedKey={selectedKey}
+            onSelect={handleSelect}
+            onHover={setHoveredKey}
+          />
         </Panel>
         <Separator className="w-1.5 bg-[#3d2a18] hover:bg-[#d97706]" />
         <Panel id="viewport" minSize={30}>
           <Viewport
             scene={compiled.scene}
             selectedKey={selectedKey}
-            onSelect={setSelectedKey}
+            hoveredKey={hoveredKey}
+            onSelect={handleSelect}
             onDeletePart={handleDeletePart}
             onChangePose={handleChangePose}
           />

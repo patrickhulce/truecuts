@@ -5,9 +5,10 @@ import { Canvas } from "@react-three/fiber";
 import { useMemo, useRef, useState, type KeyboardEvent, type PointerEvent } from "react";
 import * as THREE from "three";
 import { parseInstanceKey } from "@/lib/fasteners";
-import type { Vec3 } from "@/lib/geometry";
+import { patchesFor, patchNeighbor, type SharedPatch, type Vec3 } from "@/lib/geometry";
 import type { SceneFastener, SceneModel, ScenePartInstance } from "@/lib/scene";
 import { formatInches } from "@/lib/units";
+import { ContactOverlay } from "./ContactOverlay";
 import { FastenerMesh } from "./FastenerMesh";
 import { PartGizmo, type PartPose } from "./PartGizmo";
 import { PartMesh } from "./PartMesh";
@@ -76,10 +77,15 @@ function fastenerSummary(fasteners: SceneFastener[]): string {
 function SelectionCard({
   instance,
   attachedFasteners,
+  patches,
+  neighbors,
 }: {
   instance: ScenePartInstance;
   attachedFasteners: SceneFastener[];
+  patches: SharedPatch[];
+  neighbors: string[];
 }) {
+  const area = patches.reduce((sum, patch) => sum + patch.area, 0);
   return (
     <aside className="pointer-events-none absolute left-4 top-4 max-w-sm rounded-md border border-[#3d2a18] bg-[#241a10]/95 px-3 py-2 text-xs text-[#d6c3a3] shadow-lg">
       <div className="font-medium text-[#f59e0b]">{instance.label}</div>
@@ -97,6 +103,18 @@ function SelectionCard({
         <dd className="text-[#d6c3a3]">{instance.fastened ? "yes" : "no"}</dd>
         <dt>fasteners</dt>
         <dd className="text-[#d6c3a3]">{fastenerSummary(attachedFasteners)}</dd>
+        <dt>contacts</dt>
+        <dd className="text-[#d6c3a3]">
+          {patches.length === 0
+            ? "none"
+            : `${patches.length} patch${patches.length === 1 ? "" : "es"} · ${area.toFixed(2)} in²`}
+        </dd>
+        {neighbors.length > 0 ? (
+          <>
+            <dt>neighbors</dt>
+            <dd className="text-[#d6c3a3]">{neighbors.join(", ")}</dd>
+          </>
+        ) : null}
       </dl>
     </aside>
   );
@@ -107,6 +125,8 @@ export function Viewport({ scene, selectedKey, hoveredKey, onSelect, onDeletePar
   const [explode, setExplode] = useState(0);
   const [dragging, setDragging] = useState(false);
   const [draft, setDraft] = useState<DraftPose | null>(null);
+  const [showContacts, setShowContacts] = useState(true);
+  const [focusedPatch, setFocusedPatch] = useState<string | null>(null);
 
   const selected = scene?.components.flatMap((component) => component.parts).find((part) => part.key === selectedKey);
   const hasSelection = selectedKey !== null;
@@ -126,6 +146,7 @@ export function Viewport({ scene, selectedKey, hoveredKey, onSelect, onDeletePar
   const selectPart = (key: string | null) => {
     setDraft(null);
     setDragging(false);
+    setFocusedPatch(null);
     onSelect(key);
   };
 
@@ -170,6 +191,29 @@ export function Viewport({ scene, selectedKey, hoveredKey, onSelect, onDeletePar
     () => new Set(attachedFasteners.map((fastener) => fastener.key)),
     [attachedFasteners],
   );
+
+  const selectedPatches = useMemo(
+    () => (scene && selectedKey ? patchesFor(scene.contacts, selectedKey) : []),
+    [scene, selectedKey],
+  );
+
+  const partByKey = useMemo(() => {
+    const map = new Map<string, ScenePartInstance>();
+    if (!scene) return map;
+    for (const component of scene.components) {
+      for (const part of component.parts) map.set(part.key, part);
+    }
+    return map;
+  }, [scene]);
+
+  const neighborLabels = useMemo(() => {
+    if (!selectedKey) return [];
+    const labels = selectedPatches.map((patch) => {
+      const neighbor = partByKey.get(patchNeighbor(patch, selectedKey).instanceKey);
+      return neighbor?.label ?? patchNeighbor(patch, selectedKey).instanceKey;
+    });
+    return [...new Set(labels)];
+  }, [partByKey, selectedKey, selectedPatches]);
 
   const worldOffsets = useMemo(() => {
     const map = new Map<string, Vec3>();
@@ -275,12 +319,23 @@ export function Viewport({ scene, selectedKey, hoveredKey, onSelect, onDeletePar
             offset={averageOffset(fastener, worldOffsets)}
           />
         ))}
+        {scene && showContacts && selectedKey ? (
+          <ContactOverlay
+            contacts={scene.contacts}
+            instanceKey={selectedKey}
+            explodeOffset={worldOffsets.get(selectedKey) ?? ZERO}
+            focusedKey={focusedPatch}
+            onFocus={setFocusedPatch}
+          />
+        ) : null}
         <OrbitControls makeDefault enabled={!dragging} target={[20, 16, 12]} maxPolarAngle={Math.PI / 2.05} />
         <GizmoHelper alignment="bottom-right" margin={[64, 64]}>
           <GizmoViewport axisColors={["#b45309", "#ca8a04", "#92400e"]} labelColor="#d6c3a3" />
         </GizmoHelper>
       </Canvas>
-      {selected ? <SelectionCard instance={selected} attachedFasteners={attachedFasteners} /> : null}
+      {selected ? (
+        <SelectionCard instance={selected} attachedFasteners={attachedFasteners} patches={selectedPatches} neighbors={neighborLabels} />
+      ) : null}
       {scene ? (
         <div className="absolute bottom-4 left-1/2 z-10 flex -translate-x-1/2 items-center gap-3 rounded-md border border-[#3d2a18] bg-[#241a10]/95 px-3 py-2 text-xs text-[#d6c3a3] shadow-lg">
           <label htmlFor="explode" className="text-[#a89070]">
@@ -297,6 +352,16 @@ export function Viewport({ scene, selectedKey, hoveredKey, onSelect, onDeletePar
             className="h-1 w-40 cursor-pointer accent-[#f59e0b]"
           />
           <span className="w-8 tabular-nums text-[#a89070]">{Math.round(explode * 100)}%</span>
+          <label htmlFor="contacts" className="ml-2 flex cursor-pointer items-center gap-1.5 text-[#a89070]">
+            <input
+              id="contacts"
+              type="checkbox"
+              checked={showContacts}
+              onChange={(event) => setShowContacts(event.target.checked)}
+              className="accent-[#f59e0b]"
+            />
+            Contacts
+          </label>
         </div>
       ) : null}
       {!scene ? (

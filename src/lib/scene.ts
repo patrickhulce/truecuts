@@ -9,10 +9,12 @@ import {
 import {
   applyCuts,
   boundingBox,
+  findContacts,
   flatLBracketPolyhedron,
   lBracketPolyhedron,
   polyhedronVolume,
   type Polyhedron,
+  type SceneContacts,
   type Vec3,
 } from "./geometry";
 import type { ResolvedCut, ResolvedDocument, ResolvedPart } from "./schema";
@@ -47,6 +49,7 @@ export type SceneModel = {
   center: Vec3;
   components: SceneComponent[];
   fasteners: SceneFastener[];
+  contacts: SceneContacts;
 };
 
 export type { SceneFastener, SceneFastenerMember } from "./fasteners";
@@ -214,12 +217,26 @@ export function buildScene(document: ResolvedDocument): {
   }
 
   const allParts = components.flatMap((component) => component.parts);
+  const contacts = findContacts(
+    components.flatMap((component) =>
+      component.parts.map((part) => ({
+        key: part.key,
+        faces: part.faces,
+        position: part.position,
+        rotation: part.rotation,
+        componentPosition: component.position,
+        componentRotation: component.rotation,
+        bounds: part.bounds,
+      })),
+    ),
+  );
   return {
     scene: {
       name: document.name,
       center: centerFromWorldCenters(allParts.map((part) => part.worldCenter)),
       components,
       fasteners: resolved.fasteners,
+      contacts,
     },
     issues,
   };

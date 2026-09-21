@@ -1,30 +1,9 @@
 import { describe, expect, it } from "vitest";
-import {
-  applyCuts,
-  boundingBox,
-  boxPolyhedron,
-  flatLBracketPolyhedron,
-  lBracketPolyhedron,
-  polyhedronVolume,
-  rotateEulerXYZ,
-} from "./geometry";
-import type { ResolvedCut } from "./schema";
+import { applyCuts } from "./cuts";
+import { boundingBox, polyhedronVolume } from "./solids";
+import type { ResolvedCut } from "../schema";
 
 const BOX: [number, number, number] = [10, 4, 2];
-
-describe("boxPolyhedron", () => {
-  it("has the volume of the AABB", () => {
-    expect(polyhedronVolume(boxPolyhedron(BOX))).toBeCloseTo(80, 6);
-  });
-
-  it("maps L×W×T onto X/Z/Y", () => {
-    const { min, max } = boundingBox(boxPolyhedron(BOX));
-    expect(min).toEqual([0, 0, 0]);
-    expect(max[0]).toBeCloseTo(10, 6);
-    expect(max[1]).toBeCloseTo(2, 6);
-    expect(max[2]).toBeCloseTo(4, 6);
-  });
-});
 
 describe("applyCuts", () => {
   it("square-cuts the length and keeps the origin side", () => {
@@ -72,41 +51,5 @@ describe("applyCuts", () => {
     const { min, max } = boundingBox(poly);
     expect(min[0]).toBeCloseTo(2, 6);
     expect(max[0]).toBeCloseTo(8, 6);
-  });
-});
-
-describe("rotateEulerXYZ", () => {
-  it("applies intrinsic XYZ rotations", () => {
-    const p = rotateEulerXYZ([2, 0, 0], [0, 90, 0]);
-    expect(p[0]).toBeCloseTo(0, 6);
-    expect(p[1]).toBeCloseTo(0, 6);
-    expect(p[2]).toBeCloseTo(-2, 6);
-  });
-});
-
-describe("lBracketPolyhedron", () => {
-  it("is two square flanges sharing the fold", () => {
-    const poly = lBracketPolyhedron([2, 2, 0.125]);
-    const { min, max } = boundingBox(poly);
-    expect(min).toEqual([0, 0, 0]);
-    expect(max[0]).toBeCloseTo(2, 6);
-    expect(max[1]).toBeCloseTo(2, 6);
-    expect(max[2]).toBeCloseTo(2, 6);
-    expect(polyhedronVolume(poly)).toBeGreaterThan(0.4);
-  });
-});
-
-describe("flatLBracketPolyhedron", () => {
-  it("is a single-plane L of two overlapping plates", () => {
-    const leg = 2;
-    const arm = 1;
-    const thickness = 0.125;
-    const poly = flatLBracketPolyhedron([leg, arm, thickness]);
-    const { min, max } = boundingBox(poly);
-    expect(min).toEqual([0, 0, 0]);
-    expect(max[0]).toBeCloseTo(leg, 6);
-    expect(max[1]).toBeCloseTo(thickness, 6);
-    expect(max[2]).toBeCloseTo(leg, 6);
-    expect(polyhedronVolume(poly)).toBeCloseTo(thickness * (2 * leg * arm - arm * arm), 6);
   });
 });

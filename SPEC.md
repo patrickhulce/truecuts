@@ -44,12 +44,15 @@ Part ids and component ids share one document-wide namespace. Duplicate ids are 
 - World: right-handed, **Y-up**.
 - Parts keep their **trade names** (a 2×4 is still called a 2×4). Every **numeric** dimension is **L×W×T**, longest → shortest. A 2×4×8 is `[96, 3.5, 1.5]` = 8′ × 3.5″ × 1.5″.
 - Cut axes index that tuple: **0 = length (L)**, **1 = width (W)**, **2 = thickness (T)**.
-- Default local frame: **X = L**, **Z = W**, **Y = T**. Default placement sits the L×W face on the ground, thickness along +Y.
-- Faces are named by the dimensions that span them:
-  - **L×W** — wide face, normal ±Y
-  - **L×T** — edge, normal ±Z
-  - **W×T** — end, normal ±X
-- Part origin is the **min corner** of the uncut stock. `at` is measured from that origin along the cut axis (L, W, or T — not a world XYZ coordinate).
+- Default local frame: **X = L**, **Z = W**, **Y = T**. Default placement sits `LxW@0` on the ground, thickness along +Y.
+- A part face is the two axes that span it, earlier dimension first (L, then W, then T), plus which side:
+  - `@0` — the plane through the part origin (coordinate 0 on the axis that is not in the name)
+  - `@1` — the opposite plane, at the catalog stock extent of that axis
+  - `LxW@0` / `LxW@1` — wide faces, T = 0 / T = stock T, outward normal −Y / +Y
+  - `LxT@0` / `LxT@1` — edges, W = 0 / W = stock W, outward normal −Z / +Z
+  - `WxT@0` / `WxT@1` — ends, L = 0 / L = stock L, outward normal −X / +X
+- These ids name stock planes. A crosscut does not move `@1`; the cut cap is a new mesh polygon and is not a face id.
+- Part origin is the **min corner** of the uncut stock. A cut's `at` is measured from that origin along the cut axis (L, W, or T — not a world XYZ coordinate). A position on a face is measured from that origin along the two axes written in the face id.
 - Rotations are Euler **XYZ** in **degrees**.
 - Positions are `[x, y, z]` in inches (numbers or dimension strings).
 
@@ -87,7 +90,7 @@ parts:
       - { axis: 0, angle: 45, at: [0, 4], side: start }
   - id: top-1                  # explicit id (must still end in -<index>)
     label: Top
-    stock: plywood-3/4-4x8     # L×W×T = 8′ × 4′ × ¾″; L×W face is default-down
+    stock: plywood-3/4-4x8     # L×W×T = 8′ × 4′ × ¾″; LxW@0 is default-down
     cuts:
       - { axis: 0, angle: 90, at: 60 }
       - { axis: 1, angle: 90, at: 30 }
@@ -116,6 +119,7 @@ components:
 - `id` — optional; see Identity.
 - `stock` — catalog id.
 - `cuts` — ordered list of planar cuts, applied in stock-local coordinates. Empty means the full stock piece.
+- `holes` — optional drilled holes on stock faces (default empty). Each hole is cut out of the rendered mesh. Contact and finished volume still use the cut stock before the holes.
 
 ### Cut fields
 
@@ -123,13 +127,34 @@ components:
 - `angle` — degrees. `90` is square. Other values tilt the plane away from square (miter / bevel).
 - `at` — a single measurement for square cuts, or `[short, long]` short-point / long-point for angled cuts.
 - `side` — `end` (default) or `start`. `end` keeps material from the origin up to the plane; `start` keeps material past the plane.
-- `around` — optional tilt axis (also L/W/T). Default is a **miter across the L×W face** (`around: 2` — the T axis — when `axis` is not 2; `around: 1` when cutting on thickness). Set `around: 1` on a length cut for a **bevel** (short/long vary across T).
+- `around` — optional tilt axis (also L/W/T). Default is a miter parallel to T (`around: 2` when `axis` is not 2; `around: 1` when cutting on thickness). A length cut then runs from `LxT@0` (short) to `LxT@1` (long) and is read on `LxW@0` and `LxW@1`. Set `around: 1` on a length cut for a **bevel** (short/long vary across T, from `LxW@0` to `LxW@1`).
 
 Validation:
 
 - Range `[short, long]` is required if and only if `angle` is not 90.
 - `short < long`.
 - Both values lie on the stock extent of `axis` (0 through the actual dimension).
+
+### Hole fields
+
+- `face` — one of `LxW@0`, `LxW@1`, `LxT@0`, `LxT@1`, `WxT@0`, `WxT@1`.
+- `at` — `[first, second]` on that face, inches from the part origin along the two axes in the order written in the id. `LxW` uses `[L, W]`, `LxT` uses `[L, T]`, `WxT` uses `[W, T]`.
+- `diameter` — inches (a number or a dimension string).
+- `depth` — optional inches inward from the face, along the inward normal. Omit it to bore through the stock. The through length is the stock extent of the axis that is not in the face id (`T` for `LxW`, `W` for `LxT`, `L` for `WxT`).
+
+```yaml
+holes:
+  - { face: LxW@1, at: [20, 12], diameter: 1, depth: 0.5 }
+```
+
+Validation:
+
+- `diameter` is greater than 0.
+- `depth`, when set, is greater than 0 and no deeper than the stock extent along the face normal. A depth that meets the opposite stock plane is through.
+- The center lies on the stock face (each `at` component is between 0 and that axis's stock extent).
+- The circle stays inside the stock rectangle (the center is inset from each edge by the radius).
+
+A hole whose center lies in material a later cut removes still resolves. The bore is cut from the remaining mesh. Face ids address the stock planes, not cut caps.
 
 Cuts are sequential and all measured from the original stock origin. Two end miters:
 
@@ -214,7 +239,7 @@ X=0                         X=34              X=96
 
 ### Miter (short / long point)
 
-`at: [short, long]` places the short point on the **min** face of the span axis and the long point on the **max** face. For a default length-axis miter, the span is width (axis 1, local +Z):
+`at: [short, long]` places the short point on the `@0` face of the span axis and the long point on the `@1` face. For a default length-axis miter, the span is width (axis 1, local +Z), so the short point is on `LxT@0` and the long point is on `LxT@1`. The plane is parallel to T, and the cut line is read on `LxW@0` and `LxW@1`:
 
 ```
 Z = width
@@ -264,9 +289,9 @@ v1 ships a small built-in dataset in `src/lib/catalog.ts`. Catalog `size` is alw
 
 Catalog entries have `material` and `color` used by the viewport for lumber, sheet goods, L-brackets, and fastener solids.
 
-L-bracket part axes: origin at the inside corner. Axis 0 is the first flange along +X, axis 1 is the fold along +Z, axis 2 is plate thickness along +Y. The second flange rises along +Y (thin +X). Default pose sits the first flange on the L×W plane with the second flange standing. Planar cuts are not allowed.
+L-bracket part axes: origin at the inside corner. Axis 0 is the first flange along +X, axis 1 is the fold along +Z, axis 2 is plate thickness along +Y. The second flange rises along +Y (thin +X). Default pose sits the first flange on `LxW@0` with the second flange standing. Planar cuts are not allowed.
 
-Flat L-bracket part axes: origin at the outer corner of a single-plane L in the XZ (L×W) plane. Axis 0 is the first leg (+X), axis 1 is the second leg (+Z), axis 2 is plate thickness (+Y). `size` is `[leg, arm width, thickness]`. Planar cuts are not allowed.
+Flat L-bracket part axes: origin at the outer corner of a single-plane L between `LxW@0` and `LxW@1` (the XZ plane). Axis 0 is the first leg (+X), axis 1 is the second leg (+Z), axis 2 is plate thickness (+Y). `size` is `[leg, arm width, thickness]`. Planar cuts are not allowed.
 
 ## Procedural components
 
@@ -321,6 +346,7 @@ components:
 - Right pane: react-three-fiber scene — warm hemisphere + shadowed directional light, 1″ grid with 12″ sections, orbit controls, wood-tone materials with CAD edges.
 - Click a part to inspect `id`, stock, finished AABB (L × W × T of the cut solid), whether it is fastened, and the fasteners attached to it. Non-selected parts fade so fasteners inside the assembly stay visible; attached fasteners highlight.
 - Fasteners render as solids: screws (head + shank) and glue beads at each member `at`. L-brackets render as ordinary steel parts.
+- Drilled holes are cut out of the rendered part. A blind hole has a bottom at `depth`. A through hole is open on the exit face. A mesh that is not one watertight solid keeps a dark marker instead of a cut.
 - An explode slider radiates parts from the scene center (distance-proportional); fasteners travel with their members.
 - Any part not reachable from the first part of the first component is drawn with red/white hazard stripes.
 - The document autosaves to `localStorage`. **Reset demo** restores `examples/demo.yaml`.

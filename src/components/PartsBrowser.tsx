@@ -2,7 +2,7 @@
 
 import { useEffect, type ReactNode } from "react";
 import { parseInstanceKey } from "@/lib/fasteners";
-import type { ResolvedCut, ResolvedDocument, ResolvedPart } from "@/lib/schema";
+import type { ResolvedCut, ResolvedDocument, ResolvedHole, ResolvedPart } from "@/lib/schema";
 import type { SceneFastener, SceneModel, ScenePartInstance } from "@/lib/scene";
 import { formatInches } from "@/lib/units";
 
@@ -23,6 +23,11 @@ function formatFinished(finished: ScenePartInstance["finished"]): string {
 function formatCutAt(at: number | [number, number]): string {
   if (Array.isArray(at)) return `${formatInches(at[0])}–${formatInches(at[1])}`;
   return formatInches(at);
+}
+
+function formatHole(hole: ResolvedHole): string {
+  const depth = hole.through ? "through" : `${formatInches(hole.depth)} deep`;
+  return `${hole.face} at ${formatInches(hole.at[0])}, ${formatInches(hole.at[1])} · dia ${formatInches(hole.diameter)} · ${depth}`;
 }
 
 function formatCut(cut: ResolvedCut): string {
@@ -172,6 +177,9 @@ export function PartsBrowser({ scene, document, selectedKey, onSelect, onHover }
                       <span className="text-[11px] text-[#8a7355]">
                         {part.partId} · {part.stockLabel} · {formatFinished(part.finished)}
                       </span>
+                      {part.holes.length > 0 ? (
+                        <span className="text-[11px] text-[#a89070]">{part.holes.map(formatHole).join("; ")}</span>
+                      ) : null}
                     </button>
                   </li>
                 ))}
@@ -214,7 +222,15 @@ export function PartsBrowser({ scene, document, selectedKey, onSelect, onHover }
                 <div className="text-[11px] text-[#8a7355]">
                   {part.id} · {part.stock}
                   {part.cuts.length > 0 ? ` · ${part.cuts.length} cut${part.cuts.length === 1 ? "" : "s"}` : ""}
+                  {part.holes.length > 0 ? ` · ${part.holes.length} hole${part.holes.length === 1 ? "" : "s"}` : ""}
                 </div>
+                {part.holes.length > 0 ? (
+                  <ul className="mt-1 space-y-0.5 text-[11px] text-[#a89070]">
+                    {part.holes.map((hole, index) => (
+                      <li key={`${part.id}-hole-${index}`}>{formatHole(hole)}</li>
+                    ))}
+                  </ul>
+                ) : null}
                 {part.cuts.length > 0 ? (
                   <ul className="mt-1 space-y-0.5 text-[11px] text-[#a89070]">
                     {part.cuts.map((cut, index) => (
@@ -275,6 +291,17 @@ function PartDetail({
         <SectionLabel>Dimensions</SectionLabel>
         <p className="px-3 text-sm text-[#d6c3a3]">{formatFinished(instance.finished)}</p>
         <p className="px-3 text-[11px] text-[#8a7355]">L × W × T (length × width × thickness)</p>
+
+        <SectionLabel>Holes</SectionLabel>
+        {instance.holes.length === 0 ? (
+          <p className="px-3 text-xs text-[#8a7355]">No holes</p>
+        ) : (
+          <ul className="space-y-1 px-3 text-xs text-[#d6c3a3]">
+            {instance.holes.map((hole, index) => (
+              <li key={`${instance.partId}-hole-${index}`}>{formatHole(hole)}</li>
+            ))}
+          </ul>
+        )}
 
         <SectionLabel>Cuts</SectionLabel>
         {cuts.length === 0 ? (

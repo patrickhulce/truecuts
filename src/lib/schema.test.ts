@@ -312,6 +312,62 @@ describe("validateDocument", () => {
     expect(document?.parts[0].stock).toBe("bracket-l-2x2");
   });
 
+  it("places a hole on LxW@1", () => {
+    const { document, issues } = validateDocument({
+      ...base,
+      parts: [
+        {
+          label: "Top",
+          stock: "plywood-3/4-4x8",
+          holes: [{ face: "LxW@1", at: [20, 12], diameter: 1 }],
+        },
+      ],
+    });
+    expect(issues).toEqual([]);
+    expect(document?.parts[0].holes[0]).toEqual({
+      face: "LxW@1",
+      at: [20, 12],
+      diameter: 1,
+      depth: 0.75,
+      through: true,
+      center: [20, 0.75, 12],
+      normal: [0, 1, 0],
+    });
+  });
+
+  it("rejects an unknown face id", () => {
+    const { document, issues } = validateDocument({
+      ...base,
+      parts: [{ label: "Top", stock: "2x4x8", holes: [{ face: "LxW", at: [1, 1], diameter: 0.25 }] }],
+    });
+    expect(document).toBeUndefined();
+    expect(issues.some((issue) => issue.path.includes("face"))).toBe(true);
+  });
+
+  it("rejects a hole center outside the stock face", () => {
+    const { issues } = validateDocument({
+      ...base,
+      parts: [{ label: "Leg", stock: "2x4x8", holes: [{ face: "LxW@1", at: [100, 1], diameter: 0.25 }] }],
+    });
+    expect(issues.some((issue) => issue.message.includes("outside the stock face"))).toBe(true);
+  });
+
+  it("rejects a non-positive hole diameter", () => {
+    const { issues } = validateDocument({
+      ...base,
+      parts: [{ label: "Leg", stock: "2x4x8", holes: [{ face: "LxW@0", at: [4, 1], diameter: 0 }] }],
+    });
+    expect(issues.some((issue) => issue.message.includes("greater than 0"))).toBe(true);
+  });
+
+  it("rejects a hole that hangs off the stock face", () => {
+    const { issues } = validateDocument({
+      ...base,
+      parts: [{ label: "Leg", stock: "2x4x8", holes: [{ face: "LxW@0", at: [0.1, 1], diameter: 1 }] }],
+    });
+    expect(issues.some((issue) => issue.message.includes("extends past the stock face"))).toBe(true);
+  });
+
   it("accepts a flat L-bracket as a placed part", () => {
     const { document, issues } = validateDocument({
       ...base,

@@ -3,7 +3,7 @@ export const DEMO_YAML = `# TrueCuts demo — Assembly Bench
 # See SPEC.md for the full document format.
 #
 # Numeric dimensions are L×W×T, longest → shortest. A 2x4x8 is 8′ × 3.5″ × 1.5″.
-# Default local frame: X=L, Z=W, Y=T (L×W face down). Fasteners (screws, glue)
+# Default local frame: X=L, Z=W, Y=T (LxW@0 down). Fasteners (screws, glue)
 # join parts, including through L-bracket parts. Anything not reachable from
 # the first part of the first component renders in red/white stripes.
 
@@ -62,6 +62,8 @@ parts:
     cuts:
       - { axis: 0, angle: 90, at: 40 }
       - { axis: 1, angle: 90, at: 24 }
+    holes:
+      - { face: LxW@1, at: [20, 12], diameter: 1, depth: 0.5 }
 
   - label: Shelf board
     stock: 2x4x8
@@ -95,7 +97,7 @@ components:
       - { part: leg-2, position: [ 36.5, 0, 0 ], rotation: [ 90, 90, 0 ] }
       - { part: leg-3, position: [ 0, 0, 22.5 ], rotation: [ 90, 90, 0 ] }
       - { part: leg-4, position: [ 36.5, 0, 22.5 ], rotation: [ 90, 90, 0 ] }
-      # Aprons: [90, 0, 0] stands W up (−Y from the top origin); sit on the L×T face.
+      # Aprons: [90, 0, 0] stands W up (−Y from the top origin); hang from LxT@0.
       - { part: long-apron-1, position: [ 3.5, 30, 0.5 ], rotation: [ 90, 0, 0 ] }
       - { part: long-apron-2, position: [ 3.5, 30, 22 ], rotation: [ 90, 0, 0 ] }
       - { part: short-apron-1, position: [ 0.5, 30, 22.5 ], rotation: [ 90, 0, -90 ] }
@@ -104,7 +106,7 @@ components:
       - { part: brace-1, position: [ 3.5, 13.5, 0 ], rotation: [ 90, 0, 0 ] }
       # Plywood sits flat by default (T along +Y).
       - { part: top-1, position: [ 0, 30, 0 ], rotation: [ 0, 0, 0 ] }
-      # L-brackets under the long aprons, down the inner W×T face of each leg.
+      # L-brackets under the long aprons, down LxT@1 of each leg (local +Z → world +X).
       - { part: corner-bracket-1, position: [ 3.5, 26.5, 1.5 ], rotation: [ 180, 0, 0 ] }
       - { part: corner-bracket-2, position: [ 36.5, 26.5, 0 ], rotation: [ 0, 0, 180 ] }
       - { part: corner-bracket-3, position: [ 3.5, 26.5, 24 ], rotation: [ 180, 0, 0 ] }

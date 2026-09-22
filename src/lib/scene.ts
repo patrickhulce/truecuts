@@ -17,7 +17,7 @@ import {
   type SceneContacts,
   type Vec3,
 } from "./geometry";
-import type { ResolvedCut, ResolvedDocument, ResolvedPart } from "./schema";
+import type { ResolvedCut, ResolvedDocument, ResolvedHole, ResolvedPart } from "./schema";
 
 export type ScenePartInstance = {
   key: string;
@@ -28,6 +28,7 @@ export type ScenePartInstance = {
   material: string;
   color: string;
   faces: Polyhedron;
+  holes: ResolvedHole[];
   position: Vec3;
   rotation: Vec3;
   bounds: { min: Vec3; max: Vec3 };
@@ -187,6 +188,7 @@ export function buildScene(document: ResolvedDocument): {
           material: mesh.stock.material,
           color: mesh.stock.color,
           faces: mesh.faces,
+          holes: mesh.part.holes,
           position: placement.position,
           rotation: placement.rotation,
           bounds,

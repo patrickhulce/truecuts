@@ -97,6 +97,17 @@ describe("compileDocument", () => {
     expect(byId.get("leg-1")?.fastened).toBe(true);
     expect(byId.get("long-apron-1")?.fastened).toBe(true);
     expect(byId.get("top-1")?.fastened).toBe(true);
+    expect(byId.get("top-1")?.holes).toEqual([
+      {
+        face: "LxW@1",
+        at: [20, 12],
+        diameter: 1,
+        depth: 0.5,
+        through: false,
+        center: [20, 0.75, 12],
+        normal: [0, 1, 0],
+      },
+    ]);
     expect(byId.get("shelf-board-1")?.fastened).toBe(true);
     expect(byId.get("corner-bracket-1")?.fastened).toBe(true);
     expect(byId.get("corner-bracket-4")?.fastened).toBe(true);

@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { getCatalogPart, getFastenerSubtype } from "./catalog";
+import { FACE_IDS, placeHole, type FaceId, type PlacedHole } from "./geometry/faces";
 import { assignIds, isValidId } from "./identity";
 import { parseAt, parseDimension, type DimensionInput } from "./units";
 
@@ -37,11 +38,19 @@ const CutSchema = z
     }
   });
 
+const HoleSchema = z.object({
+  face: z.enum(FACE_IDS),
+  at: z.tuple([DimensionSchema, DimensionSchema]),
+  diameter: DimensionSchema,
+  depth: DimensionSchema.optional(),
+});
+
 const PartSchema = z.object({
   id: z.string().optional(),
   label: z.string().min(1),
   stock: z.string().min(1),
   cuts: z.array(CutSchema).optional(),
+  holes: z.array(HoleSchema).default([]),
 });
 
 const PlacementSchema = z.object({
@@ -82,6 +91,7 @@ export const DocumentSchema = z.object({
 
 export type RawDocument = z.infer<typeof DocumentSchema>;
 export type RawCut = z.infer<typeof CutSchema>;
+export type RawHole = z.infer<typeof HoleSchema>;
 export type RawPart = z.infer<typeof PartSchema>;
 export type RawComponent = z.infer<typeof ComponentSchema>;
 export type RawPlacement = z.infer<typeof PlacementSchema>;
@@ -96,11 +106,14 @@ export type ResolvedCut = {
   around?: Axis;
 };
 
+export type ResolvedHole = PlacedHole;
+
 export type ResolvedPart = {
   id: string;
   label: string;
   stock: string;
   cuts: ResolvedCut[];
+  holes: ResolvedHole[];
 };
 
 export type ResolvedPlacement = {
@@ -150,6 +163,47 @@ function parseVec3(
 ): [number, number, number] {
   if (!input) return fallback;
   return [parseDimension(input[0]), parseDimension(input[1]), parseDimension(input[2])];
+}
+
+function resolvePartHoles(
+  rawHoles: RawHole[],
+  stockId: string,
+): { holes: ResolvedHole[]; issues: ValidationIssue[] } {
+  const issues: ValidationIssue[] = [];
+  const parsed: { face: FaceId; at: [number, number]; diameter: number; depth?: number }[] = [];
+  for (const [hIndex, hole] of rawHoles.entries()) {
+    try {
+      parsed.push({
+        face: hole.face,
+        at: [parseDimension(hole.at[0]), parseDimension(hole.at[1])],
+        diameter: parseDimension(hole.diameter),
+        depth: hole.depth === undefined ? undefined : parseDimension(hole.depth),
+      });
+    } catch (error) {
+      issues.push({
+        message: error instanceof Error ? error.message : String(error),
+        path: [hIndex],
+      });
+    }
+  }
+  if (issues.length > 0) return { holes: [], issues };
+
+  const catalog = getCatalogPart(stockId);
+  if (!catalog) return { holes: [], issues: [] };
+
+  const holes: ResolvedHole[] = [];
+  for (const [hIndex, hole] of parsed.entries()) {
+    try {
+      holes.push(placeHole(hole, catalog.size));
+    } catch (error) {
+      issues.push({
+        message: error instanceof Error ? error.message : String(error),
+        path: [hIndex],
+      });
+    }
+  }
+  if (issues.length > 0) return { holes: [], issues };
+  return { holes, issues: [] };
 }
 
 function resolveCut(cut: RawCut): ResolvedCut {
@@ -379,19 +433,33 @@ export function validateDocument(input: unknown): {
 
   const parts: ResolvedPart[] = [];
   for (const [index, part] of identifiedParts.entries()) {
+    let cuts: ResolvedCut[];
     try {
-      parts.push({
-        id: part.id,
-        label: part.label,
-        stock: part.stock,
-        cuts: (part.cuts ?? []).map(resolveCut),
-      });
+      cuts = (part.cuts ?? []).map(resolveCut);
     } catch (error) {
       issues.push({
         message: error instanceof Error ? error.message : String(error),
         path: ["parts", index, "cuts"],
       });
+      continue;
     }
+
+    const resolvedHoles = resolvePartHoles(part.holes, part.stock);
+    for (const issue of resolvedHoles.issues) {
+      issues.push({
+        message: issue.message,
+        path: ["parts", index, "holes", ...issue.path],
+      });
+    }
+    if (resolvedHoles.issues.length > 0) continue;
+
+    parts.push({
+      id: part.id,
+      label: part.label,
+      stock: part.stock,
+      cuts,
+      holes: resolvedHoles.holes,
+    });
   }
 
   const components: ResolvedComponent[] = [];

@@ -1,29 +1,16 @@
 "use client";
 
 import { Edges, useCursor } from "@react-three/drei";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import * as THREE from "three";
-import { faceNormal, type Polyhedron, type Vec3 } from "@/lib/geometry";
+import { type Vec3 } from "@/lib/geometry";
+import { partEdgeGeometry } from "@/lib/mesh/part-edges";
+import { facesToGeometry, subtractHoles } from "@/lib/mesh/subtract-holes";
+import type { ResolvedHole } from "@/lib/schema";
 import type { ScenePartInstance } from "@/lib/scene";
 
-function facesToGeometry(faces: Polyhedron): THREE.BufferGeometry {
-  const positions: number[] = [];
-  const normals: number[] = [];
-  for (const face of faces) {
-    if (face.length < 3) continue;
-    const normal = faceNormal(face);
-    for (let i = 1; i < face.length - 1; i++) {
-      for (const vertex of [face[0], face[i], face[i + 1]]) {
-        positions.push(vertex[0], vertex[1], vertex[2]);
-        normals.push(normal[0], normal[1], normal[2]);
-      }
-    }
-  }
-  const geometry = new THREE.BufferGeometry();
-  geometry.setAttribute("position", new THREE.Float32BufferAttribute(positions, 3));
-  geometry.setAttribute("normal", new THREE.Float32BufferAttribute(normals, 3));
-  return geometry;
-}
+const HOLE_DISC_THICKNESS = 0.04;
+const HOLE_DISC_LIFT = 0.02;
 
 function stripeCacheKey(): string {
   return "unfastened-stripes";
@@ -57,6 +44,64 @@ function applyStripeShader(shader: THREE.WebGLProgramParametersWithUniforms): vo
 
 const ZERO: Vec3 = [0, 0, 0];
 
+function alignCylinder(direction: Vec3): THREE.Quaternion {
+  const dir = new THREE.Vector3(direction[0], direction[1], direction[2]);
+  if (dir.lengthSq() < 1e-10) return new THREE.Quaternion();
+  return new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0, 1, 0), dir.normalize());
+}
+
+function shift(point: Vec3, direction: Vec3, distance: number): Vec3 {
+  return [
+    point[0] + direction[0] * distance,
+    point[1] + direction[1] * distance,
+    point[2] + direction[2] * distance,
+  ];
+}
+
+function HoleMaterial({ dimmed, selected }: { dimmed: boolean; selected: boolean }) {
+  return (
+    <meshStandardMaterial
+      color="#1a120b"
+      roughness={0.55}
+      metalness={0.15}
+      transparent
+      opacity={dimmed ? 0.22 : 1}
+      depthWrite={!dimmed}
+      emissive={selected ? "#d97706" : "#000000"}
+      emissiveIntensity={selected ? 0.45 : 0}
+    />
+  );
+}
+
+function HoleMarker({ hole, dimmed, selected }: { hole: ResolvedHole; dimmed: boolean; selected: boolean }) {
+  const mouthQuat = useMemo(() => alignCylinder(hole.normal), [hole.normal]);
+  const inward: Vec3 = [-hole.normal[0], -hole.normal[1], -hole.normal[2]];
+  const boreQuat = useMemo(() => alignCylinder(inward), [hole.normal]);
+  const lift = HOLE_DISC_LIFT + HOLE_DISC_THICKNESS / 2;
+  const radius = hole.diameter / 2;
+  const mouth = shift(hole.center, hole.normal, lift);
+  const bore = shift(hole.center, inward, hole.depth / 2);
+  const exit = shift(shift(hole.center, inward, hole.depth), inward, lift);
+  return (
+    <group>
+      <mesh position={mouth} quaternion={mouthQuat} castShadow={!dimmed} renderOrder={dimmed ? 1 : 0}>
+        <cylinderGeometry args={[radius, radius, HOLE_DISC_THICKNESS, 24]} />
+        <HoleMaterial dimmed={dimmed} selected={selected} />
+      </mesh>
+      <mesh position={bore} quaternion={boreQuat} castShadow={!dimmed} renderOrder={dimmed ? 1 : 0}>
+        <cylinderGeometry args={[radius, radius, Math.max(hole.depth, 0.001), 24]} />
+        <HoleMaterial dimmed={dimmed} selected={selected} />
+      </mesh>
+      {hole.through ? (
+        <mesh position={exit} quaternion={boreQuat} castShadow={!dimmed} renderOrder={dimmed ? 1 : 0}>
+          <cylinderGeometry args={[radius, radius, HOLE_DISC_THICKNESS, 24]} />
+          <HoleMaterial dimmed={dimmed} selected={selected} />
+        </mesh>
+      ) : null}
+    </group>
+  );
+}
+
 type PartMeshProps = {
   instance: ScenePartInstance;
   selected: boolean;
@@ -74,7 +119,40 @@ export function PartMesh({
   offset = ZERO,
   onSelect,
 }: PartMeshProps) {
-  const geometry = useMemo(() => facesToGeometry(instance.faces), [instance.faces]);
+  const drilled = useMemo(() => {
+    const solid = facesToGeometry(instance.faces);
+    if (instance.holes.length === 0) return { geometry: solid, cut: false };
+    const cut = subtractHoles(solid, instance.holes);
+    if (!cut) return { geometry: solid, cut: false };
+    solid.dispose();
+    return { geometry: cut, cut: true };
+  }, [instance.faces, instance.holes]);
+  const edgeGeometry = useMemo(
+    () => (drilled.cut ? partEdgeGeometry(instance.faces, instance.holes) : null),
+    [drilled.cut, instance.faces, instance.holes],
+  );
+  const liveGeometry = useRef(drilled.geometry);
+  const liveEdges = useRef(edgeGeometry);
+  liveGeometry.current = drilled.geometry;
+  liveEdges.current = edgeGeometry;
+  useEffect(() => {
+    const geometry = drilled.geometry;
+    return () => {
+      // Defer so React Strict Mode's simulated unmount does not dispose the mesh still on screen.
+      queueMicrotask(() => {
+        if (liveGeometry.current !== geometry) geometry.dispose();
+      });
+    };
+  }, [drilled]);
+  useEffect(() => {
+    const geometry = edgeGeometry;
+    return () => {
+      if (!geometry) return;
+      queueMicrotask(() => {
+        if (liveEdges.current !== geometry) geometry.dispose();
+      });
+    };
+  }, [edgeGeometry]);
   const [hovered, setHovered] = useState(false);
   useCursor(hovered);
   const rotation: [number, number, number] = [
@@ -97,13 +175,9 @@ export function PartMesh({
   const edgeColor = selected ? "#f59e0b" : preview ? "#d6c3a3" : instance.fastened ? "#3b2410" : "#7f1d1d";
 
   return (
-    <mesh
-      geometry={geometry}
+    <group
       position={position}
       rotation={rotation}
-      renderOrder={dimmed ? 1 : 0}
-      castShadow={!dimmed}
-      receiveShadow={!dimmed}
       onPointerOver={(event) => {
         event.stopPropagation();
         setHovered(true);
@@ -114,6 +188,7 @@ export function PartMesh({
         onSelect(instance.key);
       }}
     >
+      <mesh geometry={drilled.geometry} renderOrder={dimmed ? 1 : 0} castShadow={!dimmed} receiveShadow={!dimmed}>
       {instance.fastened ? (
         <meshStandardMaterial
           color={instance.color}
@@ -140,13 +215,31 @@ export function PartMesh({
           customProgramCacheKey={stripeCacheKey}
         />
       )}
-      <Edges
-        threshold={20}
-        color={edgeColor}
-        transparent
-        opacity={dimmed ? 0.18 : 1}
-        depthWrite={!dimmed}
-      />
+      {drilled.cut ? null : (
+        <Edges
+          threshold={20}
+          color={edgeColor}
+          transparent
+          opacity={dimmed ? 0.18 : 1}
+          depthWrite={!dimmed}
+        />
+      )}
     </mesh>
+      {edgeGeometry ? (
+        <lineSegments geometry={edgeGeometry} renderOrder={dimmed ? 1 : 0}>
+          <lineBasicMaterial
+            color={edgeColor}
+            transparent
+            opacity={dimmed ? 0.18 : 1}
+            depthWrite={!dimmed}
+          />
+        </lineSegments>
+      ) : null}
+      {drilled.cut
+        ? null
+        : instance.holes.map((hole, index) => (
+            <HoleMarker key={`${instance.key}-hole-${index}`} hole={hole} dimmed={dimmed} selected={selected} />
+          ))}
+    </group>
   );
 }

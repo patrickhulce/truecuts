@@ -57,7 +57,7 @@ describe("worldPoint", () => {
   it("places a point on a standing 2x4", () => {
     const point = worldPoint(
       [28.25, 0.75, 3.5],
-      { part: "leg-1", position: [0, 0, 0], rotation: [90, 90, 0] },
+      { id: "leg-1", position: [0, 0, 0], rotation: [90, 90, 0] },
       { position: [0, 0, 0], rotation: [0, 0, 0] },
     );
     expect(point[0]).toBeCloseTo(3.5, 6);
@@ -71,69 +71,69 @@ describe("fastener scene graph", () => {
     const yaml = `
 version: 1
 name: Graph
-parts:
+members:
   - { label: A, stock: 2x4x8 }
   - { label: B, stock: 2x4x8 }
   - { label: C, stock: 2x4x8 }
 components:
   - label: Main
-    parts:
-      - { part: a-1 }
-      - { part: b-1 }
+    members:
+      - { id: a-1 }
+      - { id: b-1 }
     fasteners:
       - stock: screw-wood-8x2.5
         members:
-          - { part: a-1, at: [0, 0, 0], direction: [1, 0, 0] }
-          - { part: b-1, at: [0, 0, 0], direction: [-1, 0, 0] }
+          - { id: a-1, at: [0, 0, 0], direction: [1, 0, 0] }
+          - { id: b-1, at: [0, 0, 0], direction: [-1, 0, 0] }
   - label: Extra
     position: [20, 0, 0]
-    parts:
-      - { part: c-1 }
+    members:
+      - { id: c-1 }
 `;
     const result = compileDocument(yaml);
     expect(result.diagnostics.filter((item) => item.severity === "error")).toEqual([]);
-    const parts = result.scene?.components.flatMap((component) => component.parts) ?? [];
-    expect(parts.find((part) => part.partId === "a-1")?.fastened).toBe(true);
-    expect(parts.find((part) => part.partId === "b-1")?.fastened).toBe(true);
-    expect(parts.find((part) => part.partId === "c-1")?.fastened).toBe(false);
+    const parts = result.scene?.components.flatMap((component) => component.members) ?? [];
+    expect(parts.find((part) => part.memberId === "a-1")?.fastened).toBe(true);
+    expect(parts.find((part) => part.memberId === "b-1")?.fastened).toBe(true);
+    expect(parts.find((part) => part.memberId === "c-1")?.fastened).toBe(false);
   });
 
   it("rejects fastener ids used as part stock", () => {
     const result = compileDocument(`
 version: 1
 name: Bad
-parts:
+members:
   - { label: Screw, stock: screw-wood-8x2.5 }
 components:
   - label: Box
-    parts:
-      - { part: screw-1 }
+    members:
+      - { id: screw-1 }
 `);
     expect(result.scene).toBeUndefined();
-    expect(result.diagnostics.some((item) => item.message.includes("not renderable as part stock"))).toBe(true);
+    expect(result.diagnostics.some((item) => item.message.includes("not renderable as member stock"))).toBe(true);
   });
 
   it("meshes L-brackets as parts and lets screws go through them", () => {
     const result = compileDocument(`
 version: 1
 name: Bracket
-parts:
+members:
   - { label: Leg, stock: 2x4x8 }
   - { label: Corner bracket, stock: bracket-l-2x2 }
 components:
   - label: Box
-    parts:
-      - { part: leg-1, position: [0, 0, 0] }
-      - { part: corner-bracket-1, position: [0, 0, 0] }
+    members:
+      - { id: leg-1, position: [0, 0, 0] }
+      - { id: corner-bracket-1, position: [0, 0, 0] }
     fasteners:
       - stock: screw-wood-8x1.25
         members:
-          - { part: corner-bracket-1, at: [0.125, 1, 1], direction: [-1, 0, 0] }
-          - { part: leg-1, at: [0, 1, 1], direction: [1, 0, 0] }
+          - { id: corner-bracket-1, at: [0.125, 1, 1], direction: [-1, 0, 0] }
+          - { id: leg-1, at: [0, 1, 1], direction: [1, 0, 0] }
 `);
     expect(result.diagnostics.filter((item) => item.severity === "error")).toEqual([]);
-    expect(result.scene?.components[0].parts).toHaveLength(2);
-    expect(result.scene?.components[0].parts.every((part) => part.fastened)).toBe(true);
+    expect(result.scene?.components[0].members).toHaveLength(2);
+    expect(result.scene?.components[0].members.every((part) => part.fastened)).toBe(true);
     expect(result.scene?.fasteners).toHaveLength(1);
   });
 
@@ -141,23 +141,23 @@ components:
     const result = compileDocument(`
 version: 1
 name: FlatBracket
-parts:
+members:
   - { label: Leg, stock: 2x4x8 }
   - { label: Flat bracket, stock: bracket-flat-l-2x1 }
 components:
   - label: Box
-    parts:
-      - { part: leg-1, position: [0, 0, 0] }
-      - { part: flat-bracket-1, position: [0, 0, 0] }
+    members:
+      - { id: leg-1, position: [0, 0, 0] }
+      - { id: flat-bracket-1, position: [0, 0, 0] }
     fasteners:
       - stock: screw-wood-8x1.25
         members:
-          - { part: flat-bracket-1, at: [0.5, 0.125, 0.5], direction: [0, -1, 0] }
-          - { part: leg-1, at: [0.5, 1.5, 0.5], direction: [0, 1, 0] }
+          - { id: flat-bracket-1, at: [0.5, 0.125, 0.5], direction: [0, -1, 0] }
+          - { id: leg-1, at: [0.5, 1.5, 0.5], direction: [0, 1, 0] }
 `);
     expect(result.diagnostics.filter((item) => item.severity === "error")).toEqual([]);
-    expect(result.scene?.components[0].parts).toHaveLength(2);
-    expect(result.scene?.components[0].parts.every((part) => part.fastened)).toBe(true);
+    expect(result.scene?.components[0].members).toHaveLength(2);
+    expect(result.scene?.components[0].members.every((part) => part.fastened)).toBe(true);
     expect(result.scene?.fasteners).toHaveLength(1);
   });
 
@@ -165,7 +165,7 @@ components:
     const result = compileDocument(`
 version: 1
 name: Bad
-parts:
+members:
   - { label: Corner bracket, stock: bracket-l-2x2, cuts: [{ axis: 0, angle: 90, at: 1 }] }
 `);
     expect(result.scene).toBeUndefined();
@@ -176,7 +176,7 @@ parts:
     const result = compileDocument(`
 version: 1
 name: Bad
-parts:
+members:
   - { label: Flat bracket, stock: bracket-flat-l-2x1, cuts: [{ axis: 0, angle: 90, at: 1 }] }
 `);
     expect(result.scene).toBeUndefined();
@@ -189,8 +189,8 @@ describe("validateDocument fasteners default", () => {
     const { document, issues } = validateDocument({
       version: 1,
       name: "Empty",
-      parts: [{ label: "A", stock: "2x4x8" }],
-      components: [{ label: "Box", parts: [{ part: "a-1" }] }],
+      members: [{ label: "A", stock: "2x4x8" }],
+      components: [{ label: "Box", members: [{ id: "a-1" }] }],
     });
     expect(issues).toEqual([]);
     expect(document?.fasteners).toEqual([]);

@@ -2,7 +2,7 @@ import { Brush, Evaluator, SUBTRACTION } from "three-bvh-csg";
 import * as THREE from "three";
 import { mergeVertices } from "three/addons/utils/BufferGeometryUtils.js";
 import { faceNormal, type Polyhedron } from "@/lib/geometry";
-import type { ResolvedHole } from "@/lib/schema";
+import type { ResolvedBore } from "@/lib/schema";
 
 const OVERLAP = 0.05;
 export const HOLE_SEGMENTS = 16;
@@ -36,17 +36,17 @@ function weldByPosition(solid: THREE.BufferGeometry): THREE.BufferGeometry {
   return welded;
 }
 
-function holeCutter(hole: ResolvedHole): Brush {
-  const inward = new THREE.Vector3(-hole.normal[0], -hole.normal[1], -hole.normal[2]);
-  const length = hole.depth + (hole.through ? OVERLAP * 2 : OVERLAP);
-  const mid = hole.through ? hole.depth / 2 : (hole.depth - OVERLAP) / 2;
-  const geometry = new THREE.CylinderGeometry(hole.diameter / 2, hole.diameter / 2, length, HOLE_SEGMENTS);
+function boreCutter(bore: ResolvedBore): Brush {
+  const inward = new THREE.Vector3(-bore.normal[0], -bore.normal[1], -bore.normal[2]);
+  const length = bore.depth + (bore.through ? OVERLAP * 2 : OVERLAP);
+  const mid = bore.through ? bore.depth / 2 : (bore.depth - OVERLAP) / 2;
+  const geometry = new THREE.CylinderGeometry(bore.diameter / 2, bore.diameter / 2, length, HOLE_SEGMENTS);
   const brush = new Brush(geometry);
   brush.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), inward);
   brush.position.set(
-    hole.center[0] + inward.x * mid,
-    hole.center[1] + inward.y * mid,
-    hole.center[2] + inward.z * mid,
+    bore.center[0] + inward.x * mid,
+    bore.center[1] + inward.y * mid,
+    bore.center[2] + inward.z * mid,
   );
   brush.updateMatrixWorld();
   return brush;
@@ -56,8 +56,8 @@ function holeCutter(hole: ResolvedHole): Brush {
  * Subtract each hole from a watertight solid. Returns null when the brush cannot be cut
  * (for example an L-bracket, which is two overlapping boxes).
  */
-export function subtractHoles(solid: THREE.BufferGeometry, holes: ResolvedHole[]): THREE.BufferGeometry | null {
-  if (holes.length === 0) return solid;
+export function subtractBores(solid: THREE.BufferGeometry, bores: ResolvedBore[]): THREE.BufferGeometry | null {
+  if (bores.length === 0) return solid;
 
   let welded: THREE.BufferGeometry | null = null;
   let current: Brush | null = null;
@@ -71,8 +71,8 @@ export function subtractHoles(solid: THREE.BufferGeometry, holes: ResolvedHole[]
     brush.updateMatrixWorld();
     current = brush;
 
-    for (const hole of holes) {
-      const cutter = holeCutter(hole);
+    for (const bore of bores) {
+      const cutter = boreCutter(bore);
       try {
         const next: Brush = evaluator.evaluate(brush, cutter, SUBTRACTION);
         if (brush.geometry !== weldedMesh && brush.geometry !== next.geometry) {

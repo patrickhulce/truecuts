@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import { compileDocument } from "./compile";
 import { DEMO_YAML } from "./demo";
 import { applyPose, type Vec3 } from "./geometry";
-import type { SceneComponent, ScenePartInstance } from "./scene";
+import type { SceneComponent, SceneMemberInstance } from "./scene";
 
 const UNDERSIDE_ORIGINS: Record<string, { position: Vec3; side: "left" | "right" }> = {
   "corner-bracket-1": { position: [3.5, 26.5, 1.5], side: "left" },
@@ -61,8 +61,8 @@ describe("compileDocument", () => {
   it("compiles the demo YAML into a scene", () => {
     const result = compileDocument(DEMO_YAML);
     expect(result.diagnostics.filter((item) => item.severity === "error")).toEqual([]);
-    expect(result.document?.parts).toHaveLength(16);
-    expect(result.document?.parts.map((part) => part.id)).toEqual([
+    expect(result.document?.members).toHaveLength(16);
+    expect(result.document?.members.map((part) => part.id)).toEqual([
       "leg-1",
       "leg-2",
       "leg-3",
@@ -81,15 +81,15 @@ describe("compileDocument", () => {
       "corner-bracket-4",
     ]);
     expect(result.scene?.components).toHaveLength(3);
-    expect(result.scene?.components[0].parts).toHaveLength(14);
+    expect(result.scene?.components[0].members).toHaveLength(14);
     expect(result.scene?.fasteners.length).toBeGreaterThan(0);
     expect(result.diagnostics.filter((item) => item.severity === "warning")).toEqual([]);
 
     const components = result.scene!.components;
-    const byId = new Map(components.flatMap((component) => component.parts).map((part) => [part.partId, part]));
-    const byKey = new Map<string, { component: SceneComponent; part: ScenePartInstance }>();
+    const byId = new Map(components.flatMap((component) => component.members).map((part) => [part.memberId, part]));
+    const byKey = new Map<string, { component: SceneComponent; part: SceneMemberInstance }>();
     for (const component of components) {
-      for (const part of component.parts) {
+      for (const part of component.members) {
         byKey.set(part.key, { component, part });
       }
     }
@@ -97,7 +97,7 @@ describe("compileDocument", () => {
     expect(byId.get("leg-1")?.fastened).toBe(true);
     expect(byId.get("long-apron-1")?.fastened).toBe(true);
     expect(byId.get("top-1")?.fastened).toBe(true);
-    expect(byId.get("top-1")?.holes).toEqual([
+    expect(byId.get("top-1")?.bores).toEqual(expect.arrayContaining([
       {
         face: "LxW@1",
         at: [20, 12],
@@ -107,7 +107,7 @@ describe("compileDocument", () => {
         center: [20, 0.75, 12],
         normal: [0, 1, 0],
       },
-    ]);
+    ]));
     expect(byId.get("shelf-board-1")?.fastened).toBe(true);
     expect(byId.get("corner-bracket-1")?.fastened).toBe(true);
     expect(byId.get("corner-bracket-4")?.fastened).toBe(true);

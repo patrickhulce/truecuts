@@ -1,5 +1,5 @@
 import type { Vec3 } from "./types";
-import { add, degToRad } from "./vec3";
+import { add, degToRad, sub } from "./vec3";
 
 /**
  * Rotate `v` by Euler XYZ in degrees (same convention as THREE.Euler default).
@@ -36,4 +36,39 @@ export function rotateEulerXYZ(v: Vec3, rotationDeg: Vec3): Vec3 {
 
 export function applyPose(point: Vec3, position: Vec3, rotationDeg: Vec3): Vec3 {
   return add(rotateEulerXYZ(point, rotationDeg), position);
+}
+
+/** Inverse of `rotateEulerXYZ` (undo Rx, then Ry, then Rz). */
+export function inverseRotateEulerXYZ(v: Vec3, rotationDeg: Vec3): Vec3 {
+  const rx = degToRad(rotationDeg[0]);
+  const ry = degToRad(rotationDeg[1]);
+  const rz = degToRad(rotationDeg[2]);
+  let x = v[0];
+  let y = v[1];
+  let z = v[2];
+
+  const cx = Math.cos(rx);
+  const sx = Math.sin(rx);
+  const y1 = y * cx + z * sx;
+  const z1 = -y * sx + z * cx;
+  y = y1;
+  z = z1;
+
+  const cy = Math.cos(ry);
+  const sy = Math.sin(ry);
+  const x2 = x * cy - z * sy;
+  const z2 = x * sy + z * cy;
+  x = x2;
+  z = z2;
+
+  const cz = Math.cos(rz);
+  const sz = Math.sin(rz);
+  const x3 = x * cz + y * sz;
+  const y3 = -x * sz + y * cz;
+  return [x3, y3, z];
+}
+
+/** Inverse of `applyPose`. */
+export function unapplyPose(point: Vec3, position: Vec3, rotationDeg: Vec3): Vec3 {
+  return inverseRotateEulerXYZ(sub(point, position), rotationDeg);
 }

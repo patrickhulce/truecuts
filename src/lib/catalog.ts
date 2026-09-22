@@ -2,7 +2,7 @@ export type Vec3 = [number, number, number];
 
 export type CatalogKind = "lumber" | "sheet" | "hardware" | "fastener";
 
-export type FastenerSubtype = "screw" | "glue";
+export type FastenerSubtype = "screw" | "glue" | "bolt";
 
 export type CatalogPart = {
   id: string;
@@ -239,7 +239,7 @@ export function listCatalog(kind?: CatalogKind): CatalogPart[] {
 export function getFastenerSubtype(id: string): FastenerSubtype | undefined {
   const item = byId.get(id);
   if (!item || item.kind !== "fastener") return undefined;
-  if (item.subtype === "screw" || item.subtype === "glue") {
+  if (item.subtype === "screw" || item.subtype === "glue" || item.subtype === "bolt") {
     return item.subtype;
   }
   return undefined;

@@ -31,20 +31,22 @@ export {
   faceQuad,
   isFaceId,
   parseFaceId,
-  placeHole,
+  placeBore,
   pointOnFace,
   type FaceFrame,
   type FaceId,
-  type PlacedHole,
+  type PlacedBore,
 } from "./faces";
 export { clipPolyhedron } from "./clip";
 export { applyCuts, cutToPlane, defaultAround } from "./cuts";
-export { applyPose, rotateEulerXYZ } from "./pose";
+export { gapCount, layoutClosed, layoutOpen, type Justify } from "./justify";
+export { applyPose, inverseRotateEulerXYZ, rotateEulerXYZ, unapplyPose } from "./pose";
 export {
   centroid3,
   convexArea,
   convexArea2D,
   fromPlane2D,
+  insetConvex,
   intersectConvex,
   toPlane2D,
   type Vec2,

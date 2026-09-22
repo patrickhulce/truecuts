@@ -1,9 +1,9 @@
 import { describe, expect, it } from "vitest";
 import * as THREE from "three";
-import { placeHole } from "@/lib/geometry/faces";
+import { placeBore } from "@/lib/geometry/faces";
 import { boxPolyhedron } from "@/lib/geometry/solids";
 import type { Vec3 } from "@/lib/geometry";
-import { partEdgeGeometry } from "./part-edges";
+import { memberEdgeGeometry } from "./part-edges";
 
 const SIZE: Vec3 = [10, 4, 2];
 const FACE_Y = 2;
@@ -18,10 +18,10 @@ function onRectangleSide(a: THREE.Vector3, b: THREE.Vector3): boolean {
   );
 }
 
-describe("partEdgeGeometry", () => {
+describe("memberEdgeGeometry", () => {
   it("keeps a holed face free of spokes", () => {
-    const hole = placeHole({ face: "LxW@1", at: [5, 2], diameter: 1, depth: 0.5 }, SIZE);
-    const geometry = partEdgeGeometry(boxPolyhedron(SIZE), [hole]);
+    const hole = placeBore({ face: "LxW@1", at: [5, 2], diameter: 1, depth: 0.5 }, SIZE);
+    const geometry = memberEdgeGeometry(boxPolyhedron(SIZE), [hole]);
     const position = geometry.getAttribute("position");
     const center = new THREE.Vector3(hole.center[0], hole.center[1], hole.center[2]);
     let sides = 0;

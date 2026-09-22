@@ -5,7 +5,7 @@ import {
   faceFrame,
   faceQuad,
   parseFaceId,
-  placeHole,
+  placeBore,
   pointOnFace,
   type FaceId,
 } from "./faces";
@@ -40,43 +40,43 @@ describe("face frames", () => {
   });
 });
 
-describe("placeHole", () => {
+describe("placeBore", () => {
   it("places a circle on LxW@1", () => {
-    const hole = placeHole({ face: "LxW@1", at: [3, 1], diameter: 0.5 }, SIZE);
+    const hole = placeBore({ face: "LxW@1", at: [3, 1], diameter: 0.5 }, SIZE);
     expect(hole.center).toEqual([3, 2, 1]);
     expect(hole.normal).toEqual([0, 1, 0]);
   });
 
   it("bores a blind hole to the given depth", () => {
-    const hole = placeHole({ face: "LxW@1", at: [3, 1], diameter: 0.5, depth: 0.5 }, SIZE);
+    const hole = placeBore({ face: "LxW@1", at: [3, 1], diameter: 0.5, depth: 0.5 }, SIZE);
     expect(hole.center).toEqual([3, 2, 1]);
     expect(hole.depth).toBe(0.5);
     expect(hole.through).toBe(false);
   });
 
   it("bores through the stock when depth is omitted", () => {
-    const hole = placeHole({ face: "LxW@1", at: [3, 1], diameter: 0.5 }, SIZE);
+    const hole = placeBore({ face: "LxW@1", at: [3, 1], diameter: 0.5 }, SIZE);
     expect(hole.depth).toBe(2);
     expect(hole.through).toBe(true);
   });
 
   it("rejects a non-positive diameter", () => {
-    expect(() => placeHole({ face: "LxW@0", at: [1, 1], diameter: 0 }, SIZE)).toThrow(/greater than 0/);
+    expect(() => placeBore({ face: "LxW@0", at: [1, 1], diameter: 0 }, SIZE)).toThrow(/greater than 0/);
   });
 
   it("rejects a non-positive depth", () => {
-    expect(() => placeHole({ face: "LxW@1", at: [3, 1], diameter: 0.5, depth: 0 }, SIZE)).toThrow(/depth must be greater than 0/);
+    expect(() => placeBore({ face: "LxW@1", at: [3, 1], diameter: 0.5, depth: 0 }, SIZE)).toThrow(/depth must be greater than 0/);
   });
 
   it("rejects a depth past the stock extent", () => {
-    expect(() => placeHole({ face: "LxW@1", at: [3, 1], diameter: 0.5, depth: 3 }, SIZE)).toThrow(/deeper than the stock/);
+    expect(() => placeBore({ face: "LxW@1", at: [3, 1], diameter: 0.5, depth: 3 }, SIZE)).toThrow(/deeper than the stock/);
   });
 
   it("rejects a center outside the stock face", () => {
-    expect(() => placeHole({ face: "LxW@1", at: [11, 1], diameter: 0.25 }, SIZE)).toThrow(/outside the stock face/);
+    expect(() => placeBore({ face: "LxW@1", at: [11, 1], diameter: 0.25 }, SIZE)).toThrow(/outside the stock face/);
   });
 
   it("rejects a circle that hangs off the face", () => {
-    expect(() => placeHole({ face: "LxW@0", at: [0.1, 1], diameter: 1 }, SIZE)).toThrow(/extends past the stock face/);
+    expect(() => placeBore({ face: "LxW@0", at: [0.1, 1], diameter: 1 }, SIZE)).toThrow(/extends past the stock face/);
   });
 });

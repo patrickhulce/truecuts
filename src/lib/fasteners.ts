@@ -20,6 +20,8 @@ export type SceneFastener = {
   diameter: number;
   size: Vec3;
   members: SceneFastenerMember[];
+  /** Set when this instance was expanded from a connection recipe. */
+  connectionKey?: string;
 };
 
 export type FastenerIssue = {
@@ -28,13 +30,13 @@ export type FastenerIssue = {
   severity: "error" | "warning";
 };
 
-export function instanceKey(componentId: string, partId: string, placementIndex: number): string {
-  return `${componentId}/${partId}#${placementIndex}`;
+export function instanceKey(componentId: string, memberId: string, placementIndex: number): string {
+  return `${componentId}/${memberId}#${placementIndex}`;
 }
 
 export function parseInstanceKey(key: string): {
   componentId: string;
-  partId: string;
+  memberId: string;
   placementIndex: number;
 } {
   const slash = key.indexOf("/");
@@ -48,20 +50,20 @@ export function parseInstanceKey(key: string): {
   }
   return {
     componentId: key.slice(0, slash),
-    partId: key.slice(slash + 1, hash),
+    memberId: key.slice(slash + 1, hash),
     placementIndex,
   };
 }
 
-/** 0-based occurrence of `partId` in the component → index in `component.parts`. */
+/** 0-based occurrence of `memberId` in the component → index in `component.members`. */
 export function placementIndexFor(
-  component: { parts: ResolvedPlacement[] },
-  partId: string,
+  component: { members: ResolvedPlacement[] },
+  memberId: string,
   occurrence: number,
 ): number | undefined {
   let seen = 0;
-  for (let index = 0; index < component.parts.length; index++) {
-    if (component.parts[index].part !== partId) continue;
+  for (let index = 0; index < component.members.length; index++) {
+    if (component.members[index].id !== memberId) continue;
     if (seen === occurrence) return index;
     seen += 1;
   }
@@ -151,17 +153,17 @@ function resolveOne(
       });
       continue;
     }
-    const placementIndex = placementIndexFor(component, member.part, member.index);
+    const placementIndex = placementIndexFor(component, member.id, member.index);
     if (placementIndex === undefined) {
       issues.push({
-        message: `Part "${member.part}" is not placed in component "${member.component}"`,
-        path: [...path, "members", mIndex, "part"],
+        message: `Member "${member.id}" is not placed in component "${member.component}"`,
+        path: [...path, "members", mIndex, "id"],
         severity: "error",
       });
       continue;
     }
-    const placement = component.parts[placementIndex];
-    const keyForMember = instanceKey(component.id, member.part, placementIndex);
+    const placement = component.members[placementIndex];
+    const keyForMember = instanceKey(component.id, member.id, placementIndex);
     const point = worldPoint(member.at, placement, component);
     const direction = member.direction
       ? normalize(worldDirection(member.direction, placement, component))

@@ -1,4 +1,5 @@
 import { getCatalogPart, isFlatLBracket, isLBracket, type CatalogPart } from "./catalog";
+import { expandConnections, type ConnectionSolid, type SceneConnection } from "./connections";
 import {
   fastenedFromSeed,
   instanceKey,
@@ -17,18 +18,20 @@ import {
   type SceneContacts,
   type Vec3,
 } from "./geometry";
-import type { ResolvedCut, ResolvedDocument, ResolvedHole, ResolvedPart } from "./schema";
+import type { ResolvedBore, ResolvedCut, ResolvedDocument, ResolvedMember } from "./schema";
 
-export type ScenePartInstance = {
+export type SceneMemberInstance = {
   key: string;
-  partId: string;
+  memberId: string;
   label: string;
   stockId: string;
   stockLabel: string;
   material: string;
   color: string;
   faces: Polyhedron;
-  holes: ResolvedHole[];
+  /** Bores written on the member. Connection pilots and clearance live in `derivedBores`. */
+  bores: ResolvedBore[];
+  derivedBores: ResolvedBore[];
   position: Vec3;
   rotation: Vec3;
   bounds: { min: Vec3; max: Vec3 };
@@ -42,7 +45,7 @@ export type SceneComponent = {
   label: string;
   position: Vec3;
   rotation: Vec3;
-  parts: ScenePartInstance[];
+  members: SceneMemberInstance[];
 };
 
 export type SceneModel = {
@@ -51,9 +54,11 @@ export type SceneModel = {
   components: SceneComponent[];
   fasteners: SceneFastener[];
   contacts: SceneContacts;
+  connections: SceneConnection[];
 };
 
 export type { SceneFastener, SceneFastenerMember } from "./fasteners";
+export type { SceneConnection, DerivedBore } from "./connections";
 
 export type SceneIssue = {
   message: string;
@@ -73,13 +78,13 @@ function finishedFromBounds(bounds: { min: Vec3; max: Vec3 }): {
   };
 }
 
-function assertCutInBounds(cut: ResolvedCut, size: Vec3, partId: string): void {
+function assertCutInBounds(cut: ResolvedCut, size: Vec3, memberId: string): void {
   const dimName = (["L", "W", "T"] as const)[cut.axis];
   const limit = size[cut.axis];
   if (typeof cut.at === "number") {
     if (cut.at < -1e-6 || cut.at > limit + 1e-6) {
       throw new Error(
-        `Cut on ${partId} at ${cut.at} is outside stock axis ${cut.axis} (${dimName}, 0–${limit})`,
+        `Cut on ${memberId} at ${cut.at} is outside stock axis ${cut.axis} (${dimName}, 0–${limit})`,
       );
     }
     return;
@@ -87,7 +92,7 @@ function assertCutInBounds(cut: ResolvedCut, size: Vec3, partId: string): void {
   const [short, long] = cut.at;
   if (short < -1e-6 || long > limit + 1e-6) {
     throw new Error(
-      `Cut on ${partId} [${short}, ${long}] is outside stock axis ${cut.axis} (${dimName}, 0–${limit})`,
+      `Cut on ${memberId} [${short}, ${long}] is outside stock axis ${cut.axis} (${dimName}, 0–${limit})`,
     );
   }
 }
@@ -111,23 +116,23 @@ function centerFromWorldCenters(centers: Vec3[]): Vec3 {
   return midpoint(min, max);
 }
 
-export function meshPart(part: ResolvedPart, stock: CatalogPart): Polyhedron {
+export function meshMember(member: ResolvedMember, stock: CatalogPart): Polyhedron {
   if (isLBracket(stock) || isFlatLBracket(stock)) {
-    if (part.cuts.length > 0) {
-      throw new Error(`L-bracket ${part.id} cannot take planar cuts`);
+    if (member.cuts.length > 0) {
+      throw new Error(`L-bracket ${member.id} cannot take planar cuts`);
     }
     const poly = isFlatLBracket(stock) ? flatLBracketPolyhedron(stock.size) : lBracketPolyhedron(stock.size);
     if (polyhedronVolume(poly) < 1e-6) {
-      throw new Error(`L-bracket ${part.id} has no volume`);
+      throw new Error(`L-bracket ${member.id} has no volume`);
     }
     return poly;
   }
-  for (const cut of part.cuts) {
-    assertCutInBounds(cut, stock.size, part.id);
+  for (const cut of member.cuts) {
+    assertCutInBounds(cut, stock.size, member.id);
   }
-  const poly = applyCuts(stock.size, part.cuts);
+  const poly = applyCuts(stock.size, member.cuts);
   if (polyhedronVolume(poly) < 1e-6) {
-    throw new Error(`Cuts on ${part.id} removed all material`);
+    throw new Error(`Cuts on ${member.id} removed all material`);
   }
   return poly;
 }
@@ -137,30 +142,30 @@ export function buildScene(document: ResolvedDocument): {
   issues: SceneIssue[];
 } {
   const issues: SceneIssue[] = [];
-  const meshes = new Map<string, { part: ResolvedPart; stock: CatalogPart; faces: Polyhedron }>();
+  const meshes = new Map<string, { member: ResolvedMember; stock: CatalogPart; faces: Polyhedron }>();
 
-  for (const [index, part] of document.parts.entries()) {
-    const stock = getCatalogPart(part.stock);
+  for (const [index, member] of document.members.entries()) {
+    const stock = getCatalogPart(member.stock);
     if (!stock) {
       issues.push({
-        message: `Unknown stock "${part.stock}"`,
-        path: ["parts", index, "stock"],
+        message: `Unknown stock "${member.stock}"`,
+        path: ["members", index, "stock"],
       });
       continue;
     }
     if (!stock.renderable) {
       issues.push({
-        message: `Stock "${part.stock}" is catalogued but not renderable as part stock`,
-        path: ["parts", index, "stock"],
+        message: `Stock "${member.stock}" is catalogued but not renderable as member stock`,
+        path: ["members", index, "stock"],
       });
       continue;
     }
     try {
-      meshes.set(part.id, { part, stock, faces: meshPart(part, stock) });
+      meshes.set(member.id, { member, stock, faces: meshMember(member, stock) });
     } catch (error) {
       issues.push({
         message: error instanceof Error ? error.message : String(error),
-        path: ["parts", index, "cuts"],
+        path: ["members", index, "cuts"],
       });
     }
   }
@@ -174,21 +179,22 @@ export function buildScene(document: ResolvedDocument): {
     label: component.label,
     position: component.position,
     rotation: component.rotation,
-    parts: component.parts.flatMap((placement, index) => {
-      const mesh = meshes.get(placement.part);
+    members: component.members.flatMap((placement, index) => {
+      const mesh = meshes.get(placement.id);
       if (!mesh) return [];
       const bounds = boundingBox(mesh.faces);
       return [
         {
-          key: instanceKey(component.id, placement.part, index),
-          partId: mesh.part.id,
-          label: mesh.part.label,
+          key: instanceKey(component.id, placement.id, index),
+          memberId: mesh.member.id,
+          label: mesh.member.label,
           stockId: mesh.stock.id,
           stockLabel: mesh.stock.label,
           material: mesh.stock.material,
           color: mesh.stock.color,
           faces: mesh.faces,
-          holes: mesh.part.holes,
+          bores: [...mesh.member.bores],
+          derivedBores: [],
           position: placement.position,
           rotation: placement.rotation,
           bounds,
@@ -203,42 +209,72 @@ export function buildScene(document: ResolvedDocument): {
   const resolved = resolveFasteners(document);
   issues.push(...resolved.issues);
 
+  const explicitErrors = issues.filter((issue) => (issue.severity ?? "error") === "error");
+  if (explicitErrors.length > 0) {
+    return { issues };
+  }
+
+  const contacts = findContacts(
+    components.flatMap((component) =>
+      component.members.map((member) => ({
+        key: member.key,
+        faces: member.faces,
+        position: member.position,
+        rotation: member.rotation,
+        componentPosition: component.position,
+        componentRotation: component.rotation,
+        bounds: member.bounds,
+      })),
+    ),
+  );
+
+  const solids: ConnectionSolid[] = components.flatMap((component) =>
+    component.members.map((member) => ({
+      key: member.key,
+      memberId: member.memberId,
+      faces: member.faces,
+      position: member.position,
+      rotation: member.rotation,
+      componentId: component.id,
+      componentPosition: component.position,
+      componentRotation: component.rotation,
+      stockSize: meshes.get(member.memberId)?.stock.size ?? [0, 0, 0],
+    })),
+  );
+  const expanded = expandConnections(document, solids, contacts);
+  issues.push(...expanded.issues);
+
   const errors = issues.filter((issue) => (issue.severity ?? "error") === "error");
   if (errors.length > 0) {
     return { issues };
   }
 
-  const nodes = components.flatMap((component) => component.parts.map((part) => part.key));
-  const seed = components[0]?.parts[0]?.key;
-  const fastened = fastenedFromSeed(nodes, resolved.edges, seed);
+  const byKey = new Map(components.flatMap((component) => component.members.map((member) => [member.key, member])));
+  for (const derived of expanded.bores) {
+    byKey.get(derived.instanceKey)?.derivedBores.push(derived.bore);
+  }
+
+  const fasteners = [...resolved.fasteners, ...expanded.fasteners];
+  const edges = [...resolved.edges, ...expanded.edges];
+  const nodes = components.flatMap((component) => component.members.map((member) => member.key));
+  const seed = components[0]?.members[0]?.key;
+  const fastened = fastenedFromSeed(nodes, edges, seed);
 
   for (const component of components) {
-    for (const part of component.parts) {
-      part.fastened = fastened.has(part.key);
+    for (const member of component.members) {
+      member.fastened = fastened.has(member.key);
     }
   }
 
-  const allParts = components.flatMap((component) => component.parts);
-  const contacts = findContacts(
-    components.flatMap((component) =>
-      component.parts.map((part) => ({
-        key: part.key,
-        faces: part.faces,
-        position: part.position,
-        rotation: part.rotation,
-        componentPosition: component.position,
-        componentRotation: component.rotation,
-        bounds: part.bounds,
-      })),
-    ),
-  );
+  const allMembers = components.flatMap((component) => component.members);
   return {
     scene: {
       name: document.name,
-      center: centerFromWorldCenters(allParts.map((part) => part.worldCenter)),
+      center: centerFromWorldCenters(allMembers.map((member) => member.worldCenter)),
       components,
-      fasteners: resolved.fasteners,
+      fasteners,
       contacts,
+      connections: expanded.connections,
     },
     issues,
   };

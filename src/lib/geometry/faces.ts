@@ -41,7 +41,7 @@ export type FaceFrame = {
   plane: number;
 };
 
-export type PlacedHole = {
+export type PlacedBore = {
   face: FaceId;
   at: [number, number];
   diameter: number;
@@ -139,57 +139,57 @@ export function faceQuad(id: FaceId, size: Vec3): Face {
 }
 
 /**
- * Place a drilled hole on a stock face.
+ * Place a drilled bore on a stock face.
  * The circle must lie inside the stock rectangle. Omit `depth` to bore through the stock.
- * The hole is not cut from the solid.
+ * The bore is not cut from the solid.
  */
-export function placeHole(
-  hole: { face: FaceId; at: [number, number]; diameter: number; depth?: number },
+export function placeBore(
+  bore: { face: FaceId; at: [number, number]; diameter: number; depth?: number },
   size: Vec3,
-): PlacedHole {
-  if (!(hole.diameter > 0)) {
-    throw new Error("Hole diameter must be greater than 0");
+): PlacedBore {
+  if (!(bore.diameter > 0)) {
+    throw new Error("Bore diameter must be greater than 0");
   }
 
-  const frame = faceFrame(hole.face, size);
+  const frame = faceFrame(bore.face, size);
   const stockDepth = size[frame.normalAxis];
-  const depth = hole.depth ?? stockDepth;
+  const depth = bore.depth ?? stockDepth;
   if (!(depth > 0)) {
-    throw new Error("Hole depth must be greater than 0");
+    throw new Error("Bore depth must be greater than 0");
   }
   if (depth > stockDepth + FIT_EPS) {
     throw new Error(
-      `Hole depth ${depth} on ${hole.face} is deeper than the stock (${AXIS_LETTER[frame.normalAxis]} ${stockDepth})`,
+      `Bore depth ${depth} on ${bore.face} is deeper than the stock (${AXIS_LETTER[frame.normalAxis]} ${stockDepth})`,
     );
   }
   for (let i = 0; i < 2; i++) {
     const axis = frame.axes[i];
-    const value = hole.at[i];
+    const value = bore.at[i];
     const extent = size[axis];
     if (value < -FIT_EPS || value > extent + FIT_EPS) {
       throw new Error(
-        `Hole center on ${hole.face} is outside the stock face (${AXIS_LETTER[axis]} ${value} is outside 0–${extent})`,
+        `Bore center on ${bore.face} is outside the stock face (${AXIS_LETTER[axis]} ${value} is outside 0–${extent})`,
       );
     }
   }
 
-  const radius = hole.diameter / 2;
+  const radius = bore.diameter / 2;
   for (let i = 0; i < 2; i++) {
     const axis = frame.axes[i];
-    const value = hole.at[i];
+    const value = bore.at[i];
     const extent = size[axis];
     if (value - radius < -FIT_EPS || value + radius > extent + FIT_EPS) {
-      throw new Error(`Hole on ${hole.face} extends past the stock face`);
+      throw new Error(`Bore on ${bore.face} extends past the stock face`);
     }
   }
 
   return {
-    face: hole.face,
-    at: [hole.at[0], hole.at[1]],
-    diameter: hole.diameter,
+    face: bore.face,
+    at: [bore.at[0], bore.at[1]],
+    diameter: bore.diameter,
     depth,
     through: depth >= stockDepth - FIT_EPS,
-    center: pointOnFace(hole.face, size, hole.at),
+    center: pointOnFace(bore.face, size, bore.at),
     normal: frame.normal,
   };
 }

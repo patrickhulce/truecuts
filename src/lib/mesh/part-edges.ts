@@ -1,6 +1,6 @@
 import * as THREE from "three";
 import type { Polyhedron } from "@/lib/geometry";
-import type { ResolvedHole } from "@/lib/schema";
+import type { ResolvedBore } from "@/lib/schema";
 import { facesToGeometry, HOLE_SEGMENTS } from "./subtract-holes";
 
 const EDGE_THRESHOLD = 20;
@@ -31,18 +31,18 @@ function pushLoop(positions: number[], points: THREE.Vector3[]): void {
  * CAD edges for a part whose mesh has been cut by holes.
  * The outline is the solid before the bores. Each hole adds its mouth, its far end, and the bore lines.
  */
-export function partEdgeGeometry(faces: Polyhedron, holes: ResolvedHole[]): THREE.BufferGeometry {
+export function memberEdgeGeometry(faces: Polyhedron, bores: ResolvedBore[]): THREE.BufferGeometry {
   const solid = facesToGeometry(faces);
   const outline = new THREE.EdgesGeometry(solid, EDGE_THRESHOLD);
   solid.dispose();
   const positions = Array.from(outline.getAttribute("position").array);
   outline.dispose();
 
-  for (const hole of holes) {
-    const inward = new THREE.Vector3(-hole.normal[0], -hole.normal[1], -hole.normal[2]).normalize();
-    const radius = hole.diameter / 2;
-    const mouth = new THREE.Vector3(hole.center[0], hole.center[1], hole.center[2]);
-    const far = mouth.clone().addScaledVector(inward, hole.depth);
+  for (const bore of bores) {
+    const inward = new THREE.Vector3(-bore.normal[0], -bore.normal[1], -bore.normal[2]).normalize();
+    const radius = bore.diameter / 2;
+    const mouth = new THREE.Vector3(bore.center[0], bore.center[1], bore.center[2]);
+    const far = mouth.clone().addScaledVector(inward, bore.depth);
     const mouthLoop = ring(mouth, inward, radius);
     const farLoop = ring(far, inward, radius);
     pushLoop(positions, mouthLoop);

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { convexArea, intersectConvex } from "./polygon";
+import { convexArea, insetConvex, intersectConvex } from "./polygon";
 import type { Face } from "./types";
 
 const NZ: [number, number, number] = [0, 0, 1];
@@ -87,5 +87,19 @@ describe("intersectConvex", () => {
     expect(hit).not.toBeNull();
     expect(convexArea(hit!, NZ)).toBeGreaterThan(10);
     expect(convexArea(hit!, NZ)).toBeLessThan(convexArea(trap, NZ));
+  });
+});
+
+describe("insetConvex", () => {
+  it("shrinks a rectangle by the edge distance", () => {
+    const face = xy([
+      [0, 0],
+      [10, 0],
+      [10, 3.5],
+      [0, 3.5],
+    ]);
+    const inset = insetConvex(face, NZ, 0.5);
+    expect(inset).not.toBeNull();
+    expect(convexArea(inset!, NZ)).toBeCloseTo(9 * 2.5, 4);
   });
 });

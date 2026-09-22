@@ -1,6 +1,6 @@
 import { faceNormal } from "./solids";
 import type { Face, Plane, Vec3 } from "./types";
-import { add, cross, dot, EPS, lerp, normalize, planeBasis, scale, sub } from "./vec3";
+import { add, cross, dot, EPS, len, lerp, normalize, planeBasis, scale, sub } from "./vec3";
 
 export type Vec2 = [number, number];
 
@@ -90,6 +90,31 @@ export function intersectConvex(a: Face, b: Face, normal: Vec3): Face | null {
     if (inward[0] === 0 && inward[1] === 0 && inward[2] === 0) continue;
     // clipConvexByPlane keeps n·x <= d; flip so the interior (inward · x >= d) remains.
     clipped = clipConvexByPlane(clipped, { normal: scale(inward, -1), d: -dot(inward, start) });
+    if (clipped.length < 3) return null;
+  }
+  if (convexArea(clipped, n) < AREA_EPS) return null;
+  return clipped;
+}
+
+/**
+ * Shrink a convex polygon by `distance` along its inward edge normals.
+ * Returns null when the inset collapses.
+ */
+export function insetConvex(face: Face, normal: Vec3, distance: number): Face | null {
+  if (face.length < 3) return null;
+  if (distance <= 1e-8) return face;
+  const n = normalize(normal);
+  let clipped = face;
+  for (let i = 0; i < face.length; i++) {
+    const start = face[i];
+    const end = face[(i + 1) % face.length];
+    const edge = sub(end, start);
+    const inward = normalize(cross(n, edge));
+    if (len(inward) < EPS) continue;
+    clipped = clipConvexByPlane(clipped, {
+      normal: scale(inward, -1),
+      d: -dot(inward, start) - distance,
+    });
     if (clipped.length < 3) return null;
   }
   if (convexArea(clipped, n) < AREA_EPS) return null;

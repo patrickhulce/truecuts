@@ -79,7 +79,7 @@ describe("demo contacts", () => {
     const result = compileDocument(DEMO_YAML);
     expect(result.scene).toBeDefined();
     const posed: PosedSolid[] = result.scene!.components.flatMap((component) =>
-      component.parts.map((part) => ({
+      component.members.map((part) => ({
         key: part.key,
         faces: part.faces,
         position: part.position,

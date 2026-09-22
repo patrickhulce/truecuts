@@ -2,10 +2,13 @@ import { describe, expect, it } from "vitest";
 import { compileDocument } from "./compile";
 import { DEMO_YAML } from "./demo";
 import {
-  deletePart,
+  defaultConnectionFastener,
+  deleteMember,
   EditError,
+  promoteExplicitFasteners,
   roundDegrees,
   roundInches,
+  setConnectionFastener,
   setPlacementPose,
   SNAP_DEG,
   SNAP_DEG_FINE,
@@ -18,7 +21,7 @@ import { instanceKey, parseInstanceKey } from "./fasteners";
 
 const GLUE_THREE = `version: 1
 name: Glue three
-parts:
+members:
   - label: A
     stock: 2x4x8
   - label: B
@@ -27,46 +30,46 @@ parts:
     stock: 2x4x8
 components:
   - label: Box
-    parts:
-      - { part: a-1, position: [0, 0, 0] }
-      - { part: b-1, position: [8, 0, 0] }
-      - { part: c-1, position: [16, 0, 0] }
+    members:
+      - { id: a-1, position: [0, 0, 0] }
+      - { id: b-1, position: [8, 0, 0] }
+      - { id: c-1, position: [16, 0, 0] }
     fasteners:
       - stock: wood-glue
         members:
-          - { part: a-1, at: [0, 0.75, 0.75] }
-          - { part: b-1, at: [0, 0.75, 0.75] }
-          - { part: c-1, at: [0, 0.75, 0.75] }
+          - { id: a-1, at: [0, 0.75, 0.75] }
+          - { id: b-1, at: [0, 0.75, 0.75] }
+          - { id: c-1, at: [0, 0.75, 0.75] }
 `;
 
 const SCREW_PAIR = `version: 1
 name: Screw pair
-parts:
+members:
   - label: A
     stock: 2x4x8
   - label: B
     stock: 2x4x8
 components:
   - label: Box
-    parts:
-      - { part: a-1, position: [0, 0, 0] }
-      - { part: b-1, position: [8, 0, 0] }
+    members:
+      - { id: a-1, position: [0, 0, 0] }
+      - { id: b-1, position: [8, 0, 0] }
     fasteners:
       - stock: screw-wood-8x2.5
         members:
-          - { part: a-1, at: [4, 0.75, 0.75], direction: [1, 0, 0] }
-          - { part: b-1, at: [0, 0.75, 0.75], direction: [-1, 0, 0] }
+          - { id: a-1, at: [4, 0.75, 0.75], direction: [1, 0, 0] }
+          - { id: b-1, at: [0, 0.75, 0.75], direction: [-1, 0, 0] }
 `;
 
 const BARE_PLACEMENT = `version: 1
 name: Bare
-parts:
+members:
   - label: A
     stock: 2x4x8
 components:
   - label: Box
-    parts:
-      - { part: a-1 }
+    members:
+      - { id: a-1 }
 `;
 
 describe("parseInstanceKey", () => {
@@ -74,60 +77,61 @@ describe("parseInstanceKey", () => {
     const key = instanceKey("bench-1", "spare-block-1", 0);
     expect(parseInstanceKey(key)).toEqual({
       componentId: "bench-1",
-      partId: "spare-block-1",
+      memberId: "spare-block-1",
       placementIndex: 0,
     });
   });
 });
 
-describe("deletePart", () => {
+describe("deleteMember", () => {
   it("removes the spare block definition and its placement from the demo", () => {
-    const next = deletePart(DEMO_YAML, "spare-block-1");
+    const next = deleteMember(DEMO_YAML, "spare-block-1");
     const result = compileDocument(next);
     expect(result.diagnostics.filter((item) => item.severity === "error")).toEqual([]);
-    expect(result.document?.parts.some((part) => part.id === "spare-block-1")).toBe(false);
+    expect(result.document?.members.some((part) => part.id === "spare-block-1")).toBe(false);
     expect(
       result.document?.components.some((component) =>
-        component.parts.some((placement) => placement.part === "spare-block-1"),
+        component.members.some((placement) => placement.id === "spare-block-1"),
       ),
     ).toBe(false);
-    expect(result.scene?.components.find((component) => component.id === "spare-1")?.parts).toEqual([]);
+    expect(result.scene?.components.find((component) => component.id === "spare-1")?.members).toEqual([]);
     expect(next).toContain("TrueCuts demo");
     expect(next).not.toContain("spare-block-1");
   });
 
   it("drops a two-member screw when one member's part is deleted", () => {
-    const next = deletePart(SCREW_PAIR, "a-1");
+    const next = deleteMember(SCREW_PAIR, "a-1");
     const result = compileDocument(next);
     expect(result.diagnostics.filter((item) => item.severity === "error")).toEqual([]);
-    expect(result.document?.parts.map((part) => part.id)).toEqual(["b-1"]);
-    expect(result.document?.components[0].parts).toHaveLength(1);
+    expect(result.document?.members.map((part) => part.id)).toEqual(["b-1"]);
+    expect(result.document?.components[0].members).toHaveLength(1);
     expect(result.document?.components[0].fasteners).toEqual([]);
     expect(result.scene?.fasteners).toEqual([]);
   });
 
   it("keeps a glue fastener when it still has two members", () => {
-    const next = deletePart(GLUE_THREE, "a-1");
+    const next = deleteMember(GLUE_THREE, "a-1");
     const result = compileDocument(next);
     expect(result.diagnostics.filter((item) => item.severity === "error")).toEqual([]);
-    expect(result.document?.parts.map((part) => part.id)).toEqual(["b-1", "c-1"]);
+    expect(result.document?.members.map((part) => part.id)).toEqual(["b-1", "c-1"]);
     expect(result.document?.components[0].fasteners).toHaveLength(1);
-    expect(result.document?.components[0].fasteners[0].members.map((member) => member.part)).toEqual([
+    expect(result.document?.components[0].fasteners[0].members.map((member) => member.id)).toEqual([
       "b-1",
       "c-1",
     ]);
   });
 
   it("strips document-level fasteners that reference the part", () => {
-    const next = deletePart(DEMO_YAML, "shelf-board-1");
+    const next = deleteMember(DEMO_YAML, "shelf-board-1");
     const result = compileDocument(next);
     expect(result.diagnostics.filter((item) => item.severity === "error")).toEqual([]);
     expect(result.document?.fasteners).toEqual([]);
-    expect(result.document?.parts.some((part) => part.id === "shelf-board-1")).toBe(false);
+    expect(result.document?.connections).toEqual([]);
+    expect(result.document?.members.some((part) => part.id === "shelf-board-1")).toBe(false);
   });
 
   it("throws for an unknown part", () => {
-    expect(() => deletePart(DEMO_YAML, "nope-1")).toThrow(EditError);
+    expect(() => deleteMember(DEMO_YAML, "nope-1")).toThrow(EditError);
   });
 });
 
@@ -136,8 +140,8 @@ describe("setPlacementPose", () => {
     const next = setPlacementPose(DEMO_YAML, "spare-1", 0, [1.2345, 5, 9.9999], [12.34, 0, -90.04]);
     const result = compileDocument(next);
     expect(result.diagnostics.filter((item) => item.severity === "error")).toEqual([]);
-    expect(result.document?.components.find((component) => component.id === "spare-1")?.parts[0]).toMatchObject({
-      part: "spare-block-1",
+    expect(result.document?.components.find((component) => component.id === "spare-1")?.members[0]).toMatchObject({
+      id: "spare-block-1",
       position: [1.2345, 5, 9.9999],
       rotation: [12.3, 0, -90],
     });
@@ -147,12 +151,64 @@ describe("setPlacementPose", () => {
     const next = setPlacementPose(BARE_PLACEMENT, "box-1", 0, [3, 4, 5], [90, 0, 0]);
     const result = compileDocument(next);
     expect(result.diagnostics.filter((item) => item.severity === "error")).toEqual([]);
-    expect(result.document?.components[0].parts[0]).toMatchObject({
-      part: "a-1",
+    expect(result.document?.components[0].members[0]).toMatchObject({
+      id: "a-1",
       position: [3, 4, 5],
       rotation: [90, 0, 0],
     });
     expect(next).toMatch(/position:\s*\[\s*3,\s*4,\s*5\s*\]/);
+  });
+});
+
+describe("setConnectionFastener", () => {
+  it("round-trips kind, stock, and variant", () => {
+    const start = `${SCREW_PAIR.replace(
+      "fasteners:",
+      `connections:
+      - members:
+          - { id: a-1 }
+          - { id: b-1 }
+        fasteners:
+          - { kind: screw, stock: screw-wood-8x2.5, variant: { kind: centered, separation: 4, justify: space-around } }
+    fasteners:`,
+    )}`;
+    const asGlue = setConnectionFastener(start, "box-1", 0, 0, {
+      kind: "glue",
+      stock: "wood-glue",
+      variant: { kind: "edge", edge: 0.5 },
+    });
+    const glued = compileDocument(asGlue);
+    expect(glued.diagnostics.filter((item) => item.severity === "error")).toEqual([]);
+    expect(glued.document?.components[0].connections[0].fasteners[0]).toEqual({
+      kind: "glue",
+      stock: "wood-glue",
+      variant: { kind: "edge", edge: 0.5 },
+    });
+
+    const asPerimeter = setConnectionFastener(asGlue, "box-1", 0, 0, {
+      kind: "screw",
+      stock: "screw-wood-8x2",
+      variant: { kind: "perimeter", edge: 0.75, separation: 6, justify: "space-between" },
+    });
+    const screwed = compileDocument(asPerimeter);
+    expect(screwed.diagnostics.filter((item) => item.severity === "error")).toEqual([]);
+    expect(screwed.document?.components[0].connections[0].fasteners[0]).toMatchObject({
+      kind: "screw",
+      stock: "screw-wood-8x2",
+      variant: { kind: "perimeter", edge: 0.75, separation: 6, justify: "space-between" },
+    });
+  });
+});
+
+describe("promoteExplicitFasteners", () => {
+  it("turns an explicit screw into a connection recipe and drops the explicit entry", () => {
+    const next = promoteExplicitFasteners(SCREW_PAIR, "box-1", [0]);
+    const result = compileDocument(next);
+    expect(result.diagnostics.filter((item) => item.severity === "error")).toEqual([]);
+    expect(result.document?.components[0].fasteners).toEqual([]);
+    expect(result.document?.components[0].connections).toHaveLength(1);
+    expect(result.document?.components[0].connections[0].members.map((member) => member.id)).toEqual(["a-1", "b-1"]);
+    expect(result.document?.components[0].connections[0].fasteners[0]).toEqual(defaultConnectionFastener("screw-wood-8x2.5"));
   });
 });
 

@@ -1,15 +1,17 @@
 import { z } from "zod";
 import { getCatalogPart, getFastenerSubtype } from "./catalog";
-import { FACE_IDS, placeHole, type FaceId, type PlacedHole } from "./geometry/faces";
+import { FACE_IDS, placeBore, type FaceId, type PlacedBore } from "./geometry/faces";
 import { assignIds, isValidId } from "./identity";
 import { parseAt, parseDimension, type DimensionInput } from "./units";
 
 export type Axis = 0 | 1 | 2;
 export type CutSide = "end" | "start";
+export type ScrewJustify = "space-between" | "space-around";
 
 const AxisSchema = z.union([z.literal(0), z.literal(1), z.literal(2)]);
 const DimensionSchema = z.union([z.number(), z.string()]);
 const Vec3InputSchema = z.array(DimensionSchema).length(3);
+const JustifySchema = z.enum(["space-between", "space-around"]);
 
 const CutSchema = z
   .object({
@@ -38,45 +40,89 @@ const CutSchema = z
     }
   });
 
-const HoleSchema = z.object({
+const BoreSchema = z.object({
   face: z.enum(FACE_IDS),
   at: z.tuple([DimensionSchema, DimensionSchema]),
   diameter: DimensionSchema,
   depth: DimensionSchema.optional(),
 });
 
-const PartSchema = z.object({
+const MemberSchema = z.object({
   id: z.string().optional(),
   label: z.string().min(1),
   stock: z.string().min(1),
   cuts: z.array(CutSchema).optional(),
-  holes: z.array(HoleSchema).default([]),
+  bores: z.array(BoreSchema).default([]),
 });
 
 const PlacementSchema = z.object({
-  part: z.string().min(1),
+  id: z.string().min(1),
   position: Vec3InputSchema.optional(),
   rotation: Vec3InputSchema.optional(),
 });
 
-const FastenerMemberSchema = z.object({
+const ExplicitMemberSchema = z.object({
   component: z.string().min(1).optional(),
-  part: z.string().min(1),
+  id: z.string().min(1),
   index: z.number().int().nonnegative().optional(),
   at: Vec3InputSchema,
   direction: Vec3InputSchema.optional(),
 });
 
-const FastenerSchema = z.object({
+const ExplicitFastenerSchema = z.object({
   stock: z.string().min(1),
-  members: z.array(FastenerMemberSchema).min(2),
+  members: z.array(ExplicitMemberSchema).min(2),
+});
+
+const ConnectionMemberSchema = z.object({
+  component: z.string().min(1).optional(),
+  id: z.string().min(1),
+  index: z.number().int().nonnegative().optional(),
+});
+
+const ScrewVariantSchema = z.discriminatedUnion("kind", [
+  z.object({ kind: z.literal("four-corners"), edge: DimensionSchema }),
+  z.object({ kind: z.literal("angle-bracket"), bracket: z.string().min(1), edge: DimensionSchema }),
+  z.object({
+    kind: z.literal("perimeter"),
+    edge: DimensionSchema,
+    separation: DimensionSchema,
+    justify: JustifySchema,
+  }),
+  z.object({
+    kind: z.literal("centered"),
+    separation: DimensionSchema,
+    justify: JustifySchema,
+  }),
+]);
+
+const GlueVariantSchema = z.discriminatedUnion("kind", [
+  z.object({ kind: z.literal("patch") }),
+  z.object({ kind: z.literal("edge"), edge: DimensionSchema }),
+]);
+
+const BoltVariantSchema = z.object({
+  kind: z.literal("through"),
+  at: z.tuple([DimensionSchema, DimensionSchema]).optional(),
+});
+
+const ConnectionFastenerSchema = z.discriminatedUnion("kind", [
+  z.object({ kind: z.literal("screw"), stock: z.string().min(1), variant: ScrewVariantSchema }),
+  z.object({ kind: z.literal("glue"), stock: z.string().min(1), variant: GlueVariantSchema.optional() }),
+  z.object({ kind: z.literal("bolt"), stock: z.string().min(1), variant: BoltVariantSchema }),
+]);
+
+const ConnectionSchema = z.object({
+  members: z.array(ConnectionMemberSchema).min(2),
+  fasteners: z.array(ConnectionFastenerSchema).min(1),
 });
 
 const ComponentSchema = z.object({
   id: z.string().optional(),
   label: z.string().min(1),
-  parts: z.array(PlacementSchema).default([]),
-  fasteners: z.array(FastenerSchema).default([]),
+  members: z.array(PlacementSchema).default([]),
+  fasteners: z.array(ExplicitFastenerSchema).default([]),
+  connections: z.array(ConnectionSchema).default([]),
   position: Vec3InputSchema.optional(),
   rotation: Vec3InputSchema.optional(),
 });
@@ -84,19 +130,23 @@ const ComponentSchema = z.object({
 export const DocumentSchema = z.object({
   version: z.literal(1),
   name: z.string().min(1),
-  parts: z.array(PartSchema).default([]),
+  members: z.array(MemberSchema).default([]),
   components: z.array(ComponentSchema).default([]),
-  fasteners: z.array(FastenerSchema).default([]),
+  fasteners: z.array(ExplicitFastenerSchema).default([]),
+  connections: z.array(ConnectionSchema).default([]),
 });
 
 export type RawDocument = z.infer<typeof DocumentSchema>;
 export type RawCut = z.infer<typeof CutSchema>;
-export type RawHole = z.infer<typeof HoleSchema>;
-export type RawPart = z.infer<typeof PartSchema>;
+export type RawBore = z.infer<typeof BoreSchema>;
+export type RawMember = z.infer<typeof MemberSchema>;
 export type RawComponent = z.infer<typeof ComponentSchema>;
 export type RawPlacement = z.infer<typeof PlacementSchema>;
-export type RawFastener = z.infer<typeof FastenerSchema>;
-export type RawFastenerMember = z.infer<typeof FastenerMemberSchema>;
+export type RawFastener = z.infer<typeof ExplicitFastenerSchema>;
+export type RawFastenerMember = z.infer<typeof ExplicitMemberSchema>;
+export type RawConnection = z.infer<typeof ConnectionSchema>;
+export type RawConnectionFastener = z.infer<typeof ConnectionFastenerSchema>;
+export type RawConnectionMember = z.infer<typeof ConnectionMemberSchema>;
 
 export type ResolvedCut = {
   axis: Axis;
@@ -106,25 +156,25 @@ export type ResolvedCut = {
   around?: Axis;
 };
 
-export type ResolvedHole = PlacedHole;
+export type ResolvedBore = PlacedBore;
 
-export type ResolvedPart = {
+export type ResolvedMember = {
   id: string;
   label: string;
   stock: string;
   cuts: ResolvedCut[];
-  holes: ResolvedHole[];
+  bores: ResolvedBore[];
 };
 
 export type ResolvedPlacement = {
-  part: string;
+  id: string;
   position: [number, number, number];
   rotation: [number, number, number];
 };
 
 export type ResolvedFastenerMember = {
   component: string;
-  part: string;
+  id: string;
   index: number;
   at: [number, number, number];
   direction?: [number, number, number];
@@ -135,11 +185,38 @@ export type ResolvedFastener = {
   members: ResolvedFastenerMember[];
 };
 
+export type ResolvedScrewVariant =
+  | { kind: "four-corners"; edge: number }
+  | { kind: "angle-bracket"; bracket: string; edge: number }
+  | { kind: "perimeter"; edge: number; separation: number; justify: ScrewJustify }
+  | { kind: "centered"; separation: number; justify: ScrewJustify };
+
+export type ResolvedGlueVariant = { kind: "patch" } | { kind: "edge"; edge: number };
+
+export type ResolvedBoltVariant = { kind: "through"; at?: [number, number] };
+
+export type ResolvedConnectionFastener =
+  | { kind: "screw"; stock: string; variant: ResolvedScrewVariant }
+  | { kind: "glue"; stock: string; variant: ResolvedGlueVariant }
+  | { kind: "bolt"; stock: string; variant: ResolvedBoltVariant };
+
+export type ResolvedConnectionMember = {
+  component: string;
+  id: string;
+  index: number;
+};
+
+export type ResolvedConnection = {
+  members: ResolvedConnectionMember[];
+  fasteners: ResolvedConnectionFastener[];
+};
+
 export type ResolvedComponent = {
   id: string;
   label: string;
-  parts: ResolvedPlacement[];
+  members: ResolvedPlacement[];
   fasteners: ResolvedFastener[];
+  connections: ResolvedConnection[];
   position: [number, number, number];
   rotation: [number, number, number];
 };
@@ -147,9 +224,10 @@ export type ResolvedComponent = {
 export type ResolvedDocument = {
   version: 1;
   name: string;
-  parts: ResolvedPart[];
+  members: ResolvedMember[];
   components: ResolvedComponent[];
   fasteners: ResolvedFastener[];
+  connections: ResolvedConnection[];
 };
 
 export type ValidationIssue = {
@@ -165,45 +243,45 @@ function parseVec3(
   return [parseDimension(input[0]), parseDimension(input[1]), parseDimension(input[2])];
 }
 
-function resolvePartHoles(
-  rawHoles: RawHole[],
+function resolveMemberBores(
+  rawBores: RawBore[],
   stockId: string,
-): { holes: ResolvedHole[]; issues: ValidationIssue[] } {
+): { bores: ResolvedBore[]; issues: ValidationIssue[] } {
   const issues: ValidationIssue[] = [];
   const parsed: { face: FaceId; at: [number, number]; diameter: number; depth?: number }[] = [];
-  for (const [hIndex, hole] of rawHoles.entries()) {
+  for (const [bIndex, bore] of rawBores.entries()) {
     try {
       parsed.push({
-        face: hole.face,
-        at: [parseDimension(hole.at[0]), parseDimension(hole.at[1])],
-        diameter: parseDimension(hole.diameter),
-        depth: hole.depth === undefined ? undefined : parseDimension(hole.depth),
+        face: bore.face,
+        at: [parseDimension(bore.at[0]), parseDimension(bore.at[1])],
+        diameter: parseDimension(bore.diameter),
+        depth: bore.depth === undefined ? undefined : parseDimension(bore.depth),
       });
     } catch (error) {
       issues.push({
         message: error instanceof Error ? error.message : String(error),
-        path: [hIndex],
+        path: [bIndex],
       });
     }
   }
-  if (issues.length > 0) return { holes: [], issues };
+  if (issues.length > 0) return { bores: [], issues };
 
   const catalog = getCatalogPart(stockId);
-  if (!catalog) return { holes: [], issues: [] };
+  if (!catalog) return { bores: [], issues: [] };
 
-  const holes: ResolvedHole[] = [];
-  for (const [hIndex, hole] of parsed.entries()) {
+  const bores: ResolvedBore[] = [];
+  for (const [bIndex, bore] of parsed.entries()) {
     try {
-      holes.push(placeHole(hole, catalog.size));
+      bores.push(placeBore(bore, catalog.size));
     } catch (error) {
       issues.push({
         message: error instanceof Error ? error.message : String(error),
-        path: [hIndex],
+        path: [bIndex],
       });
     }
   }
-  if (issues.length > 0) return { holes: [], issues };
-  return { holes, issues: [] };
+  if (issues.length > 0) return { bores: [], issues };
+  return { bores, issues: [] };
 }
 
 function resolveCut(cut: RawCut): ResolvedCut {
@@ -224,19 +302,119 @@ function vecLength(v: [number, number, number]): number {
   return Math.hypot(v[0], v[1], v[2]);
 }
 
-function occurrenceCount(placements: { part: string }[], partId: string): number {
-  return placements.filter((placement) => placement.part === partId).length;
+function occurrenceCount(placements: { id: string }[], memberId: string): number {
+  return placements.filter((placement) => placement.id === memberId).length;
 }
 
-function resolveFastener(
+type MemberRefOptions = {
+  impliedComponentId?: string;
+  requireComponent: boolean;
+  memberIds: Set<string>;
+  componentById: Map<string, { id: string; members: { id: string }[] }>;
+  /** Noun used in error text, e.g. "Fastener" or "Connection". */
+  owner: string;
+};
+
+function resolveMemberRef(
+  member: { component?: string; id: string; index?: number },
+  path: Array<string | number>,
+  options: MemberRefOptions,
+  issues: ValidationIssue[],
+): ResolvedConnectionMember | undefined {
+  if (options.requireComponent) {
+    if (!member.component) {
+      issues.push({
+        message: `Document-level ${options.owner.toLowerCase()} members must include \`component\``,
+        path: [...path, "component"],
+      });
+      return undefined;
+    }
+  } else if (member.component) {
+    issues.push({
+      message: `Component-level ${options.owner.toLowerCase()} members must not include \`component\` (it is implied)`,
+      path: [...path, "component"],
+    });
+    return undefined;
+  }
+
+  const componentId = options.requireComponent ? member.component : options.impliedComponentId;
+  if (!componentId) {
+    issues.push({
+      message: `${options.owner} member is missing a component`,
+      path,
+    });
+    return undefined;
+  }
+
+  const component = options.componentById.get(componentId);
+  if (!component) {
+    issues.push({
+      message: `Unknown component "${componentId}"`,
+      path: [...path, "component"],
+    });
+    return undefined;
+  }
+
+  if (!options.memberIds.has(member.id)) {
+    issues.push({
+      message: `Unknown member "${member.id}". ${options.owner} members reference member ids, not labels.`,
+      path: [...path, "id"],
+    });
+    return undefined;
+  }
+
+  const placed = occurrenceCount(component.members, member.id);
+  if (placed === 0) {
+    issues.push({
+      message: `Member "${member.id}" is not placed in component "${componentId}"`,
+      path: [...path, "id"],
+    });
+    return undefined;
+  }
+
+  const index = member.index ?? 0;
+  if (index >= placed) {
+    issues.push({
+      message: `Placement index ${index} is out of range for member "${member.id}" in "${componentId}" (${placed} placement${placed === 1 ? "" : "s"})`,
+      path: [...path, "index"],
+    });
+    return undefined;
+  }
+
+  return { component: componentId, id: member.id, index };
+}
+
+function parseMeasure(
+  input: DimensionInput,
+  path: Array<string | number>,
+  label: string,
+  issues: ValidationIssue[],
+  mode: "nonnegative" | "positive",
+): number | undefined {
+  let value: number;
+  try {
+    value = parseDimension(input);
+  } catch (error) {
+    issues.push({
+      message: error instanceof Error ? error.message : String(error),
+      path,
+    });
+    return undefined;
+  }
+  if (mode === "positive" ? !(value > 0) : value < 0) {
+    issues.push({
+      message: mode === "positive" ? `${label} must be greater than 0` : `${label} must be 0 or greater`,
+      path,
+    });
+    return undefined;
+  }
+  return value;
+}
+
+function resolveExplicitFastener(
   raw: RawFastener,
   path: Array<string | number>,
-  options: {
-    impliedComponentId?: string;
-    requireComponent: boolean;
-    partIds: Set<string>;
-    componentById: Map<string, { id: string; parts: { part: string }[] }>;
-  },
+  options: MemberRefOptions,
   issues: ValidationIssue[],
 ): ResolvedFastener | undefined {
   const catalog = getCatalogPart(raw.stock);
@@ -249,78 +427,19 @@ function resolveFastener(
     return undefined;
   }
 
-  if (subtype === "screw") {
-    if (raw.members.length !== 2) {
-      issues.push({
-        message: `Screws require exactly two members, got ${raw.members.length}`,
-        path: [...path, "members"],
-      });
-      return undefined;
-    }
+  if (subtype === "screw" && raw.members.length !== 2) {
+    issues.push({
+      message: `Screws require exactly two members, got ${raw.members.length}`,
+      path: [...path, "members"],
+    });
+    return undefined;
   }
 
   const members: ResolvedFastenerMember[] = [];
   for (const [mIndex, member] of raw.members.entries()) {
     const memberPath = [...path, "members", mIndex];
-    if (options.requireComponent) {
-      if (!member.component) {
-        issues.push({
-          message: "Document-level fastener members must include `component`",
-          path: [...memberPath, "component"],
-        });
-        continue;
-      }
-    } else if (member.component) {
-      issues.push({
-        message: "Component-level fastener members must not include `component` (it is implied)",
-        path: [...memberPath, "component"],
-      });
-      continue;
-    }
-
-    const componentId = options.requireComponent ? member.component : options.impliedComponentId;
-    if (!componentId) {
-      issues.push({
-        message: "Fastener member is missing a component",
-        path: memberPath,
-      });
-      continue;
-    }
-
-    const component = options.componentById.get(componentId);
-    if (!component) {
-      issues.push({
-        message: `Unknown component "${componentId}"`,
-        path: [...memberPath, "component"],
-      });
-      continue;
-    }
-
-    if (!options.partIds.has(member.part)) {
-      issues.push({
-        message: `Unknown part "${member.part}". Fastener members reference part ids, not labels.`,
-        path: [...memberPath, "part"],
-      });
-      continue;
-    }
-
-    const placed = occurrenceCount(component.parts, member.part);
-    if (placed === 0) {
-      issues.push({
-        message: `Part "${member.part}" is not placed in component "${componentId}"`,
-        path: [...memberPath, "part"],
-      });
-      continue;
-    }
-
-    const index = member.index ?? 0;
-    if (index >= placed) {
-      issues.push({
-        message: `Placement index ${index} is out of range for part "${member.part}" in "${componentId}" (${placed} placement${placed === 1 ? "" : "s"})`,
-        path: [...memberPath, "index"],
-      });
-      continue;
-    }
+    const ref = resolveMemberRef(member, memberPath, options, issues);
+    if (!ref) continue;
 
     let at: [number, number, number];
     let direction: [number, number, number] | undefined;
@@ -338,7 +457,7 @@ function resolveFastener(
     if (subtype === "screw") {
       if (!direction) {
         issues.push({
-          message: "Screw members require `direction` (part-local, head → tip)",
+          message: "Screw members require `direction` (member-local, head → tip)",
           path: [...memberPath, "direction"],
         });
         continue;
@@ -358,20 +477,127 @@ function resolveFastener(
       continue;
     }
 
-    members.push({
-      component: componentId,
-      part: member.part,
-      index,
-      at,
-      direction,
-    });
+    members.push({ ...ref, at, direction });
   }
 
-  if (members.length !== raw.members.length) {
+  if (members.length !== raw.members.length) return undefined;
+  return { stock: raw.stock, members };
+}
+
+function resolveConnectionFastener(
+  raw: RawConnectionFastener,
+  path: Array<string | number>,
+  memberIds: Set<string>,
+  issues: ValidationIssue[],
+): ResolvedConnectionFastener | undefined {
+  const catalog = getCatalogPart(raw.stock);
+  const subtype = getFastenerSubtype(raw.stock);
+  if (!catalog || catalog.kind !== "fastener" || !subtype) {
+    issues.push({
+      message: `Unknown fastener stock "${raw.stock}". Fasteners must use a catalog id of kind fastener.`,
+      path: [...path, "stock"],
+    });
+    return undefined;
+  }
+  if (subtype !== raw.kind) {
+    issues.push({
+      message: `Stock "${raw.stock}" is a ${subtype}, not a ${raw.kind}.`,
+      path: [...path, "stock"],
+    });
     return undefined;
   }
 
-  return { stock: raw.stock, members };
+  if (raw.kind === "glue") {
+    const variant = raw.variant ?? { kind: "patch" as const };
+    if (variant.kind === "patch") return { kind: "glue", stock: raw.stock, variant: { kind: "patch" } };
+    const edge = parseMeasure(variant.edge, [...path, "variant", "edge"], "edge", issues, "nonnegative");
+    if (edge === undefined) return undefined;
+    return { kind: "glue", stock: raw.stock, variant: { kind: "edge", edge } };
+  }
+
+  if (raw.kind === "bolt") {
+    let at: [number, number] | undefined;
+    if (raw.variant.at) {
+      try {
+        at = [parseDimension(raw.variant.at[0]), parseDimension(raw.variant.at[1])];
+      } catch (error) {
+        issues.push({
+          message: error instanceof Error ? error.message : String(error),
+          path: [...path, "variant", "at"],
+        });
+        return undefined;
+      }
+    }
+    return { kind: "bolt", stock: raw.stock, variant: { kind: "through", at } };
+  }
+
+  const variant = raw.variant;
+  if (variant.kind === "angle-bracket" && !memberIds.has(variant.bracket)) {
+    issues.push({
+      message: `angle-bracket bracket "${variant.bracket}" must be one of the connection members`,
+      path: [...path, "variant", "bracket"],
+    });
+    return undefined;
+  }
+
+  if (variant.kind === "four-corners" || variant.kind === "angle-bracket") {
+    const edge = parseMeasure(variant.edge, [...path, "variant", "edge"], "edge", issues, "nonnegative");
+    if (edge === undefined) return undefined;
+    if (variant.kind === "four-corners") return { kind: "screw", stock: raw.stock, variant: { kind: "four-corners", edge } };
+    return {
+      kind: "screw",
+      stock: raw.stock,
+      variant: { kind: "angle-bracket", bracket: variant.bracket, edge },
+    };
+  }
+
+  const edge = variant.kind === "perimeter"
+    ? parseMeasure(variant.edge, [...path, "variant", "edge"], "edge", issues, "nonnegative")
+    : undefined;
+  if (variant.kind === "perimeter" && edge === undefined) return undefined;
+  const separation = parseMeasure(
+    variant.separation,
+    [...path, "variant", "separation"],
+    "separation",
+    issues,
+    "positive",
+  );
+  if (separation === undefined) return undefined;
+  if (variant.kind === "perimeter") {
+    return {
+      kind: "screw",
+      stock: raw.stock,
+      variant: { kind: "perimeter", edge: edge ?? 0, separation, justify: variant.justify },
+    };
+  }
+  return {
+    kind: "screw",
+    stock: raw.stock,
+    variant: { kind: "centered", separation, justify: variant.justify },
+  };
+}
+
+function resolveConnection(
+  raw: RawConnection,
+  path: Array<string | number>,
+  options: MemberRefOptions,
+  issues: ValidationIssue[],
+): ResolvedConnection | undefined {
+  const members: ResolvedConnectionMember[] = [];
+  for (const [mIndex, member] of raw.members.entries()) {
+    const ref = resolveMemberRef(member, [...path, "members", mIndex], options, issues);
+    if (ref) members.push(ref);
+  }
+  if (members.length !== raw.members.length) return undefined;
+
+  const memberIds = new Set(members.map((member) => member.id));
+  const fasteners: ResolvedConnectionFastener[] = [];
+  for (const [fIndex, fastener] of raw.fasteners.entries()) {
+    const resolved = resolveConnectionFastener(fastener, [...path, "fasteners", fIndex], memberIds, issues);
+    if (resolved) fasteners.push(resolved);
+  }
+  if (fasteners.length !== raw.fasteners.length) return undefined;
+  return { members, fasteners };
 }
 
 /**
@@ -394,11 +620,11 @@ export function validateDocument(input: unknown): {
   const issues: ValidationIssue[] = [];
   const raw = parsed.data;
 
-  for (const [index, part] of raw.parts.entries()) {
-    if (part.id !== undefined && !isValidId(part.id)) {
+  for (const [index, member] of raw.members.entries()) {
+    if (member.id !== undefined && !isValidId(member.id)) {
       issues.push({
-        message: `Invalid id "${part.id}". Ids must be lower-kebab-case with a numeric suffix, e.g. leg-1.`,
-        path: ["parts", index, "id"],
+        message: `Invalid id "${member.id}". Ids must be lower-kebab-case with a numeric suffix, e.g. leg-1.`,
+        path: ["members", index, "id"],
       });
     }
   }
@@ -410,105 +636,118 @@ export function validateDocument(input: unknown): {
       });
     }
   }
-  if (issues.length > 0) {
-    return { issues };
-  }
+  if (issues.length > 0) return { issues };
 
-  let identifiedParts: (RawPart & { id: string })[];
+  let identifiedMembers: (RawMember & { id: string })[];
   let identifiedComponents: (RawComponent & { id: string })[];
   try {
-    const assigned = assignIds([...raw.parts, ...raw.components]);
-    identifiedParts = assigned.slice(0, raw.parts.length) as (RawPart & { id: string })[];
-    identifiedComponents = assigned.slice(raw.parts.length) as (RawComponent & { id: string })[];
+    const assigned = assignIds([...raw.members, ...raw.components]);
+    identifiedMembers = assigned.slice(0, raw.members.length) as (RawMember & { id: string })[];
+    identifiedComponents = assigned.slice(raw.members.length) as (RawComponent & { id: string })[];
   } catch (error) {
     issues.push({
       message: error instanceof Error ? error.message : String(error),
-      path: ["parts"],
+      path: ["members"],
     });
     return { issues };
   }
 
-  const partIds = new Set(identifiedParts.map((part) => part.id));
+  const memberIds = new Set(identifiedMembers.map((member) => member.id));
   const componentById = new Map(identifiedComponents.map((component) => [component.id, component]));
 
-  const parts: ResolvedPart[] = [];
-  for (const [index, part] of identifiedParts.entries()) {
+  const members: ResolvedMember[] = [];
+  for (const [index, member] of identifiedMembers.entries()) {
     let cuts: ResolvedCut[];
     try {
-      cuts = (part.cuts ?? []).map(resolveCut);
+      cuts = (member.cuts ?? []).map(resolveCut);
     } catch (error) {
       issues.push({
         message: error instanceof Error ? error.message : String(error),
-        path: ["parts", index, "cuts"],
+        path: ["members", index, "cuts"],
       });
       continue;
     }
 
-    const resolvedHoles = resolvePartHoles(part.holes, part.stock);
-    for (const issue of resolvedHoles.issues) {
+    const resolvedBores = resolveMemberBores(member.bores, member.stock);
+    for (const issue of resolvedBores.issues) {
       issues.push({
         message: issue.message,
-        path: ["parts", index, "holes", ...issue.path],
+        path: ["members", index, "bores", ...issue.path],
       });
     }
-    if (resolvedHoles.issues.length > 0) continue;
+    if (resolvedBores.issues.length > 0) continue;
 
-    parts.push({
-      id: part.id,
-      label: part.label,
-      stock: part.stock,
+    members.push({
+      id: member.id,
+      label: member.label,
+      stock: member.stock,
       cuts,
-      holes: resolvedHoles.holes,
+      bores: resolvedBores.bores,
     });
   }
 
   const components: ResolvedComponent[] = [];
   for (const [cIndex, component] of identifiedComponents.entries()) {
     const placements: ResolvedPlacement[] = [];
-    for (const [pIndex, placement] of component.parts.entries()) {
-      if (!partIds.has(placement.part)) {
+    for (const [pIndex, placement] of component.members.entries()) {
+      if (!memberIds.has(placement.id)) {
         issues.push({
-          message: `Unknown part "${placement.part}". Component placements reference part ids, not labels.`,
-          path: ["components", cIndex, "parts", pIndex, "part"],
+          message: `Unknown member "${placement.id}". Component placements reference member ids, not labels.`,
+          path: ["components", cIndex, "members", pIndex, "id"],
         });
         continue;
       }
       try {
         placements.push({
-          part: placement.part,
+          id: placement.id,
           position: parseVec3(placement.position),
           rotation: parseVec3(placement.rotation),
         });
       } catch (error) {
         issues.push({
           message: error instanceof Error ? error.message : String(error),
-          path: ["components", cIndex, "parts", pIndex],
+          path: ["components", cIndex, "members", pIndex],
         });
       }
     }
 
+    const refOptions = (requireComponent: boolean): MemberRefOptions => ({
+      impliedComponentId: requireComponent ? undefined : component.id,
+      requireComponent,
+      memberIds,
+      componentById,
+      owner: "Fastener",
+    });
+
     const fasteners: ResolvedFastener[] = [];
     for (const [fIndex, fastener] of component.fasteners.entries()) {
-      const resolved = resolveFastener(
+      const resolved = resolveExplicitFastener(
         fastener,
         ["components", cIndex, "fasteners", fIndex],
-        {
-          impliedComponentId: component.id,
-          requireComponent: false,
-          partIds,
-          componentById,
-        },
+        refOptions(false),
         issues,
       );
       if (resolved) fasteners.push(resolved);
+    }
+
+    const connections: ResolvedConnection[] = [];
+    for (const [nIndex, connection] of component.connections.entries()) {
+      const resolved = resolveConnection(
+        connection,
+        ["components", cIndex, "connections", nIndex],
+        { ...refOptions(false), owner: "Connection" },
+        issues,
+      );
+      if (resolved) connections.push(resolved);
     }
 
     try {
       components.push({
         id: component.id,
         label: component.label,
-        parts: placements,
+        members: placements,
         fasteners,
+        connections,
         position: parseVec3(component.position),
         rotation: parseVec3(component.rotation),
       });
@@ -520,32 +759,35 @@ export function validateDocument(input: unknown): {
     }
   }
 
+  const docOptions = (owner: string): MemberRefOptions => ({
+    requireComponent: true,
+    memberIds,
+    componentById,
+    owner,
+  });
+
   const fasteners: ResolvedFastener[] = [];
   for (const [fIndex, fastener] of raw.fasteners.entries()) {
-    const resolved = resolveFastener(
-      fastener,
-      ["fasteners", fIndex],
-      {
-        requireComponent: true,
-        partIds,
-        componentById,
-      },
-      issues,
-    );
+    const resolved = resolveExplicitFastener(fastener, ["fasteners", fIndex], docOptions("Fastener"), issues);
     if (resolved) fasteners.push(resolved);
   }
 
-  if (issues.length > 0) {
-    return { issues };
+  const connections: ResolvedConnection[] = [];
+  for (const [nIndex, connection] of raw.connections.entries()) {
+    const resolved = resolveConnection(connection, ["connections", nIndex], docOptions("Connection"), issues);
+    if (resolved) connections.push(resolved);
   }
+
+  if (issues.length > 0) return { issues };
 
   return {
     document: {
       version: 1,
       name: raw.name,
-      parts,
+      members,
       components,
       fasteners,
+      connections,
     },
     issues,
   };

@@ -1,3 +1,4 @@
+import { BOX_FACE_ORDER, faceQuad } from "./faces";
 import type { Face, Polyhedron, Vec3 } from "./types";
 import { add, cross, dot, normalize, sub, uniquePoints } from "./vec3";
 
@@ -7,25 +8,7 @@ export function faceNormal(face: Face): Vec3 {
 }
 
 export function boxPolyhedron(size: Vec3): Polyhedron {
-  const [l, w, t] = size;
-  const v: Vec3[] = [
-    [0, 0, 0],
-    [l, 0, 0],
-    [l, 0, w],
-    [0, 0, w],
-    [0, t, 0],
-    [l, t, 0],
-    [l, t, w],
-    [0, t, w],
-  ];
-  return [
-    [v[0], v[1], v[2], v[3]],
-    [v[4], v[7], v[6], v[5]],
-    [v[0], v[4], v[5], v[1]],
-    [v[3], v[2], v[6], v[7]],
-    [v[0], v[3], v[7], v[4]],
-    [v[1], v[5], v[6], v[2]],
-  ];
+  return BOX_FACE_ORDER.map((id) => faceQuad(id, size));
 }
 
 /** Axis-aligned box with min-corner `origin` and size `size`. */
@@ -44,7 +27,7 @@ export function lBracketPolyhedron(size: Vec3): Polyhedron {
 }
 
 /**
- * Flat L-bracket: a single-plane L in the XZ (L×W) plane.
+ * Flat L-bracket: a single-plane L between `LxW@0` and `LxW@1` (the XZ plane).
  * `size` is [leg length along +X/+Z, arm width, thickness along +Y].
  * Origin at the outer corner; both legs run from that corner.
  */

@@ -5,7 +5,10 @@ import type { Plane, Polyhedron, Vec3 } from "./types";
 import { axisCoord } from "./types";
 import { cross, dot, normalize, scale, sub } from "./vec3";
 
-/** Default miter is parallel to the T axis (2), spanning W. When cutting on T, span W (1). */
+/**
+ * Default miter is parallel to T, so a length cut runs from `LxT@0` to `LxT@1`
+ * and is read on `LxW@0` and `LxW@1`. When cutting on T, span W (around axis 1).
+ */
 export function defaultAround(cutAxis: Axis): Axis {
   return cutAxis === 2 ? 1 : 2;
 }

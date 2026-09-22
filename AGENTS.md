@@ -12,5 +12,5 @@ This block is written and re-added by `next dev` — verify at `node_modules/nex
 
 - Parts keep their **trade names** (a 2×4 is still called a 2×4). Every **numeric** dimension is **L×W×T**, longest → shortest. A 2×4×8 is `[96, 3.5, 1.5]` = 8′ × 3.5″ × 1.5″.
 - Cut axes index that tuple: **0 = L**, **1 = W**, **2 = T**.
-- Default local frame: **X = L**, **Z = W**, **Y = T** (world is right-handed, Y-up). Default placement sits the L×W face on the ground, thickness along +Y.
-- Faces are named by the dimensions that span them: **L×W** (wide face, normal ±Y), **L×T** (edge, normal ±Z), **W×T** (end, normal ±X).
+- Default local frame: **X = L**, **Z = W**, **Y = T** (world is right-handed, Y-up). Default placement sits `LxW@0` on the ground, thickness along +Y.
+- A part face is the two spanning axes (earlier dimension first: L, then W, then T) plus `@0` or `@1`. `@0` is the plane through the origin; `@1` is the plane at the stock extent of the other axis. `LxW@0` / `LxW@1` are the wide faces (normal −Y / +Y), `LxT@0` / `LxT@1` the edges (normal −Z / +Z), `WxT@0` / `WxT@1` the ends (normal −X / +X). A crosscut does not move these planes; the cut cap is not a face id.

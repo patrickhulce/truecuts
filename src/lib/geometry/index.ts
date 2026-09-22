@@ -24,6 +24,19 @@ export {
   polyhedronVolume,
   vertexCount,
 } from "./solids";
+export {
+  BOX_FACE_ORDER,
+  FACE_IDS,
+  faceFrame,
+  faceQuad,
+  isFaceId,
+  parseFaceId,
+  placeHole,
+  pointOnFace,
+  type FaceFrame,
+  type FaceId,
+  type PlacedHole,
+} from "./faces";
 export { clipPolyhedron } from "./clip";
 export { applyCuts, cutToPlane, defaultAround } from "./cuts";
 export { applyPose, rotateEulerXYZ } from "./pose";

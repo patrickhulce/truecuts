@@ -6,6 +6,7 @@ import { useMemo, useRef, useState, type KeyboardEvent, type PointerEvent } from
 import * as THREE from "three";
 import { parseInstanceKey } from "@/lib/fasteners";
 import { patchesFor, patchNeighbor, type SharedPatch, type Vec3 } from "@/lib/geometry";
+import type { ResolvedHole } from "@/lib/schema";
 import type { SceneFastener, SceneModel, ScenePartInstance } from "@/lib/scene";
 import { formatInches } from "@/lib/units";
 import { ContactOverlay } from "./ContactOverlay";
@@ -63,6 +64,11 @@ function averageOffset(fastener: SceneFastener, worldOffsets: Map<string, Vec3>)
   return [sum[0] / n, sum[1] / n, sum[2] / n];
 }
 
+function formatHole(hole: ResolvedHole): string {
+  const depth = hole.through ? "through" : `${formatInches(hole.depth)} deep`;
+  return `${hole.face} at ${formatInches(hole.at[0])}, ${formatInches(hole.at[1])} · dia ${formatInches(hole.diameter)} · ${depth}`;
+}
+
 function fastenerSummary(fasteners: SceneFastener[]): string {
   if (fasteners.length === 0) return "none";
   const counts = new Map<string, number>();
@@ -103,6 +109,10 @@ function SelectionCard({
         <dd className="text-[#d6c3a3]">{instance.fastened ? "yes" : "no"}</dd>
         <dt>fasteners</dt>
         <dd className="text-[#d6c3a3]">{fastenerSummary(attachedFasteners)}</dd>
+        <dt>holes</dt>
+        <dd className="text-[#d6c3a3]">
+          {instance.holes.length === 0 ? "none" : instance.holes.map(formatHole).join("; ")}
+        </dd>
         <dt>contacts</dt>
         <dd className="text-[#d6c3a3]">
           {patches.length === 0

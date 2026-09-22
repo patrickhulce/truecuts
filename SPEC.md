@@ -1,22 +1,26 @@
 # TrueCuts Specification
 
-TrueCuts is a carpenter's CAD planner. A project is a YAML document: a list of **parts** cut from catalog stock, assembled into **components** in 3D, then joined with **fasteners**. The editor is the source of truth in v1. The 3D view is a live visualization of that document.
+TrueCuts is a carpenter's CAD planner. A project is a YAML document: **members** cut from catalog **stock**, assembled into **components**, then joined by **connections** (recipes of **fasteners** and the **bores** those fasteners need). A **part** is anything on the purchase and cut list — a member or a fastener. The editor is the source of truth in v1. The 3D view is a live visualization of that document.
 
-This document is the format reference. v1 implements parts (lumber, sheet goods, and L-brackets), planar cuts, components, fasteners (screws, wood glue), and rendering. Remaining hardware catalog entries and procedural components are specified here for later versions.
+This document is the format reference. v1 implements members (lumber, sheet goods, and L-brackets), planar cuts, components, connections (screws and wood glue), explicit fasteners as a hand-placed escape hatch, and rendering. Remaining hardware catalog entries and procedural components are specified here for later versions.
 
 ## Concepts
 
 | Term | Meaning |
 | --- | --- |
-| Catalog part | A predefined stock item (a 2×4×8, a ¾″ 4×8 plywood sheet, a hinge, …). Identified by a catalog id such as `2x4x8`. |
-| Part | One piece of the project, made by applying an ordered list of cuts to a catalog part. |
-| Component | A named assembly: placed parts (and, later, nested components) relative to a local origin, then placed in world space. |
-| Fastener | A catalogued connector (screw or glue). It references two or more placed parts at a centerpoint on each, and is never cut stock. |
+| Component | A large grouping of a build: placed members (and, later, nested components) relative to a local origin, then placed in world space. |
+| Member | A block of wood, or a hardware part such as a bracket, cut from stock. YAML key `members`. |
+| Stock | Raw material from the store. A catalog entry such as `2x4x8`. |
+| Cut | A planar slice that converts stock into a member. |
+| Bore | A depression or hole drilled in a member. Authored bores use YAML key `bores`. Pilot and clearance bores for a connection are derived, not authored. |
+| Fastener | A screw, glue bead, bolt, dowel, cam, bracket, or similar that connects members. A fastener may be a rendered member (a bracket) or a non-stock instance (a screw or glue bead). |
+| Connection | The system of fastener recipes, and the bores those recipes imply, that joins two or more members. |
+| Part | Any member or fastener in the build — the purchase and cut list. |
 | Procedural component | A generator that emits a component from parameters (a drawer of given W×D×H). Specified below; not implemented in v1. |
 
 ## Identity
 
-Every part and every component has:
+Every member and every component has:
 
 - `label` (required) — human-readable name, any string.
 - `id` (optional) — stable machine id. References always use `id`, never `label`.
@@ -36,7 +40,7 @@ Explicit ids must match:
 
 Examples: `leg-1`, `top-1`, `cabinet-door-12`. `Leg`, `rail`, and `top_1` are invalid.
 
-Part ids and component ids share one document-wide namespace. Duplicate ids are an error. Component `parts[].part` values must resolve to a part id.
+Member ids and component ids share one document-wide namespace. Duplicate ids are an error. Component `members[].id` values must resolve to a member id.
 
 ## Units and coordinates
 
@@ -45,14 +49,14 @@ Part ids and component ids share one document-wide namespace. Duplicate ids are 
 - Parts keep their **trade names** (a 2×4 is still called a 2×4). Every **numeric** dimension is **L×W×T**, longest → shortest. A 2×4×8 is `[96, 3.5, 1.5]` = 8′ × 3.5″ × 1.5″.
 - Cut axes index that tuple: **0 = length (L)**, **1 = width (W)**, **2 = thickness (T)**.
 - Default local frame: **X = L**, **Z = W**, **Y = T**. Default placement sits `LxW@0` on the ground, thickness along +Y.
-- A part face is the two axes that span it, earlier dimension first (L, then W, then T), plus which side:
+- A member face is the two axes that span it, earlier dimension first (L, then W, then T), plus which side:
   - `@0` — the plane through the part origin (coordinate 0 on the axis that is not in the name)
   - `@1` — the opposite plane, at the catalog stock extent of that axis
   - `LxW@0` / `LxW@1` — wide faces, T = 0 / T = stock T, outward normal −Y / +Y
   - `LxT@0` / `LxT@1` — edges, W = 0 / W = stock W, outward normal −Z / +Z
   - `WxT@0` / `WxT@1` — ends, L = 0 / L = stock L, outward normal −X / +X
 - These ids name stock planes. A crosscut does not move `@1`; the cut cap is a new mesh polygon and is not a face id.
-- Part origin is the **min corner** of the uncut stock. A cut's `at` is measured from that origin along the cut axis (L, W, or T — not a world XYZ coordinate). A position on a face is measured from that origin along the two axes written in the face id.
+- Member origin is the **min corner** of the uncut stock. A cut's `at` is measured from that origin along the cut axis (L, W, or T — not a world XYZ coordinate). A position on a face is measured from that origin along the two axes written in the face id.
 - Rotations are Euler **XYZ** in **degrees**.
 - Positions are `[x, y, z]` in inches (numbers or dimension strings).
 
@@ -78,7 +82,7 @@ Strings that contain `"` must be YAML-quoted. Bare numbers are inches and are pr
 ```yaml
 version: 1
 name: Sawhorse
-parts:
+members:
   - label: Leg                 # id defaults to leg-1
     stock: 2x4x8               # L×W×T = 8′ × 3.5″ × 1.5″
     cuts:
@@ -96,11 +100,19 @@ parts:
       - { axis: 1, angle: 90, at: 30 }
 components:
   - label: Horse               # id defaults to horse-1
-    parts:
+    members:
       # Standing 2×4: rotation [90, 90, 0] sends L up world Y.
-      - { part: leg-1, position: [0, 0, 0], rotation: [90, 90, 0] }
+      - { id: leg-1, position: [0, 0, 0], rotation: [90, 90, 0] }
       # Sheet goods sit flat by default (T along +Y); no rotation needed.
-      - { part: top-1, position: [0, 34, 0], rotation: [0, 0, 0] }
+      - { id: top-1, position: [0, 34, 0], rotation: [0, 0, 0] }
+    connections:
+      - members:
+          - { id: top-1 }
+          - { id: leg-1 }
+        fasteners:
+          - kind: screw
+            stock: screw-wood-8x2
+            variant: { kind: four-corners, edge: 0.75 }
     position: [0, 0, 0]
     rotation: [0, 0, 0]
 ```
@@ -109,17 +121,18 @@ components:
 
 - `version` — must be `1`.
 - `name` — project title.
-- `parts` — list of parts (default empty).
-- `components` — list of components (default empty). Only parts referenced by a component are drawn.
-- `fasteners` — document-level fasteners that may join parts in different components (default empty).
+- `members` — list of members (default empty).
+- `components` — list of components (default empty). Only members referenced by a component are drawn.
+- `connections` — document-level connections that may join members in different components (default empty).
+- `fasteners` — hand-placed fastener instances (default empty). Prefer `connections`; this list is the escape hatch.
 
-### Part fields
+### Member fields
 
 - `label` — required.
 - `id` — optional; see Identity.
 - `stock` — catalog id.
 - `cuts` — ordered list of planar cuts, applied in stock-local coordinates. Empty means the full stock piece.
-- `holes` — optional drilled holes on stock faces (default empty). Each hole is cut out of the rendered mesh. Contact and finished volume still use the cut stock before the holes.
+- `bores` — optional drilled bores on stock faces (default empty). Each bore is cut out of the rendered mesh. Contact and finished volume still use the cut stock before the bores. Connection pilot and clearance bores are computed and are not written here.
 
 ### Cut fields
 
@@ -135,15 +148,15 @@ Validation:
 - `short < long`.
 - Both values lie on the stock extent of `axis` (0 through the actual dimension).
 
-### Hole fields
+### Bore fields
 
 - `face` — one of `LxW@0`, `LxW@1`, `LxT@0`, `LxT@1`, `WxT@0`, `WxT@1`.
-- `at` — `[first, second]` on that face, inches from the part origin along the two axes in the order written in the id. `LxW` uses `[L, W]`, `LxT` uses `[L, T]`, `WxT` uses `[W, T]`.
+- `at` — `[first, second]` on that face, inches from the member origin along the two axes in the order written in the id. `LxW` uses `[L, W]`, `LxT` uses `[L, T]`, `WxT` uses `[W, T]`.
 - `diameter` — inches (a number or a dimension string).
 - `depth` — optional inches inward from the face, along the inward normal. Omit it to bore through the stock. The through length is the stock extent of the axis that is not in the face id (`T` for `LxW`, `W` for `LxT`, `L` for `WxT`).
 
 ```yaml
-holes:
+bores:
   - { face: LxW@1, at: [20, 12], diameter: 1, depth: 0.5 }
 ```
 
@@ -154,7 +167,7 @@ Validation:
 - The center lies on the stock face (each `at` component is between 0 and that axis's stock extent).
 - The circle stays inside the stock rectangle (the center is inset from each edge by the radius).
 
-A hole whose center lies in material a later cut removes still resolves. The bore is cut from the remaining mesh. Face ids address the stock planes, not cut caps.
+A bore whose center lies in material a later cut removes still resolves. The bore is cut from the remaining mesh. Face ids address the stock planes, not cut caps.
 
 Cuts are sequential and all measured from the original stock origin. Two end miters:
 
@@ -166,36 +179,75 @@ cuts:
 
 ### Component fields
 
-- `label` / `id` — as for parts.
-- `parts` — placements. `part` is a part **id**. `position` and `rotation` are relative to the component origin (defaults `[0, 0, 0]`).
-- `fasteners` — fasteners whose members are parts of this component. Members omit `component` (it is implied).
+- `label` / `id` — as for members.
+- `members` — placements. `id` is a member **id**. `position` and `rotation` are relative to the component origin (defaults `[0, 0, 0]`).
+- `connections` — connection recipes whose members are placed in this component. Member entries omit `component` (it is implied).
+- `fasteners` — hand-placed fastener instances whose members are placed in this component. Members omit `component`.
 - `position` / `rotation` — place the component in world space.
+
+## Connections
+
+A connection is a recipe. It names two or more placed members and one or more fastener recipes. Expansion finds the contact patch between those members, lays out points, and emits fastener instances plus derived bores. The first member is the screw head side. If a named member never touches another member of the connection, the scene keeps a warning and still renders.
+
+```yaml
+connections:
+  - members:
+      - { id: long-apron-1 }
+      - { id: leg-1 }
+    fasteners:
+      - kind: screw
+        stock: screw-wood-8x2.5
+        variant:
+          kind: perimeter
+          edge: 0.75
+          separation: 4
+          justify: space-between
+```
+
+`members[]` entries are `{ id, component?, index? }`. `component` is required at document level and forbidden inside a component. `index` is the 0-based placement occurrence (default `0`).
+
+`fasteners[]` is a discriminated union on `kind`. `stock` must be a catalog entry of kind `fastener` whose subtype matches `kind`. Each entry is a recipe, not one instance. `variant` is itself a discriminated object, so a layout only carries the options that apply to it:
+
+- `screw` / `four-corners` — `{ edge }`. One screw near each corner of the contact patch, inset by `edge`.
+- `screw` / `angle-bracket` — `{ bracket, edge }`. `bracket` is a member id that is one of the connection members. One screw on the largest patch between the bracket and each other member, at the centroid of the inset.
+- `screw` / `perimeter` — `{ edge, separation, justify }`. Screws around the inset boundary.
+- `screw` / `centered` — `{ separation, justify }`. Screws along the patch centerline. No `edge`.
+- `glue` — `variant` defaults to `{ kind: patch }` (a bead at the patch centroid). `{ kind: edge, edge }` places the bead in from the longest edge.
+- `bolt` / `through` — `{ at? }`. A through-bore at the patch centroid, or at an explicit patch position. No catalog bolt of kind `fastener` ships in v1; the type is reserved.
+
+`justify` is `space-between` or `space-around`. `separation` is the **maximum** gap. The layout chooses the count and the actual distance: `space-between` pins fasteners to both ends of an open path (or starts a closed path at the first vertex); `space-around` leaves a half-gap at each end of an open path (or offsets a closed path by half a gap).
+
+Derived bores merge with the member's authored `bores` for meshing and cut lists:
+
+- **Screw** — a pilot in the receiving member (diameter is 0.7× the screw's major diameter). When the screw is longer than the head member's thickness along the screw axis, a clearance bore (major diameter) goes through the head and the pilot depth is what remains of the screw. A butt screw that does not span the head starts at the contact and pilots only the tip.
+- **Bolt** — a clearance bore through every member the bolt passes, diameter equal to the bolt diameter.
+- **Glue** — no bores.
 
 ## Fasteners
 
-A fastener is catalogued hardware that joins placed parts. It is never a `parts[]` entry (`renderable` is false for stock use). Two YAML homes share the same member idea:
+An explicit fastener is a hand-placed instance: catalog stock plus a centerpoint on each member. It is the escape hatch when a connection recipe is not enough. It is never a `members[]` entry (`renderable` is false for stock use). Connections are the usual way to join members.
 
-**Inside a component** — two (or more, for glue) parts, each with a part-local centerpoint and optional direction:
+**Inside a component** — two (or more, for glue) members, each with a member-local centerpoint and optional direction:
 
 ```yaml
 components:
   - label: Bench
-    parts: [...]
+    members: [...]
     fasteners:
       - stock: screw-wood-8x2.5
         members:
-          - { part: leg-1, at: [0.75, 28.25, 0.75], direction: [0, 0, 1] }
-          - { part: long-apron-1, at: [2, 1.75, 0], direction: [0, 0, -1] }
+          - { id: leg-1, at: [0.75, 28.25, 0.75], direction: [0, 0, 1] }
+          - { id: long-apron-1, at: [2, 1.75, 0], direction: [0, 0, -1] }
 ```
 
-**Document-level** — same `at` / `direction`, plus `component` and `part` so a glue-up can span assemblies:
+**Document-level** — same `at` / `direction`, plus `component` and `id` so a glue-up can span assemblies:
 
 ```yaml
 fasteners:
   - stock: wood-glue
     members:
-      - { component: bench-1, part: top-1, at: [20, 12, 0], direction: [0, 0, 1] }
-      - { component: shelf-1, part: shelf-board-1, at: [10, 6, 0.75], direction: [0, 0, -1] }
+      - { component: bench-1, id: top-1, at: [20, 12, 0], direction: [0, 0, 1] }
+      - { component: shelf-1, id: shelf-board-1, at: [10, 6, 0.75], direction: [0, 0, -1] }
 ```
 
 ### Fastener fields
@@ -205,18 +257,18 @@ fasteners:
 
 ### Member fields
 
-- `part` — part **id**.
+- `id` — member **id**.
 - `component` — required on document-level members; forbidden on component-level members (implied).
-- `index` — 0-based occurrence of that part id in the component's `parts` list (default `0`).
-- `at` — fastener centerpoint in **part-local** space (min-corner origin, same as cuts).
-- `direction` — part-local vector. For screws, first member is the **head side** and the vector points **head → tip**. Required on every screw member; optional for glue.
+- `index` — 0-based occurrence of that member id in the component's `members` list (default `0`).
+- `at` — fastener centerpoint in **member-local** space (min-corner origin, same as cuts).
+- `direction` — member-local vector. For screws, first member is the **head side** and the vector points **head → tip**. Required on every screw member; optional for glue.
 
 Rules:
 
 - Screws require exactly two members. Glue requires two or more.
-- Members must name a part that is actually placed in the referenced component, including L-bracket hardware parts (a screw through a bracket names the bracket and the wood it bites).
+- Members must name a member that is actually placed in the referenced component, including L-bracket hardware members (a screw through a bracket names the bracket and the wood it bites).
 
-Connectivity: fasteners are undirected edges between member instances (glue with N members is a clique). The **seed** is the first part of the first component. Any instance not reachable from the seed is drawn with red/white hazard stripes. The seed itself is always treated as fastened.
+Connectivity: fasteners and expanded connections are undirected edges between member instances (glue with N members is a clique). The **seed** is the first member of the first component. Any instance not reachable from the seed is drawn with red/white hazard stripes. The seed itself is always treated as fastened.
 
 ## Cut semantics
 
@@ -264,7 +316,7 @@ Each cut clips whatever remains. Both ends of a board can be mitered by followin
 
 ## Catalog
 
-v1 ships a small built-in dataset in `src/lib/catalog.ts`. Catalog `size` is always **actual L×W×T**, longest → shortest (a 2×4×8 is 8′ × 3.5″ × 1.5″). Trade names stay (it is still a 2×4). Sheet goods are 96″ × 48″ × listed thickness. Angle L-brackets (`bracket-l-*`, two square flanges at 90°) and flat L-brackets (`bracket-flat-l-*`, a single-plane L plate) are renderable hardware parts; they do not take planar cuts. Fasteners (screws, glue) are rendered as instances. Other hardware is catalogued for later rendering and procedural use.
+v1 ships a small built-in dataset in `src/lib/catalog.ts`. Catalog `size` is always **actual L×W×T**, longest → shortest (a 2×4×8 is 8′ × 3.5″ × 1.5″). Trade names stay (it is still a 2×4). Sheet goods are 96″ × 48″ × listed thickness. Angle L-brackets (`bracket-l-*`, two square flanges at 90°) and flat L-brackets (`bracket-flat-l-*`, a single-plane L plate) are renderable hardware members; they do not take planar cuts. Fasteners (screws, glue) are rendered as instances. Other hardware is catalogued for later rendering and procedural use.
 
 | id | kind | actual L × W × T (in) | notes |
 | --- | --- | --- | --- |
@@ -331,7 +383,7 @@ components:
 Parameters: `width`, `height`, `depth` (panel thickness, default ¾″), optional `overlay` (`full` / `half` / `inset`). Emits:
 
 - A door slab from sheet stock.
-- Hinges (`hinge-overlay-35mm` by default). Count and spacing are chosen from door height (two hinges below ~40″, three above, four above ~80″), inset from the top and bottom (~3″, more on tall doors). After generation the hinge placements are ordinary component parts and can be adjusted in YAML.
+- Hinges (`hinge-overlay-35mm` by default). Count and spacing are chosen from door height (two hinges below ~40″, three above, four above ~80″), inset from the top and bottom (~3″, more on tall doors). After generation the hinge placements are ordinary component members and can be adjusted in YAML.
 
 ```yaml
 components:
@@ -344,11 +396,11 @@ components:
 
 - Left pane: YAML editor (CodeMirror) with a walnut/amber theme and lint markers on diagnostics.
 - Right pane: react-three-fiber scene — warm hemisphere + shadowed directional light, 1″ grid with 12″ sections, orbit controls, wood-tone materials with CAD edges.
-- Click a part to inspect `id`, stock, finished AABB (L × W × T of the cut solid), whether it is fastened, and the fasteners attached to it. Non-selected parts fade so fasteners inside the assembly stay visible; attached fasteners highlight.
-- Fasteners render as solids: screws (head + shank) and glue beads at each member `at`. L-brackets render as ordinary steel parts.
-- Drilled holes are cut out of the rendered part. A blind hole has a bottom at `depth`. A through hole is open on the exit face. A mesh that is not one watertight solid keeps a dark marker instead of a cut.
-- An explode slider radiates parts from the scene center (distance-proportional); fasteners travel with their members.
-- Any part not reachable from the first part of the first component is drawn with red/white hazard stripes.
+- Click a member to inspect `id`, stock, finished AABB (L × W × T of the cut solid), whether it is fastened, and the members attached to it. Non-selected members fade so fasteners inside the assembly stay visible; attached fasteners highlight.
+- Fasteners render as solids: screws (head + shank) and glue beads. Connection recipes expand into those instances. L-brackets render as ordinary steel members.
+- Drilled bores, including derived pilot and clearance bores, are cut out of the rendered member. A blind bore has a bottom at `depth`. A through bore is open on the exit face. A mesh that is not one watertight solid keeps a dark marker instead of a cut.
+- An explode slider radiates members from the scene center (distance-proportional); fasteners travel with their members.
+- Any member not reachable from the first member of the first component is drawn with red/white hazard stripes.
 - The document autosaves to `localStorage`. **Reset demo** restores `examples/demo.yaml`.
 - Invalid YAML or validation errors keep the last good scene from rendering; the viewport shows a placeholder until the document compiles.
 

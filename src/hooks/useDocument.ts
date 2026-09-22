@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { compileDocument } from "@/lib/compile";
 import { DEMO_YAML } from "@/lib/demo";
+import { migrateDocumentYaml } from "@/lib/migrate";
 import {
   canRedo as historyCanRedo,
   canUndo as historyCanUndo,
@@ -30,7 +31,7 @@ function subscribe(onStoreChange: () => void) {
 }
 
 function getSnapshot() {
-  return window.localStorage.getItem(STORAGE_KEY) ?? DEMO_YAML;
+  return migrateDocumentYaml(window.localStorage.getItem(STORAGE_KEY) ?? DEMO_YAML);
 }
 
 function persist(value: string) {
@@ -56,7 +57,7 @@ export function useDocument() {
     let cancelled = false;
     void loadHistory().then((stored) => {
       if (cancelled) return;
-      const current = window.localStorage.getItem(STORAGE_KEY) ?? DEMO_YAML;
+      const current = migrateDocumentYaml(window.localStorage.getItem(STORAGE_KEY) ?? DEMO_YAML);
       let next = stored && stored.entries.length > 0 ? stored : seedHistory(current);
       if (currentYaml(next) !== current) {
         next = pushHistory(next, current);

@@ -4,15 +4,16 @@ import { GizmoHelper, GizmoViewport, Grid, OrbitControls } from "@react-three/dr
 import { Canvas } from "@react-three/fiber";
 import { useMemo, useRef, useState, type KeyboardEvent, type PointerEvent } from "react";
 import * as THREE from "three";
+import { connectionContactPairs } from "@/lib/connections";
 import { parseInstanceKey } from "@/lib/fasteners";
 import { patchesFor, patchNeighbor, type SharedPatch, type Vec3 } from "@/lib/geometry";
-import type { ResolvedHole } from "@/lib/schema";
-import type { SceneFastener, SceneModel, ScenePartInstance } from "@/lib/scene";
+import type { ResolvedBore } from "@/lib/schema";
+import type { SceneConnection, SceneFastener, SceneModel, SceneMemberInstance } from "@/lib/scene";
 import { formatInches } from "@/lib/units";
-import { ContactOverlay } from "./ContactOverlay";
+import { ConnectionFaceOverlay, ContactOverlay } from "./ContactOverlay";
 import { FastenerMesh } from "./FastenerMesh";
 import { PartGizmo, type PartPose } from "./PartGizmo";
-import { PartMesh } from "./PartMesh";
+import { MemberMesh } from "./MemberMesh";
 
 type DraftPose = PartPose & { key: string };
 
@@ -21,8 +22,9 @@ type ViewportProps = {
   selectedKey: string | null;
   hoveredKey: string | null;
   onSelect: (key: string | null) => void;
-  onDeletePart?: (partId: string) => void;
+  onDeleteMember?: (memberId: string) => void;
   onChangePose?: (componentId: string, placementIndex: number, position: Vec3, rotation: Vec3) => void;
+  activeConnection?: SceneConnection | null;
 };
 
 const ZERO: Vec3 = [0, 0, 0];
@@ -64,9 +66,9 @@ function averageOffset(fastener: SceneFastener, worldOffsets: Map<string, Vec3>)
   return [sum[0] / n, sum[1] / n, sum[2] / n];
 }
 
-function formatHole(hole: ResolvedHole): string {
-  const depth = hole.through ? "through" : `${formatInches(hole.depth)} deep`;
-  return `${hole.face} at ${formatInches(hole.at[0])}, ${formatInches(hole.at[1])} · dia ${formatInches(hole.diameter)} · ${depth}`;
+function formatBore(bore: ResolvedBore): string {
+  const depth = bore.through ? "through" : `${formatInches(bore.depth)} deep`;
+  return `${bore.face} at ${formatInches(bore.at[0])}, ${formatInches(bore.at[1])} · dia ${formatInches(bore.diameter)} · ${depth}`;
 }
 
 function fastenerSummary(fasteners: SceneFastener[]): string {
@@ -86,7 +88,7 @@ function SelectionCard({
   patches,
   neighbors,
 }: {
-  instance: ScenePartInstance;
+  instance: SceneMemberInstance;
   attachedFasteners: SceneFastener[];
   patches: SharedPatch[];
   neighbors: string[];
@@ -97,7 +99,7 @@ function SelectionCard({
       <div className="font-medium text-[#f59e0b]">{instance.label}</div>
       <dl className="mt-1 grid grid-cols-[auto_1fr] gap-x-3 gap-y-0.5 text-[#a89070]">
         <dt>id</dt>
-        <dd className="text-[#d6c3a3]">{instance.partId}</dd>
+        <dd className="text-[#d6c3a3]">{instance.memberId}</dd>
         <dt>stock</dt>
         <dd className="text-[#d6c3a3]">{instance.stockLabel}</dd>
         <dt>finished</dt>
@@ -109,9 +111,9 @@ function SelectionCard({
         <dd className="text-[#d6c3a3]">{instance.fastened ? "yes" : "no"}</dd>
         <dt>fasteners</dt>
         <dd className="text-[#d6c3a3]">{fastenerSummary(attachedFasteners)}</dd>
-        <dt>holes</dt>
+        <dt>bores</dt>
         <dd className="text-[#d6c3a3]">
-          {instance.holes.length === 0 ? "none" : instance.holes.map(formatHole).join("; ")}
+          {instance.bores.length === 0 ? "none" : instance.bores.map(formatBore).join("; ")}
         </dd>
         <dt>contacts</dt>
         <dd className="text-[#d6c3a3]">
@@ -130,7 +132,15 @@ function SelectionCard({
   );
 }
 
-export function Viewport({ scene, selectedKey, hoveredKey, onSelect, onDeletePart, onChangePose }: ViewportProps) {
+export function Viewport({
+  scene,
+  selectedKey,
+  hoveredKey,
+  onSelect,
+  onDeleteMember,
+  onChangePose,
+  activeConnection = null,
+}: ViewportProps) {
   const rootRef = useRef<HTMLDivElement>(null);
   const [explode, setExplode] = useState(0);
   const [dragging, setDragging] = useState(false);
@@ -138,11 +148,11 @@ export function Viewport({ scene, selectedKey, hoveredKey, onSelect, onDeletePar
   const [showContacts, setShowContacts] = useState(true);
   const [focusedPatch, setFocusedPatch] = useState<string | null>(null);
 
-  const selected = scene?.components.flatMap((component) => component.parts).find((part) => part.key === selectedKey);
+  const selected = scene?.components.flatMap((component) => component.members).find((part) => part.key === selectedKey);
   const hasSelection = selectedKey !== null;
   const activeDraft = draft?.key === selectedKey ? draft : null;
 
-  const posed = (part: ScenePartInstance): ScenePartInstance => {
+  const posed = (part: SceneMemberInstance): SceneMemberInstance => {
     if (activeDraft?.key !== part.key) return part;
     return { ...part, position: activeDraft.position, rotation: activeDraft.rotation };
   };
@@ -176,9 +186,9 @@ export function Viewport({ scene, selectedKey, hoveredKey, onSelect, onDeletePar
     ) {
       return;
     }
-    if (!selected || !onDeletePart) return;
+    if (!selected || !onDeleteMember) return;
     event.preventDefault();
-    onDeletePart(selected.partId);
+    onDeleteMember(selected.memberId);
   };
 
   const commitDraft = (position: Vec3, rotation: Vec3) => {
@@ -207,11 +217,24 @@ export function Viewport({ scene, selectedKey, hoveredKey, onSelect, onDeletePar
     [scene, selectedKey],
   );
 
+  const editedPatches = useMemo(() => {
+    if (!scene || !selectedKey || !activeConnection) return [];
+    const pairs = connectionContactPairs(activeConnection);
+    return scene.contacts.patches.filter((patch) => {
+      const a = patch.a.instanceKey;
+      const b = patch.b.instanceKey;
+      if (a !== selectedKey && b !== selectedKey) return false;
+      return pairs.some(([left, right]) => (a === left && b === right) || (a === right && b === left));
+    });
+  }, [activeConnection, scene, selectedKey]);
+
+  const editedPatchKeys = useMemo(() => editedPatches.map((patch) => patch.key), [editedPatches]);
+
   const partByKey = useMemo(() => {
-    const map = new Map<string, ScenePartInstance>();
+    const map = new Map<string, SceneMemberInstance>();
     if (!scene) return map;
     for (const component of scene.components) {
-      for (const part of component.parts) map.set(part.key, part);
+      for (const part of component.members) map.set(part.key, part);
     }
     return map;
   }, [scene]);
@@ -229,7 +252,7 @@ export function Viewport({ scene, selectedKey, hoveredKey, onSelect, onDeletePar
     const map = new Map<string, Vec3>();
     if (!scene || explode === 0) return map;
     for (const component of scene.components) {
-      for (const part of component.parts) {
+      for (const part of component.members) {
         map.set(part.key, [
           (part.worldCenter[0] - scene.center[0]) * explode,
           (part.worldCenter[1] - scene.center[1]) * explode,
@@ -295,12 +318,13 @@ export function Viewport({ scene, selectedKey, hoveredKey, onSelect, onDeletePar
           );
           return (
             <group key={component.id} position={component.position} rotation={deg(component.rotation)}>
-              {component.parts.map((part) => (
-                <PartMesh
+              {component.members.map((part) => (
+                <MemberMesh
                   key={part.key}
                   instance={posed(part)}
                   selected={part.key === selectedKey}
                   preview={part.key === hoveredKey && part.key !== selectedKey}
+                  muted={part.key === selectedKey && activeConnection !== null}
                   dimmed={hasSelection && part.key !== selectedKey && part.key !== hoveredKey}
                   offset={toLocalOffset(worldOffsets.get(part.key) ?? ZERO, qInv)}
                   onSelect={selectPart}
@@ -329,6 +353,13 @@ export function Viewport({ scene, selectedKey, hoveredKey, onSelect, onDeletePar
             offset={averageOffset(fastener, worldOffsets)}
           />
         ))}
+        {scene && selectedKey && editedPatches.length > 0 ? (
+          <ConnectionFaceOverlay
+            patches={editedPatches}
+            instanceKey={selectedKey}
+            explodeOffset={worldOffsets.get(selectedKey) ?? ZERO}
+          />
+        ) : null}
         {scene && showContacts && selectedKey ? (
           <ContactOverlay
             contacts={scene.contacts}
@@ -336,9 +367,15 @@ export function Viewport({ scene, selectedKey, hoveredKey, onSelect, onDeletePar
             explodeOffset={worldOffsets.get(selectedKey) ?? ZERO}
             focusedKey={focusedPatch}
             onFocus={setFocusedPatch}
+            omitKeys={editedPatchKeys}
           />
         ) : null}
-        <OrbitControls makeDefault enabled={!dragging} target={[20, 16, 12]} maxPolarAngle={Math.PI / 2.05} />
+        <OrbitControls
+          makeDefault
+          enabled={!dragging}
+          target={[20, 16, 12]}
+          maxPolarAngle={Math.PI / 2 + (20 * Math.PI) / 180}
+        />
         <GizmoHelper alignment="bottom-right" margin={[64, 64]}>
           <GizmoViewport axisColors={["#b45309", "#ca8a04", "#92400e"]} labelColor="#d6c3a3" />
         </GizmoHelper>

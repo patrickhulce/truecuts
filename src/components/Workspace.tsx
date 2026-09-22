@@ -1,10 +1,10 @@
 "use client";
 
 import dynamic from "next/dynamic";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Group, Panel, Separator } from "react-resizable-panels";
 import { useDocument } from "@/hooks/useDocument";
-import { deletePart, setPlacementPose } from "@/lib/edit";
+import { deleteMember, setPlacementPose } from "@/lib/edit";
 import type { Vec3 } from "@/lib/geometry";
 import { EditorPanel } from "./EditorPanel";
 
@@ -24,20 +24,26 @@ export function Workspace() {
   const { text, setText, commit, compiled, reset, undo, redo, canUndo, canRedo } = useDocument();
   const [selectedKey, setSelectedKey] = useState<string | null>(null);
   const [hoveredKey, setHoveredKey] = useState<string | null>(null);
+  const [activeConnectionKey, setActiveConnectionKey] = useState<string | null>(null);
+  const selectedKeyRef = useRef(selectedKey);
+  useEffect(() => {
+    selectedKeyRef.current = selectedKey;
+  }, [selectedKey]);
 
   const handleSelect = useCallback((key: string | null) => {
     setHoveredKey(null);
+    if (selectedKeyRef.current !== key) setActiveConnectionKey(null);
     setSelectedKey(key);
   }, []);
-  const partCount = compiled.document?.parts.length ?? 0;
+  const memberCount = compiled.document?.members.length ?? 0;
   const componentCount = compiled.document?.components.length ?? 0;
   const errorCount = compiled.diagnostics.filter((item) => item.severity === "error").length;
 
-  const handleDeletePart = useCallback(
-    (partId: string) => {
+  const handleDeleteMember = useCallback(
+    (memberId: string) => {
       if (!compiled.document) return;
       try {
-        commit(deletePart(text, partId));
+        commit(deleteMember(text, memberId));
         setHoveredKey(null);
         setSelectedKey(null);
       } catch {
@@ -95,7 +101,7 @@ export function Workspace() {
             {errorCount > 0 ? ` · ${errorCount} error${errorCount === 1 ? "" : "s"}` : ""}
           </span>
           <span className="hidden sm:inline">
-            {partCount} part{partCount === 1 ? "" : "s"} · {componentCount} component
+            {memberCount} member{memberCount === 1 ? "" : "s"} · {componentCount} component
             {componentCount === 1 ? "" : "s"}
           </span>
           <button type="button" onClick={undo} disabled={!canUndo} className={headerButtonClass}>
@@ -114,10 +120,13 @@ export function Workspace() {
           <EditorPanel
             text={text}
             onChangeText={setText}
+            onCommit={commit}
             compiled={compiled}
             selectedKey={selectedKey}
             onSelect={handleSelect}
             onHover={setHoveredKey}
+            activeConnectionKey={activeConnectionKey}
+            onActiveConnection={setActiveConnectionKey}
           />
         </Panel>
         <Separator className="w-1.5 bg-[#3d2a18] hover:bg-[#d97706]" />
@@ -127,8 +136,11 @@ export function Workspace() {
             selectedKey={selectedKey}
             hoveredKey={hoveredKey}
             onSelect={handleSelect}
-            onDeletePart={handleDeletePart}
+            onDeleteMember={handleDeleteMember}
             onChangePose={handleChangePose}
+            activeConnection={
+              compiled.scene?.connections.find((connection) => connection.key === activeConnectionKey) ?? null
+            }
           />
         </Panel>
       </Group>

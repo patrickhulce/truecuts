@@ -62,6 +62,7 @@ type ContactOverlayProps = {
   explodeOffset?: Vec3;
   focusedKey: string | null;
   onFocus: (key: string | null) => void;
+  omitKeys?: string[];
 };
 
 export function ContactOverlay({
@@ -70,9 +71,13 @@ export function ContactOverlay({
   explodeOffset = ZERO,
   focusedKey,
   onFocus,
+  omitKeys = [],
 }: ContactOverlayProps) {
   const [hoveredKey, setHoveredKey] = useState<string | null>(null);
-  const patches = useMemo(() => patchesFor(contacts, instanceKey), [contacts, instanceKey]);
+  const patches = useMemo(
+    () => patchesFor(contacts, instanceKey).filter((patch) => !omitKeys.includes(patch.key)),
+    [contacts, instanceKey, omitKeys],
+  );
 
   const meshes = useMemo(
     () =>
@@ -147,6 +152,52 @@ export function ContactOverlay({
           <lineBasicMaterial color="#38bdf8" />
         </lineLoop>
       ) : null}
+    </group>
+  );
+}
+
+export function ConnectionFaceOverlay({
+  patches,
+  instanceKey,
+  explodeOffset = ZERO,
+}: {
+  patches: SharedPatch[];
+  instanceKey: string;
+  explodeOffset?: Vec3;
+}) {
+  const meshes = useMemo(
+    () =>
+      patches.map((patch) => ({
+        key: patch.key,
+        geometry: fanGeometry(liftedFace(patch, instanceKey, explodeOffset)),
+      })),
+    [explodeOffset, instanceKey, patches],
+  );
+
+  useEffect(() => {
+    return () => {
+      for (const mesh of meshes) mesh.geometry.dispose();
+    };
+  }, [meshes]);
+
+  return (
+    <group>
+      {meshes.map((mesh) => (
+        <mesh key={mesh.key} geometry={mesh.geometry} renderOrder={6}>
+          <meshStandardMaterial
+            color="#a855f7"
+            emissive="#a855f7"
+            emissiveIntensity={0.45}
+            transparent
+            opacity={0.85}
+            depthWrite={false}
+            polygonOffset
+            polygonOffsetFactor={-2}
+            polygonOffsetUnits={-2}
+            side={THREE.DoubleSide}
+          />
+        </mesh>
+      ))}
     </group>
   );
 }

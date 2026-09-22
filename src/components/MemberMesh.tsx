@@ -4,10 +4,10 @@ import { Edges, useCursor } from "@react-three/drei";
 import { useEffect, useMemo, useRef, useState } from "react";
 import * as THREE from "three";
 import { type Vec3 } from "@/lib/geometry";
-import { partEdgeGeometry } from "@/lib/mesh/part-edges";
-import { facesToGeometry, subtractHoles } from "@/lib/mesh/subtract-holes";
-import type { ResolvedHole } from "@/lib/schema";
-import type { ScenePartInstance } from "@/lib/scene";
+import { memberEdgeGeometry } from "@/lib/mesh/part-edges";
+import { facesToGeometry, subtractBores } from "@/lib/mesh/subtract-holes";
+import type { ResolvedBore } from "@/lib/schema";
+import type { SceneMemberInstance } from "@/lib/scene";
 
 const HOLE_DISC_THICKNESS = 0.04;
 const HOLE_DISC_LIFT = 0.02;
@@ -58,82 +58,105 @@ function shift(point: Vec3, direction: Vec3, distance: number): Vec3 {
   ];
 }
 
-function HoleMaterial({ dimmed, selected }: { dimmed: boolean; selected: boolean }) {
+function HoleMaterial({ dimmed, muted, selected }: { dimmed: boolean; muted: boolean; selected: boolean }) {
   return (
     <meshStandardMaterial
       color="#1a120b"
       roughness={0.55}
       metalness={0.15}
       transparent
-      opacity={dimmed ? 0.22 : 1}
-      depthWrite={!dimmed}
+      opacity={dimmed ? 0.22 : muted ? 0.55 : 1}
+      depthWrite={!dimmed && !muted}
       emissive={selected ? "#d97706" : "#000000"}
       emissiveIntensity={selected ? 0.45 : 0}
     />
   );
 }
 
-function HoleMarker({ hole, dimmed, selected }: { hole: ResolvedHole; dimmed: boolean; selected: boolean }) {
-  const mouthQuat = useMemo(() => alignCylinder(hole.normal), [hole.normal]);
-  const inward: Vec3 = [-hole.normal[0], -hole.normal[1], -hole.normal[2]];
-  const boreQuat = useMemo(() => alignCylinder(inward), [hole.normal]);
+function BoreMarker({
+  bore,
+  dimmed,
+  muted,
+  selected,
+}: {
+  bore: ResolvedBore;
+  dimmed: boolean;
+  muted: boolean;
+  selected: boolean;
+}) {
+  const mouthQuat = useMemo(() => alignCylinder(bore.normal), [bore.normal]);
+  const inward: Vec3 = [-bore.normal[0], -bore.normal[1], -bore.normal[2]];
+  const boreQuat = useMemo(
+    () => alignCylinder([-bore.normal[0], -bore.normal[1], -bore.normal[2]]),
+    [bore.normal],
+  );
   const lift = HOLE_DISC_LIFT + HOLE_DISC_THICKNESS / 2;
-  const radius = hole.diameter / 2;
-  const mouth = shift(hole.center, hole.normal, lift);
-  const bore = shift(hole.center, inward, hole.depth / 2);
-  const exit = shift(shift(hole.center, inward, hole.depth), inward, lift);
+  const radius = bore.diameter / 2;
+  const mouth = shift(bore.center, bore.normal, lift);
+  const boreCenter = shift(bore.center, inward, bore.depth / 2);
+  const exit = shift(shift(bore.center, inward, bore.depth), inward, lift);
   return (
     <group>
       <mesh position={mouth} quaternion={mouthQuat} castShadow={!dimmed} renderOrder={dimmed ? 1 : 0}>
         <cylinderGeometry args={[radius, radius, HOLE_DISC_THICKNESS, 24]} />
-        <HoleMaterial dimmed={dimmed} selected={selected} />
+        <HoleMaterial dimmed={dimmed} muted={muted} selected={selected} />
       </mesh>
-      <mesh position={bore} quaternion={boreQuat} castShadow={!dimmed} renderOrder={dimmed ? 1 : 0}>
-        <cylinderGeometry args={[radius, radius, Math.max(hole.depth, 0.001), 24]} />
-        <HoleMaterial dimmed={dimmed} selected={selected} />
+      <mesh position={boreCenter} quaternion={boreQuat} castShadow={!dimmed} renderOrder={dimmed ? 1 : 0}>
+        <cylinderGeometry args={[radius, radius, Math.max(bore.depth, 0.001), 24]} />
+        <HoleMaterial dimmed={dimmed} muted={muted} selected={selected} />
       </mesh>
-      {hole.through ? (
+      {bore.through ? (
         <mesh position={exit} quaternion={boreQuat} castShadow={!dimmed} renderOrder={dimmed ? 1 : 0}>
           <cylinderGeometry args={[radius, radius, HOLE_DISC_THICKNESS, 24]} />
-          <HoleMaterial dimmed={dimmed} selected={selected} />
+          <HoleMaterial dimmed={dimmed} muted={muted} selected={selected} />
         </mesh>
       ) : null}
     </group>
   );
 }
 
-type PartMeshProps = {
-  instance: ScenePartInstance;
+type MemberMeshProps = {
+  instance: SceneMemberInstance;
   selected: boolean;
   preview?: boolean;
   dimmed?: boolean;
+  muted?: boolean;
+  isolate?: boolean;
   offset?: Vec3;
-  onSelect: (key: string) => void;
+  onSelect?: (key: string) => void;
 };
 
-export function PartMesh({
+export function MemberMesh({
   instance,
   selected,
   preview = false,
   dimmed = false,
+  muted = false,
+  isolate = false,
   offset = ZERO,
   onSelect,
-}: PartMeshProps) {
+}: MemberMeshProps) {
+  const drilledBores = useMemo(
+    () => [...instance.bores, ...instance.derivedBores],
+    [instance.bores, instance.derivedBores],
+  );
   const drilled = useMemo(() => {
     const solid = facesToGeometry(instance.faces);
-    if (instance.holes.length === 0) return { geometry: solid, cut: false };
-    const cut = subtractHoles(solid, instance.holes);
+    if (drilledBores.length === 0) return { geometry: solid, cut: false };
+    const cut = subtractBores(solid, drilledBores);
     if (!cut) return { geometry: solid, cut: false };
     solid.dispose();
     return { geometry: cut, cut: true };
-  }, [instance.faces, instance.holes]);
+  }, [drilledBores, instance.faces]);
   const edgeGeometry = useMemo(
-    () => (drilled.cut ? partEdgeGeometry(instance.faces, instance.holes) : null),
-    [drilled.cut, instance.faces, instance.holes],
+    () => (drilled.cut ? memberEdgeGeometry(instance.faces, drilledBores) : null),
+    [drilled.cut, drilledBores, instance.faces],
   );
   const liveGeometry = useRef(drilled.geometry);
   const liveEdges = useRef(edgeGeometry);
+  // eslint-disable-next-line react-hooks/refs -- dispose guard must see this render's geometry before effects
   liveGeometry.current = drilled.geometry;
+  // eslint-disable-next-line react-hooks/refs -- dispose guard must see this render's geometry before effects
   liveEdges.current = edgeGeometry;
   useEffect(() => {
     const geometry = drilled.geometry;
@@ -168,7 +191,8 @@ export function PartMesh({
   // Keep `transparent` always on. Three.js compiles `#define OPAQUE` into the
   // shader when transparent is false; R3F does not set `needsUpdate` when that
   // flag later flips, so opacity would otherwise be ignored and parts stay solid.
-  const opacity = dimmed ? 0.22 : 1;
+  const opacity = dimmed ? 0.22 : muted ? 0.55 : 1;
+  const edgeOpacity = dimmed ? 0.18 : muted ? 0.55 : 1;
   const emissive = selected ? "#d97706" : preview ? "#c4a36a" : "#000000";
   const fastenedIntensity = selected ? 0.35 : preview ? 0.18 : 0;
   const stripeIntensity = selected ? 0.25 : preview ? 0.12 : 0;
@@ -178,17 +202,30 @@ export function PartMesh({
     <group
       position={position}
       rotation={rotation}
-      onPointerOver={(event) => {
-        event.stopPropagation();
-        setHovered(true);
-      }}
-      onPointerOut={() => setHovered(false)}
-      onClick={(event) => {
-        event.stopPropagation();
-        onSelect(instance.key);
-      }}
+      onPointerOver={
+        isolate
+          ? undefined
+          : (event) => {
+              event.stopPropagation();
+              setHovered(true);
+            }
+      }
+      onPointerOut={isolate ? undefined : () => setHovered(false)}
+      onClick={
+        isolate
+          ? undefined
+          : (event) => {
+              event.stopPropagation();
+              onSelect?.(instance.key);
+            }
+      }
     >
-      <mesh geometry={drilled.geometry} renderOrder={dimmed ? 1 : 0} castShadow={!dimmed} receiveShadow={!dimmed}>
+      <mesh
+        geometry={drilled.geometry}
+        renderOrder={dimmed ? 1 : 0}
+        castShadow={!dimmed && !muted && !isolate}
+        receiveShadow={!dimmed && !muted && !isolate}
+      >
       {instance.fastened ? (
         <meshStandardMaterial
           color={instance.color}
@@ -196,7 +233,7 @@ export function PartMesh({
           metalness={0.04}
           transparent
           opacity={opacity}
-          depthWrite={!dimmed}
+          depthWrite={!dimmed && !muted}
           emissive={emissive}
           emissiveIntensity={fastenedIntensity}
         />
@@ -208,7 +245,7 @@ export function PartMesh({
           metalness={0.04}
           transparent
           opacity={opacity}
-          depthWrite={!dimmed}
+          depthWrite={!dimmed && !muted}
           emissive={emissive}
           emissiveIntensity={stripeIntensity}
           onBeforeCompile={applyStripeShader}
@@ -220,8 +257,8 @@ export function PartMesh({
           threshold={20}
           color={edgeColor}
           transparent
-          opacity={dimmed ? 0.18 : 1}
-          depthWrite={!dimmed}
+          opacity={edgeOpacity}
+          depthWrite={!dimmed && !muted}
         />
       )}
     </mesh>
@@ -230,15 +267,21 @@ export function PartMesh({
           <lineBasicMaterial
             color={edgeColor}
             transparent
-            opacity={dimmed ? 0.18 : 1}
-            depthWrite={!dimmed}
+            opacity={edgeOpacity}
+            depthWrite={!dimmed && !muted}
           />
         </lineSegments>
       ) : null}
       {drilled.cut
         ? null
-        : instance.holes.map((hole, index) => (
-            <HoleMarker key={`${instance.key}-hole-${index}`} hole={hole} dimmed={dimmed} selected={selected} />
+        : drilledBores.map((bore, index) => (
+            <BoreMarker
+              key={`${instance.key}-bore-${index}`}
+              bore={bore}
+              dimmed={dimmed}
+              muted={muted}
+              selected={selected}
+            />
           ))}
     </group>
   );

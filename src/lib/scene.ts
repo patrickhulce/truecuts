@@ -1,4 +1,4 @@
-import { getCatalogPart, isFlatLBracket, isLBracket, type CatalogPart } from "./catalog";
+import { getCatalogPart, stockGeometry, type CatalogPart, type StockGeometry } from "./catalog";
 import { expandConnections, rayFaceDistance, type ConnectionSolid, type SceneConnection } from "./connections";
 import {
   fastenedFromSeed,
@@ -10,12 +10,17 @@ import {
 import {
   applyCuts,
   boundingBox,
+  clipPolyhedron,
+  cutToPlane,
   findContacts,
   flatLBracketPolyhedron,
   lBracketPolyhedron,
   normalize,
   polyhedronVolume,
+  rodPolyhedron,
+  saddlePolyhedron,
   scale,
+  tConnectorPolyhedron,
   worldPolyhedron,
   type Polyhedron,
   type SceneContacts,
@@ -144,21 +149,66 @@ function centerFromWorldCenters(centers: Vec3[]): Vec3 {
   return midpoint(min, max);
 }
 
+const GEOMETRY_LABEL: Record<Exclude<StockGeometry, "box" | "rod">, string> = {
+  "bracket-l": "L-bracket",
+  "bracket-flat-l": "Flat L-bracket",
+  "connector-t": "T-connector",
+  saddle: "Saddle",
+};
+
+function featureHeight(member: ResolvedMember, name: string, label: string): number {
+  const value = member.features[name];
+  if (!(value > 0)) {
+    throw new Error(`${label} ${member.id} is missing ${name}`);
+  }
+  return value;
+}
+
+function hardwarePolyhedron(member: ResolvedMember, geometry: Exclude<StockGeometry, "box" | "rod">): Polyhedron {
+  const label = GEOMETRY_LABEL[geometry];
+  if (member.cuts.length > 0) {
+    throw new Error(`${label} ${member.id} cannot take planar cuts`);
+  }
+  switch (geometry) {
+    case "bracket-l":
+      return lBracketPolyhedron(member.size);
+    case "bracket-flat-l":
+      return flatLBracketPolyhedron(member.size);
+    case "connector-t":
+      return tConnectorPolyhedron(member.size, featureHeight(member, "riser", label));
+    case "saddle":
+      return saddlePolyhedron(member.size, featureHeight(member, "flange", label));
+  }
+}
+
+function meshRod(member: ResolvedMember): Polyhedron {
+  for (const cut of member.cuts) {
+    assertCutInBounds(cut, member.size, member.id);
+  }
+  let poly = rodPolyhedron(member.size);
+  for (const cut of member.cuts) {
+    poly = clipPolyhedron(poly, cutToPlane(cut, member.size));
+  }
+  if (polyhedronVolume(poly) < 1e-6) {
+    throw new Error(`Cuts on ${member.id} removed all material`);
+  }
+  return poly;
+}
+
 export function meshMember(member: ResolvedMember, stock: CatalogPart): Polyhedron {
-  if (isLBracket(stock) || isFlatLBracket(stock)) {
-    if (member.cuts.length > 0) {
-      throw new Error(`L-bracket ${member.id} cannot take planar cuts`);
-    }
-    const poly = isFlatLBracket(stock) ? flatLBracketPolyhedron(stock.size) : lBracketPolyhedron(stock.size);
+  const geometry = stockGeometry(stock);
+  if (geometry === "rod") return meshRod(member);
+  if (geometry !== "box") {
+    const poly = hardwarePolyhedron(member, geometry);
     if (polyhedronVolume(poly) < 1e-6) {
-      throw new Error(`L-bracket ${member.id} has no volume`);
+      throw new Error(`${GEOMETRY_LABEL[geometry]} ${member.id} has no volume`);
     }
     return poly;
   }
   for (const cut of member.cuts) {
-    assertCutInBounds(cut, stock.size, member.id);
+    assertCutInBounds(cut, member.size, member.id);
   }
-  const poly = applyCuts(stock.size, member.cuts);
+  const poly = applyCuts(member.size, member.cuts);
   if (polyhedronVolume(poly) < 1e-6) {
     throw new Error(`Cuts on ${member.id} removed all material`);
   }
@@ -266,7 +316,7 @@ export function buildScene(document: ResolvedDocument): {
       componentId: component.id,
       componentPosition: component.position,
       componentRotation: component.rotation,
-      stockSize: meshes.get(member.memberId)?.stock.size ?? [0, 0, 0],
+      stockSize: meshes.get(member.memberId)?.member.size ?? [0, 0, 0],
     })),
   );
   const expanded = expandConnections(document, solids, contacts);

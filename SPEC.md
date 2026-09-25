@@ -206,7 +206,7 @@ connections:
 
 `members[]` entries are `{ id, component?, index? }`. `component` is required at document level and forbidden inside a component. `index` is the 0-based placement occurrence (default `0`).
 
-`fasteners[]` is a discriminated union on `kind`. `stock` must be a catalog entry of kind `fastener` whose subtype matches `kind`. Each entry is a recipe, not one instance. `variant` is itself a discriminated object, so a layout only carries the options that apply to it:
+`fasteners[]` is a discriminated union on `kind`. `stock` must be a catalog entry of kind `fastener` whose subtype matches `kind`, except `none`, which has no stock. Each entry is a recipe, not one instance. `variant` is itself a discriminated object, so a layout only carries the options that apply to it:
 
 - `screw` / `four-corners` — `{ edge }`. One screw near each corner of the contact patch, inset by `edge`.
 - `screw` / `angle-bracket` — `{ bracket, edge }`. `bracket` is a member id that is one of the connection members. One screw on the largest patch between the bracket and each other member, at the centroid of the inset.
@@ -214,6 +214,7 @@ connections:
 - `screw` / `centered` — `{ separation, justify }`. Screws along the patch centerline. No `edge`.
 - `glue` — `variant` defaults to `{ kind: patch }` (a bead at the patch centroid). `{ kind: edge, edge }` places the bead in from the longest edge.
 - `bolt` / `through` — `{ at? }`. A through-bore at the patch centroid, or at an explicit patch position. No catalog bolt of kind `fastener` ships in v1; the type is reserved.
+- `none` — `{ kind: none }`. No stock or variant. The connection stays, but this recipe adds no fastener, bore, or joint.
 
 `justify` is `space-between` or `space-around`. `separation` is the **maximum** gap. The layout chooses the count and the actual distance: `space-between` pins fasteners to both ends of an open path (or starts a closed path at the first vertex); `space-around` leaves a half-gap at each end of an open path (or offsets a closed path by half a gap).
 
@@ -401,6 +402,7 @@ components:
 - Drilled bores, including derived pilot and clearance bores, are cut out of the rendered member. A blind bore has a bottom at `depth`. A through bore is open on the exit face. A mesh that is not one watertight solid keeps a dark marker instead of a cut.
 - An explode slider radiates members from the scene center (distance-proportional); fasteners travel with their members.
 - Any member not reachable from the first member of the first component is drawn with red/white hazard stripes.
+- A screw whose head is covered by a member it joins (no driver access) keeps the red/white hazard hatch along its shank, including when that member is selected, whichever way the screw points. The parts list and selection card call it out.
 - The document autosaves to `localStorage`. **Reset demo** restores `examples/demo.yaml`.
 - Invalid YAML or validation errors keep the last good scene from rendering; the viewport shows a placeholder until the document compiles.
 

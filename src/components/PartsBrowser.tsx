@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { getCatalogPart } from "@/lib/catalog";
-import { connectionKey, type SceneConnection } from "@/lib/connections";
+import { attachmentNeighborKeys, connectionKey, type SceneConnection } from "@/lib/connections";
 import { promoteExplicitFasteners, setConnectionFastener } from "@/lib/edit";
 import { parseInstanceKey } from "@/lib/fasteners";
 import type { ResolvedBore, ResolvedConnectionFastener, ResolvedCut, ResolvedDocument, ResolvedMember } from "@/lib/schema";
@@ -99,15 +99,17 @@ type AttachedPart = {
 function attachedPartsFor(
   selectedKey: string,
   fasteners: SceneFastener[],
+  connections: Array<Pick<SceneConnection, "memberKeys">>,
   byKey: Map<string, SceneMemberInstance>,
 ): AttachedPart[] {
   const byNeighbor = new Map<string, SceneFastener[]>();
+  for (const key of attachmentNeighborKeys(selectedKey, connections, fasteners)) {
+    byNeighbor.set(key, []);
+  }
   for (const fastener of fasteners) {
     for (const member of fastener.members) {
       if (member.instanceKey === selectedKey) continue;
-      const list = byNeighbor.get(member.instanceKey) ?? [];
-      list.push(fastener);
-      byNeighbor.set(member.instanceKey, list);
+      byNeighbor.get(member.instanceKey)?.push(fastener);
     }
   }
   const attached: AttachedPart[] = [];
@@ -151,11 +153,12 @@ function bracketMemberIds(connections: SceneConnection[], selectedKey: string): 
 }
 
 function connectionSummary(connection: SceneConnection): {
-  kind: "screw" | "glue" | "bolt" | "bracket";
+  kind: "screw" | "glue" | "bolt" | "bracket" | "none";
   label: string;
   detail: string;
 } {
-  const recipes = connection.fasteners;
+  const recipes = connection.fasteners.filter((recipe) => recipe.kind !== "none");
+  if (recipes.length === 0) return { kind: "none", label: "None", detail: "" };
   const bracket = recipes.find((recipe) => recipe.kind === "screw" && recipe.variant.kind === "angle-bracket");
   if (bracket && bracket.kind === "screw") {
     const catalog = getCatalogPart(bracket.stock);
@@ -350,7 +353,7 @@ function PartDetail({
   }, [text]);
   useEffect(() => () => onActiveConnection(null), [onActiveConnection]);
   const cuts = definition?.cuts ?? [];
-  const attached = attachedPartsFor(instance.key, fasteners, byKey).filter(
+  const attached = attachedPartsFor(instance.key, fasteners, scene.connections, byKey).filter(
     (neighbor) => !bracketMemberIds(scene.connections, instance.key).has(neighbor.instance.memberId),
   );
   const active = scene.connections.find((connection) => connection.key === activeKey) ?? null;
@@ -472,6 +475,9 @@ function PartDetail({
                           key={connection.key}
                           connection={connection}
                           active={connection.key === activeKey}
+                          headCovered={scene.fasteners.some(
+                            (fastener) => fastener.connectionKey === connection.key && fastener.headCovered,
+                          )}
                           onOpen={() => chooseConnection(activeKey === connection.key ? null : connection.key)}
                         />
                       ))}
@@ -512,13 +518,16 @@ function PartDetail({
 function ConnectionTile({
   connection,
   active,
+  headCovered,
   onOpen,
 }: {
   connection: SceneConnection;
   active: boolean;
+  headCovered: boolean;
   onOpen: () => void;
 }) {
   const summary = connectionSummary(connection);
+  const empty = summary.kind === "none";
   return (
     <button
       type="button"
@@ -528,17 +537,32 @@ function ConnectionTile({
         event.stopPropagation();
         onOpen();
       }}
-      className={`flex w-[4.75rem] cursor-pointer flex-col items-center gap-0.5 rounded border px-1 py-1.5 ${
-        active
-          ? "border-[#f59e0b] text-[#f59e0b]"
-          : "border-[#3d2a18] text-[#d6c3a3] hover:border-[#6b4a2b]"
+      className={`relative flex w-[4.75rem] cursor-pointer flex-col items-center gap-0.5 rounded border px-1 py-1.5 ${
+        empty
+          ? active
+            ? "border-dashed border-[#d6c3a3] text-[#d6c3a3]"
+            : "border-dashed border-[#8a7355] text-[#a89070] hover:border-[#d6c3a3]"
+          : headCovered
+            ? active
+              ? "border-rose-400 text-rose-400"
+              : "border-rose-400/70 text-rose-400 hover:border-rose-400"
+            : active
+              ? "border-[#f59e0b] text-[#f59e0b]"
+              : "border-[#3d2a18] text-[#d6c3a3] hover:border-[#6b4a2b]"
       }`}
     >
-      <span className="grid h-10 w-10 place-items-center rounded bg-[#140e09]">
+      <span className="relative grid h-10 w-10 place-items-center rounded bg-[#140e09]">
         <FastenerIcon kind={summary.kind} />
+        {headCovered ? (
+          <span className="absolute -right-1 -top-1 text-rose-400">
+            <AlertIcon />
+          </span>
+        ) : null}
       </span>
       <span className="text-center text-xs leading-tight">{summary.label}</span>
-      <span className="text-center text-[10px] leading-tight text-[#8a7355]">{summary.detail}</span>
+      <span className={`text-center text-[10px] leading-tight ${headCovered ? "text-rose-400" : "text-[#8a7355]"}`}>
+        {headCovered ? "head covered" : summary.detail}
+      </span>
     </button>
   );
 }
@@ -551,14 +575,29 @@ function FastenerRow({
   byKey: Map<string, SceneMemberInstance>;
 }) {
   const joins = fastenerJoins(fastener, byKey);
+  const covered = fastener.headCovered === true;
   return (
     <li className="px-3 py-1.5">
-      <div className="text-sm text-[#d6c3a3]">{fastener.stockLabel}</div>
-      <div className="text-[11px] text-[#8a7355]">
+      <div className={`text-sm ${covered ? "text-rose-400" : "text-[#d6c3a3]"}`}>{fastener.stockLabel}</div>
+      <div className={`text-[11px] ${covered ? "text-rose-400" : "text-[#8a7355]"}`}>
+        {covered ? (
+          <span className="mr-1 inline-block align-[-1px]" aria-hidden="true">
+            <AlertIcon />
+          </span>
+        ) : null}
         {fastener.subtype}
         {joins ? ` · ${joins}` : ""}
+        {covered ? " · head covered" : ""}
       </div>
     </li>
+  );
+}
+
+function AlertIcon() {
+  return (
+    <svg viewBox="0 0 16 16" className="inline h-3 w-3" aria-hidden="true">
+      <path fill="currentColor" d="M8 1.2 15 14H1L8 1.2zm0 4.2-.7 4.2h1.4L8 5.4zM8 12.6a.8.8 0 1 0 0-1.6.8.8 0 0 0 0 1.6z" />
+    </svg>
   );
 }
 

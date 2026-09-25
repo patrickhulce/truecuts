@@ -5,6 +5,7 @@ import { getFastenerSubtype, listCatalog } from "@/lib/catalog";
 import type { SceneConnection } from "@/lib/connections";
 import { parseInstanceKey } from "@/lib/fasteners";
 import type {
+  ResolvedBoltVariant,
   ResolvedConnectionFastener,
   ResolvedScrewVariant,
   ScrewJustify,
@@ -18,12 +19,15 @@ type ConnectionEditorProps = {
 
 const SCREW_VARIANTS = ["four-corners", "angle-bracket", "perimeter", "centered"] as const;
 type ScrewVariantKind = (typeof SCREW_VARIANTS)[number];
+const BOLT_VARIANTS = ["through", "angle-bracket"] as const;
+type BoltVariantKind = (typeof BOLT_VARIANTS)[number];
 
-const VARIANT_LABEL: Record<ScrewVariantKind | "patch" | "edge", string> = {
+const VARIANT_LABEL: Record<ScrewVariantKind | BoltVariantKind | "patch" | "edge", string> = {
   "four-corners": "Four corners",
   "angle-bracket": "Angle bracket",
   perimeter: "Perimeter",
   centered: "Centered",
+  through: "Through",
   patch: "Patch",
   edge: "Edge",
 };
@@ -31,6 +35,9 @@ const VARIANT_LABEL: Record<ScrewVariantKind | "patch" | "edge", string> = {
 function withEdge(fastener: ResolvedConnectionFastener, edge: number): ResolvedConnectionFastener {
   if (fastener.kind === "glue" && fastener.variant.kind === "edge") {
     return { ...fastener, variant: { kind: "edge", edge } };
+  }
+  if (fastener.kind === "bolt" && fastener.variant.kind === "angle-bracket") {
+    return { ...fastener, variant: { ...fastener.variant, edge } };
   }
   if (fastener.kind !== "screw") return fastener;
   const variant = fastener.variant;
@@ -54,9 +61,10 @@ function memberIdsOf(connection: SceneConnection): string[] {
   return ids;
 }
 
-function withKind(kind: "screw" | "glue" | "none"): ResolvedConnectionFastener {
+function withKind(kind: "screw" | "glue" | "bolt" | "none"): ResolvedConnectionFastener {
   if (kind === "none") return { kind: "none" };
   if (kind === "glue") return { kind: "glue", stock: "wood-glue", variant: { kind: "patch" } };
+  if (kind === "bolt") return { kind: "bolt", stock: "bolt-hex-3/8x4", variant: { kind: "through" } };
   return {
     kind: "screw",
     stock: "screw-wood-8x2",
@@ -77,6 +85,13 @@ function withScrewVariant(
   if (kind === "angle-bracket") return { kind, bracket, edge };
   if (kind === "perimeter") return { kind, edge, separation, justify };
   return { kind: "centered", separation, justify };
+}
+
+function withBoltVariant(current: ResolvedBoltVariant, kind: BoltVariantKind, memberIds: string[]): ResolvedBoltVariant {
+  if (kind === "through") return { kind: "through" };
+  const edge = current.kind === "angle-bracket" ? current.edge : 0.25;
+  const bracket = current.kind === "angle-bracket" && current.bracket ? current.bracket : (memberIds[0] ?? "");
+  return { kind: "angle-bracket", bracket, edge };
 }
 
 export function ConnectionEditor({ connection, onChange, onClose }: ConnectionEditorProps) {
@@ -121,7 +136,7 @@ function FastenerFields({
     <section className="mb-4 border-b border-[#3d2a18]/70 pb-4 last:border-b-0">
       <div className="text-[10px] uppercase tracking-widest text-[#8a7355]">Kind</div>
       <div className="mt-1 flex gap-1">
-        {(["screw", "glue", "none"] as const).map((kind) => (
+        {(["screw", "glue", "bolt", "none"] as const).map((kind) => (
           <Choice
             key={kind}
             selected={fastener.kind === kind}
@@ -175,7 +190,23 @@ function FastenerFields({
           </div>
         </>
       ) : fastener.kind === "bolt" ? (
-        <p className="mt-3 text-xs text-[#8a7355]">Through-bolt layout is fixed.</p>
+        <>
+          <div className="mt-3 text-[10px] uppercase tracking-widest text-[#8a7355]">Variant</div>
+          <div className="mt-1 flex flex-wrap gap-1">
+            {BOLT_VARIANTS.map((kind) => (
+              <Choice
+                key={kind}
+                selected={fastener.variant.kind === kind}
+                onClick={() => {
+                  if (fastener.kind !== "bolt" || fastener.variant.kind === kind) return;
+                  onChange({ ...fastener, variant: withBoltVariant(fastener.variant, kind, memberIds) });
+                }}
+              >
+                {VARIANT_LABEL[kind]}
+              </Choice>
+            ))}
+          </div>
+        </>
       ) : null}
 
       {fastener.kind === "none" ? null : (
@@ -227,7 +258,8 @@ function VariantOptions({
             className="mt-1 w-full cursor-pointer rounded border border-[#3d2a18] bg-[#1a120b] px-2 py-1 text-sm normal-case tracking-normal text-[#d6c3a3]"
             value={variant.bracket}
             onChange={(event) => {
-              if (fastener.kind !== "screw" || fastener.variant.kind !== "angle-bracket") return;
+              if (fastener.variant.kind !== "angle-bracket") return;
+              if (fastener.kind !== "screw" && fastener.kind !== "bolt") return;
               onChange({ ...fastener, variant: { ...fastener.variant, bracket: event.target.value } });
             }}
           >

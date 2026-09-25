@@ -82,6 +82,21 @@ function fastenerSummary(fasteners: SceneFastener[]): string {
     .join(", ");
 }
 
+function FastenerSummary({ fasteners }: { fasteners: SceneFastener[] }) {
+  const covered = fasteners.filter((fastener) => fastener.headCovered);
+  const clear = fasteners.filter((fastener) => !fastener.headCovered);
+  if (covered.length === 0) {
+    return <span className="text-[#d6c3a3]">{fastenerSummary(fasteners)}</span>;
+  }
+  const labels = [...new Set(covered.map((fastener) => fastener.stockLabel))].join(", ");
+  return (
+    <span>
+      {clear.length > 0 ? <span className="text-[#d6c3a3]">{fastenerSummary(clear)} · </span> : null}
+      <span className="text-rose-400">{labels} · head covered</span>
+    </span>
+  );
+}
+
 function SelectionCard({
   instance,
   attachedFasteners,
@@ -110,7 +125,9 @@ function SelectionCard({
         <dt>fastened</dt>
         <dd className="text-[#d6c3a3]">{instance.fastened ? "yes" : "no"}</dd>
         <dt>fasteners</dt>
-        <dd className="text-[#d6c3a3]">{fastenerSummary(attachedFasteners)}</dd>
+        <dd>
+          <FastenerSummary fasteners={attachedFasteners} />
+        </dd>
         <dt>bores</dt>
         <dd className="text-[#d6c3a3]">
           {instance.bores.length === 0 ? "none" : instance.bores.map(formatBore).join("; ")}

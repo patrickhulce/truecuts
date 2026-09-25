@@ -4,6 +4,7 @@ import { useMemo } from "react";
 import * as THREE from "three";
 import type { Vec3 } from "@/lib/geometry";
 import type { SceneFastener } from "@/lib/scene";
+import { applyScrewStripeShader, screwStripeCacheKey } from "./stripeMaterial";
 
 function lookAlongY(direction: Vec3): THREE.Quaternion {
   const dir = new THREE.Vector3(direction[0], direction[1], direction[2]);
@@ -12,14 +13,25 @@ function lookAlongY(direction: Vec3): THREE.Quaternion {
   return new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0, 1, 0), dir);
 }
 
-function Steel({ color, highlighted }: { color: string; highlighted?: boolean }) {
+function Steel({
+  color,
+  highlighted,
+  striped,
+}: {
+  color: string;
+  highlighted?: boolean;
+  striped?: boolean;
+}) {
+  const showHighlight = highlighted && !striped;
   return (
     <meshStandardMaterial
-      color={color}
-      metalness={0.72}
-      roughness={0.28}
-      emissive={highlighted ? "#f59e0b" : "#000000"}
-      emissiveIntensity={highlighted ? 0.7 : 0}
+      color={striped ? "#ffffff" : color}
+      metalness={striped ? 0.04 : 0.72}
+      roughness={striped ? 0.45 : 0.28}
+      emissive={showHighlight ? "#f59e0b" : "#000000"}
+      emissiveIntensity={showHighlight ? 0.7 : 0}
+      onBeforeCompile={striped ? applyScrewStripeShader : undefined}
+      customProgramCacheKey={striped ? screwStripeCacheKey : undefined}
     />
   );
 }
@@ -46,11 +58,11 @@ function ScrewMesh({
     <group position={add(fastener.origin, offset)} quaternion={quaternion}>
       <mesh position={[0, headH / 2, 0]} castShadow>
         <cylinderGeometry args={[headR, headR * 0.82, headH, 16]} />
-        <Steel color={fastener.color} highlighted={highlighted} />
+        <Steel color={fastener.color} highlighted={highlighted && !fastener.headCovered} striped={fastener.headCovered} />
       </mesh>
       <mesh position={[0, headH + shankH / 2, 0]} castShadow>
         <cylinderGeometry args={[shankR * 0.45, shankR, shankH, 12]} />
-        <Steel color={fastener.color} highlighted={highlighted} />
+        <Steel color={fastener.color} highlighted={highlighted && !fastener.headCovered} striped={fastener.headCovered} />
       </mesh>
     </group>
   );

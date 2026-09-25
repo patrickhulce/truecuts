@@ -8,39 +8,10 @@ import { memberEdgeGeometry } from "@/lib/mesh/part-edges";
 import { facesToGeometry, subtractBores } from "@/lib/mesh/subtract-holes";
 import type { ResolvedBore } from "@/lib/schema";
 import type { SceneMemberInstance } from "@/lib/scene";
+import { applyStripeShader, stripeCacheKey } from "./stripeMaterial";
 
 const HOLE_DISC_THICKNESS = 0.04;
 const HOLE_DISC_LIFT = 0.02;
-
-function stripeCacheKey(): string {
-  return "unfastened-stripes";
-}
-
-function applyStripeShader(shader: THREE.WebGLProgramParametersWithUniforms): void {
-  shader.vertexShader = shader.vertexShader
-    .replace(
-      "#include <common>",
-      `#include <common>
-       varying vec3 vWorldStripe;`,
-    )
-    .replace(
-      "#include <project_vertex>",
-      `#include <project_vertex>
-       vWorldStripe = (modelMatrix * vec4(transformed, 1.0)).xyz;`,
-    );
-  shader.fragmentShader = shader.fragmentShader
-    .replace(
-      "#include <common>",
-      `#include <common>
-       varying vec3 vWorldStripe;`,
-    )
-    .replace(
-      "#include <color_fragment>",
-      `#include <color_fragment>
-       float stripe = step(0.5, fract((vWorldStripe.x + vWorldStripe.y) * 0.45));
-       diffuseColor.rgb = mix(vec3(1.0), vec3(0.86, 0.12, 0.12), stripe);`,
-    );
-}
 
 const ZERO: Vec3 = [0, 0, 0];
 

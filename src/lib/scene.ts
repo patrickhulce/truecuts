@@ -1,5 +1,5 @@
 import { getCatalogPart, isFlatLBracket, isLBracket, type CatalogPart } from "./catalog";
-import { expandConnections, type ConnectionSolid, type SceneConnection } from "./connections";
+import { expandConnections, rayFaceDistance, type ConnectionSolid, type SceneConnection } from "./connections";
 import {
   fastenedFromSeed,
   instanceKey,
@@ -13,7 +13,10 @@ import {
   findContacts,
   flatLBracketPolyhedron,
   lBracketPolyhedron,
+  normalize,
   polyhedronVolume,
+  scale,
+  worldPolyhedron,
   type Polyhedron,
   type SceneContacts,
   type Vec3,
@@ -95,6 +98,31 @@ function assertCutInBounds(cut: ResolvedCut, size: Vec3, memberId: string): void
       `Cut on ${memberId} [${short}, ${long}] is outside stock axis ${cut.axis} (${dimName}, 0–${limit})`,
     );
   }
+}
+
+const HEAD_COVER_SLACK = 0.05;
+
+/** Wood (or another joined member) lies on the driver side of a screw head. */
+function screwHeadCovered(
+  fastener: SceneFastener,
+  byKey: Map<string, SceneMemberInstance>,
+  componentOf: Map<string, SceneComponent>,
+): boolean {
+  if (fastener.subtype !== "screw") return false;
+  const backward = scale(normalize(fastener.direction), -1);
+  return fastener.members.some((member) => {
+    const instance = byKey.get(member.instanceKey);
+    const component = componentOf.get(member.instanceKey);
+    if (!instance || !component) return false;
+    const faces = worldPolyhedron(
+      instance.faces,
+      instance.position,
+      instance.rotation,
+      component.position,
+      component.rotation,
+    );
+    return rayFaceDistance(faces, fastener.origin, backward) > HEAD_COVER_SLACK;
+  });
 }
 
 function midpoint(min: Vec3, max: Vec3): Vec3 {
@@ -254,7 +282,15 @@ export function buildScene(document: ResolvedDocument): {
     byKey.get(derived.instanceKey)?.derivedBores.push(derived.bore);
   }
 
-  const fasteners = [...resolved.fasteners, ...expanded.fasteners];
+  const componentOf = new Map(
+    components.flatMap((component) => component.members.map((member) => [member.key, component] as const)),
+  );
+  const fasteners = [...resolved.fasteners, ...expanded.fasteners].map((fastener) => ({
+    ...fastener,
+    ...(fastener.subtype === "screw"
+      ? { headCovered: screwHeadCovered(fastener, byKey, componentOf) }
+      : {}),
+  }));
   const edges = [...resolved.edges, ...expanded.edges];
   const nodes = components.flatMap((component) => component.members.map((member) => member.key));
   const seed = components[0]?.members[0]?.key;

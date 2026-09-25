@@ -123,6 +123,21 @@ describe("compileDocument", () => {
     expect(result.scene!.center[2]).toBeGreaterThan(0);
 
     const screws = result.scene!.fasteners.filter((fastener) => fastener.subtype === "screw");
+    const touches = (screw: (typeof screws)[number], id: string) =>
+      screw.members.some((member) => member.instanceKey.includes(id));
+    const butt = screws.filter(
+      (screw) =>
+        !touches(screw, "corner-bracket") &&
+        screw.members.some((member) => /apron-|brace-/.test(member.instanceKey)) &&
+        screw.members.some((member) => member.instanceKey.includes("leg-")),
+    );
+    expect(butt.length).toBeGreaterThan(0);
+    expect(butt.every((screw) => screw.headCovered)).toBe(true);
+    expect(screws.filter((screw) => touches(screw, "corner-bracket")).every((screw) => !screw.headCovered)).toBe(true);
+    expect(screws.filter((screw) => touches(screw, "top-1")).every((screw) => !screw.headCovered)).toBe(true);
+    expect(result.scene!.fasteners.filter((fastener) => fastener.subtype === "glue").every((fastener) => !fastener.headCovered)).toBe(
+      true,
+    );
     for (const screw of screws) {
       const [a, b] = screw.members;
       const gap = Math.hypot(a.point[0] - b.point[0], a.point[1] - b.point[1], a.point[2] - b.point[2]);

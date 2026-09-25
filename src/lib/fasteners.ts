@@ -22,6 +22,8 @@ export type SceneFastener = {
   members: SceneFastenerMember[];
   /** Set when this instance was expanded from a connection recipe. */
   connectionKey?: string;
+  /** Screw head sits behind a member it joins, so a driver cannot reach it. */
+  headCovered?: boolean;
 };
 
 export type FastenerIssue = {

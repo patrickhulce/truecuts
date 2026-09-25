@@ -204,6 +204,77 @@ components:
     expect(result.scene?.connections[0].bores).toEqual([]);
   });
 
+  it("bores a through bolt for clearance and warns when it is shorter than the joint", () => {
+    const short = compileDocument(`${STACK}    connections:
+      - members:
+          - { id: a-1 }
+          - { id: b-1 }
+        fasteners:
+          - { kind: bolt, stock: bolt-hex-1/4x2, variant: { kind: through } }
+`);
+    expect(short.scene).toBeDefined();
+    expect(short.diagnostics.some((item) => item.severity === "warning" && item.message.includes("does not span"))).toBe(
+      true,
+    );
+    const bolt = short.scene!.fasteners[0];
+    expect(bolt.subtype).toBe("bolt");
+    expect(bolt.grip).toBeCloseTo(3, 4);
+    const head = short.scene!.components[0].members.find((member) => member.memberId === "a-1");
+    const tip = short.scene!.components[0].members.find((member) => member.memberId === "b-1");
+    expect(head?.derivedBores).toHaveLength(1);
+    expect(tip?.derivedBores).toHaveLength(1);
+    expect(head?.derivedBores[0].through).toBe(true);
+    expect(tip?.derivedBores[0].through).toBe(true);
+    expect(head?.derivedBores[0].diameter).toBeCloseTo(0.25, 6);
+    expect(tip?.derivedBores[0].diameter).toBeCloseTo(0.25, 6);
+
+    const spans = compileDocument(`${STACK}    connections:
+      - members:
+          - { id: a-1 }
+          - { id: b-1 }
+        fasteners:
+          - { kind: bolt, stock: bolt-hex-1/4x4, variant: { kind: through } }
+`);
+    expect(spans.diagnostics.filter((item) => item.message.includes("does not span"))).toEqual([]);
+    expect(spans.scene?.fasteners[0].grip).toBeCloseTo(3, 4);
+  });
+
+  it("bolts every saddle flange instead of only the largest patch", () => {
+    const result = compileDocument(`version: 1
+name: Saddle
+members:
+  - label: Block
+    stock: 6x6x8
+    cuts:
+      - { axis: 0, angle: 90, at: 5.5 }
+  - label: Hanger
+    stock: saddle
+    size: [5.5, 5.5]
+components:
+  - label: Joint
+    members:
+      - { id: block-1, position: [0, 0.5, 0] }
+      - { id: hanger-1, position: [0, 0, -0.25] }
+    connections:
+      - members:
+          - { id: hanger-1 }
+          - { id: block-1 }
+        fasteners:
+          - { kind: bolt, stock: bolt-hex-1/2x6, variant: { kind: angle-bracket, bracket: hanger-1, edge: 0.25 } }
+`);
+    expect(result.diagnostics.filter((item) => item.severity === "error")).toEqual([]);
+    expect(result.diagnostics.filter((item) => item.message.includes("does not span"))).toEqual([]);
+    const bolts = result.scene?.fasteners ?? [];
+    expect(bolts).toHaveLength(2);
+    expect(bolts.every((bolt) => bolt.subtype === "bolt" && bolt.grip !== undefined && bolt.grip > 5)).toBe(true);
+    const block = result.scene?.components[0].members.find((member) => member.memberId === "block-1");
+    const hanger = result.scene?.components[0].members.find((member) => member.memberId === "hanger-1");
+    expect(block?.derivedBores).toHaveLength(2);
+    expect(hanger?.derivedBores).toHaveLength(2);
+    expect(block?.derivedBores.every((bore) => bore.diameter === 0.5 && bore.through)).toBe(true);
+    expect(hanger?.derivedBores.every((bore) => bore.diameter === 0.5)).toBe(true);
+  });
+
   it("warns when a member never touches the others and still renders", () => {
     const result = compileDocument(`${STACK.replace("position: [0, 1.5, 0]", "position: [0, 10, 0]")}    connections:
       - members:

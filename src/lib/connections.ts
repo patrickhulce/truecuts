@@ -42,6 +42,12 @@ import type {
 export const SCREW_PILOT_RATIO = 0.7;
 const HIT_EPS = 1e-4;
 const THROUGH_SLACK = 0.05;
+/**
+ * A plate's gauge-thick edge can kiss the same member as its bearing face
+ * (catalog gauges are 1/8″ and 1/4″). Patches thinner than this are that edge,
+ * not a second flange.
+ */
+const BEARING_SPAN = 0.4;
 
 export type ConnectionSolid = {
   key: string;
@@ -111,7 +117,7 @@ export function connectionContactPairs(connection: SceneConnection): Array<[stri
   };
   let bracketed = false;
   for (const fastener of connection.fasteners) {
-    const variant = fastener.kind === "screw" ? fastener.variant : null;
+    const variant = fastener.kind === "screw" || fastener.kind === "bolt" ? fastener.variant : null;
     if (!variant || variant.kind !== "angle-bracket") continue;
     const bracketKey = connection.memberKeys.find(
       (key) => parseInstanceKey(key).memberId === variant.bracket,
@@ -149,6 +155,23 @@ function patchesBetween(contacts: SceneContacts, a: string, b: string): SharedPa
       (patch.a.instanceKey === a && patch.b.instanceKey === b) ||
       (patch.a.instanceKey === b && patch.b.instanceKey === a),
   );
+}
+
+/** Smaller in-plane span of a contact polygon. Axis-aligned faces have one near-zero AABB axis. */
+function patchMinorSpan(polygon: Face): number {
+  const min = [Infinity, Infinity, Infinity];
+  const max = [-Infinity, -Infinity, -Infinity];
+  for (const point of polygon) {
+    min[0] = Math.min(min[0], point[0]);
+    min[1] = Math.min(min[1], point[1]);
+    min[2] = Math.min(min[2], point[2]);
+    max[0] = Math.max(max[0], point[0]);
+    max[1] = Math.max(max[1], point[1]);
+    max[2] = Math.max(max[2], point[2]);
+  }
+  const spans = [max[0] - min[0], max[1] - min[1], max[2] - min[2]].filter((span) => span > 1e-3);
+  if (spans.length === 0) return 0;
+  return Math.min(...spans);
 }
 
 function largestPatch(patches: SharedPatch[]): SharedPatch | undefined {
@@ -396,6 +419,7 @@ function placeMechanical(
     });
   }
 
+  const grip = back + forward;
   return {
     fastener: {
       key,
@@ -409,6 +433,7 @@ function placeMechanical(
       length,
       diameter,
       size: catalog.size,
+      ...(kind === "bolt" ? { grip } : {}),
       members: [
         { instanceKey: head.key, point, direction: normalize(dirToLocal(head, intoTip)) },
         { instanceKey: tip.key, point, direction: normalize(dirToLocal(tip, intoTip)) },
@@ -416,6 +441,22 @@ function placeMechanical(
     },
     bores,
   };
+}
+
+function noteBoltSpan(
+  fastener: SceneFastener,
+  catalog: CatalogPart,
+  path: Array<string | number>,
+  issues: FastenerIssue[],
+): void {
+  if (fastener.grip === undefined) return;
+  if (catalog.size[0] + THROUGH_SLACK < fastener.grip) {
+    issues.push({
+      message: `Bolt "${catalog.label}" (${catalog.size[0]}″) does not span the joint (${fastener.grip.toFixed(2)}″)`,
+      path,
+      severity: "warning",
+    });
+  }
 }
 
 function headDirection(patch: SharedPatch, headKey: string): Vec3 {
@@ -484,8 +525,10 @@ function expandFastener(
     return { fasteners, edges, bores, touched };
   }
 
-  if (recipe.kind === "screw" && recipe.variant.kind === "angle-bracket") {
+  if ((recipe.kind === "screw" || recipe.kind === "bolt") && recipe.variant.kind === "angle-bracket") {
     const bracketId = recipe.variant.bracket;
+    const edge = recipe.variant.edge;
+    const kind = recipe.kind;
     const bracketSolid = members.find((solid) => solid.memberId === bracketId);
     if (!bracketSolid) {
       issues.push({
@@ -495,26 +538,31 @@ function expandFastener(
       });
       return { fasteners, edges, bores, touched };
     }
+    const layout = { kind: "angle-bracket" as const, bracket: bracketId, edge };
     for (const target of members) {
       if (target.key === bracketSolid.key) continue;
-      const patch = largestPatch(patchesBetween(contacts, bracketSolid.key, target.key));
-      if (!patch) continue;
-      const points = layoutScrewPoints(recipe.variant, patch.polygon, patch.normal);
-      const direction = headDirection(patch, bracketSolid.key);
-      for (const point of points) {
-        const placed = placeMechanical(
-          "screw",
-          point,
-          bracketSolid,
-          target,
-          direction,
-          catalog,
-          `${keyPrefix}/fastener#${recipeIndex}/screw#${fasteners.length}`,
-          keyPrefix,
-        );
-        fasteners.push(placed.fastener);
-        bores.push(...placed.bores);
-        link(bracketSolid.key, target.key);
+      const patches = patchesBetween(contacts, bracketSolid.key, target.key).filter(
+        (patch) => patchMinorSpan(patch.polygon) >= BEARING_SPAN,
+      );
+      for (const patch of patches) {
+        const points = layoutScrewPoints(layout, patch.polygon, patch.normal);
+        const direction = headDirection(patch, bracketSolid.key);
+        for (const point of points) {
+          const placed = placeMechanical(
+            kind,
+            point,
+            bracketSolid,
+            target,
+            direction,
+            catalog,
+            `${keyPrefix}/fastener#${recipeIndex}/${kind}#${fasteners.length}`,
+            keyPrefix,
+          );
+          if (kind === "bolt") noteBoltSpan(placed.fastener, catalog, [...path, "fasteners", recipeIndex], issues);
+          fasteners.push(placed.fastener);
+          bores.push(...placed.bores);
+          link(bracketSolid.key, target.key);
+        }
       }
     }
     return { fasteners, edges, bores, touched };
@@ -536,6 +584,7 @@ function expandFastener(
         `${keyPrefix}/fastener#${recipeIndex}/bolt#${fasteners.length}`,
         keyPrefix,
       );
+      if (recipe.kind === "bolt") noteBoltSpan(placed.fastener, catalog, [...path, "fasteners", recipeIndex], issues);
       fasteners.push(placed.fastener);
       bores.push(...placed.bores);
       link(head.key, tip.key);

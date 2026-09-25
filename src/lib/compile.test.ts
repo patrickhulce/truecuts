@@ -61,7 +61,7 @@ describe("compileDocument", () => {
   it("compiles the demo YAML into a scene", () => {
     const result = compileDocument(DEMO_YAML);
     expect(result.diagnostics.filter((item) => item.severity === "error")).toEqual([]);
-    expect(result.document?.members).toHaveLength(16);
+    expect(result.document?.members).toHaveLength(20);
     expect(result.document?.members.map((part) => part.id)).toEqual([
       "leg-1",
       "leg-2",
@@ -79,9 +79,13 @@ describe("compileDocument", () => {
       "corner-bracket-2",
       "corner-bracket-3",
       "corner-bracket-4",
+      "post-1",
+      "cap-1",
+      "beam-1",
+      "beam-saddle-1",
     ]);
     expect(result.scene?.components).toHaveLength(3);
-    expect(result.scene?.components[0].members).toHaveLength(14);
+    expect(result.scene?.components[0].members).toHaveLength(18);
     expect(result.scene?.fasteners.length).toBeGreaterThan(0);
     expect(result.diagnostics.filter((item) => item.severity === "warning")).toEqual([]);
 
@@ -113,6 +117,12 @@ describe("compileDocument", () => {
     expect(byId.get("corner-bracket-4")?.fastened).toBe(true);
     expect(byId.get("brace-1")?.fastened).toBe(true);
     expect(byId.get("spare-block-1")?.fastened).toBe(false);
+    expect(byId.get("post-1")?.fastened).toBe(true);
+    expect(byId.get("cap-1")?.fastened).toBe(true);
+    expect(byId.get("beam-1")?.fastened).toBe(true);
+    expect(byId.get("beam-saddle-1")?.fastened).toBe(true);
+    expect(byId.get("cap-1")?.finished.thickness).toBeCloseTo(3, 4);
+    expect(byId.get("beam-saddle-1")?.finished.thickness).toBeCloseTo(2, 4);
 
     const leg1 = byId.get("leg-1");
     expect(leg1?.worldCenter[0]).toBeCloseTo(1.75, 5);
@@ -185,6 +195,48 @@ describe("compileDocument", () => {
         expect(aabb.min[0], id).toBeLessThan(36.5);
       }
     }
+  });
+
+  it("rejects cuts and out-of-range sizes on parameterized hardware", () => {
+    const cut = compileDocument(`version: 1
+name: Cut
+members:
+  - { label: Cap, stock: connector-t, size: [5.5, 5.5], cuts: [{ axis: 0, angle: 90, at: 4 }] }
+  - { label: Hanger, stock: saddle, cuts: [{ axis: 0, angle: 90, at: 4 }] }
+`);
+    expect(cut.scene).toBeUndefined();
+    expect(cut.diagnostics.filter((item) => item.message.includes("cannot take planar cuts"))).toHaveLength(2);
+
+    const range = compileDocument(`version: 1
+name: Range
+members:
+  - { label: Cap, stock: connector-t, size: [2, 5.5] }
+`);
+    expect(range.scene).toBeUndefined();
+    expect(range.diagnostics.some((item) => item.message.includes("must be between"))).toBe(true);
+
+    const fixed = compileDocument(`version: 1
+name: Fixed
+members:
+  - { label: Cap, stock: connector-t, size: [5.5, 5.5, 0.5] }
+`);
+    expect(fixed.scene).toBeUndefined();
+    expect(fixed.diagnostics.some((item) => item.message.includes("T is fixed"))).toBe(true);
+  });
+
+  it("cuts a round rod to length", () => {
+    const result = compileDocument(`version: 1
+name: Rod
+members:
+  - { label: Rod, stock: rod-1x12, cuts: [{ axis: 0, angle: 90, at: 8 }] }
+components:
+  - label: Bar
+    members:
+      - { id: rod-1, position: [0, 0, 0] }
+`);
+    expect(result.diagnostics.filter((item) => item.severity === "error")).toEqual([]);
+    const rod = result.scene!.components.flatMap((component) => component.members).find((part) => part.memberId === "rod-1");
+    expect(rod?.finished.length).toBeCloseTo(8, 4);
   });
 
   it("reports YAML parse errors with line numbers", () => {

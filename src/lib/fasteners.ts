@@ -19,6 +19,8 @@ export type SceneFastener = {
   length: number;
   diameter: number;
   size: Vec3;
+  /** Head face to tip exit, for a through bolt. The nut sits here. */
+  grip?: number;
   members: SceneFastenerMember[];
   /** Set when this instance was expanded from a connection recipe. */
   connectionKey?: string;
@@ -178,7 +180,8 @@ function resolveOne(
     return undefined;
   }
 
-  if (subtype === "screw" && members.length === 2) {
+  if ((subtype === "screw" || subtype === "bolt") && members.length === 2) {
+    const noun = subtype === "bolt" ? "Bolt" : "Screw";
     const gap = len([
       members[0].point[0] - members[1].point[0],
       members[0].point[1] - members[1].point[1],
@@ -186,7 +189,7 @@ function resolveOne(
     ]);
     if (gap > 0.25) {
       issues.push({
-        message: `Screw member centerpoints are ${gap.toFixed(2)}″ apart in world space (expected to coincide)`,
+        message: `${noun} member centerpoints are ${gap.toFixed(2)}″ apart in world space (expected to coincide)`,
         path,
         severity: "warning",
       });
@@ -195,7 +198,7 @@ function resolveOne(
     const d1 = members[1].direction;
     if (d0 && d1 && dot(d0, d1) > -0.5) {
       issues.push({
-        message: "Screw member directions should be roughly opposite in world space",
+        message: `${noun} member directions should be roughly opposite in world space`,
         path,
         severity: "warning",
       });

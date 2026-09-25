@@ -2,7 +2,7 @@
 
 TrueCuts is a carpenter's CAD planner. A project is a YAML document: **members** cut from catalog **stock**, assembled into **components**, then joined by **connections** (recipes of **fasteners** and the **bores** those fasteners need). A **part** is anything on the purchase and cut list — a member or a fastener. The editor is the source of truth in v1. The 3D view is a live visualization of that document.
 
-This document is the format reference. v1 implements members (lumber, sheet goods, and L-brackets), planar cuts, components, connections (screws and wood glue), explicit fasteners as a hand-placed escape hatch, and rendering. Remaining hardware catalog entries and procedural components are specified here for later versions.
+This document is the format reference. v1 implements members (lumber, sheet goods, L-brackets, and parameterized post hardware), planar cuts, components, connections (screws, bolts, and wood glue), explicit fasteners as a hand-placed escape hatch, and rendering. Hinges, drawer slides, and procedural components are specified here for later versions.
 
 ## Concepts
 
@@ -131,7 +131,8 @@ components:
 - `label` — required.
 - `id` — optional; see Identity.
 - `stock` — catalog id.
-- `cuts` — ordered list of planar cuts, applied in stock-local coordinates. Empty means the full stock piece.
+- `size` — optional list of 1–3 dimensions for parameterized stock. Values apply to the free axes in L, W, T order, skipping any axis the catalog marks fixed. Omitted free axes use the catalog default. `size` on stock that is not parameterized, a value past the free axes, or a value outside that axis's min/max is an error. A fixed axis (bracket gauge, T-connector stem height) does not change when a free axis does.
+- `cuts` — ordered list of planar cuts, applied in stock-local coordinates. Empty means the full stock piece. Box stock only; hardware geometries reject cuts.
 - `bores` — optional drilled bores on stock faces (default empty). Each bore is cut out of the rendered mesh. Contact and finished volume still use the cut stock before the bores. Connection pilot and clearance bores are computed and are not written here.
 
 ### Cut fields
@@ -213,7 +214,8 @@ connections:
 - `screw` / `perimeter` — `{ edge, separation, justify }`. Screws around the inset boundary.
 - `screw` / `centered` — `{ separation, justify }`. Screws along the patch centerline. No `edge`.
 - `glue` — `variant` defaults to `{ kind: patch }` (a bead at the patch centroid). `{ kind: edge, edge }` places the bead in from the longest edge.
-- `bolt` / `through` — `{ at? }`. A through-bore at the patch centroid, or at an explicit patch position. No catalog bolt of kind `fastener` ships in v1; the type is reserved.
+- `bolt` / `through` — `{ at? }`. A through-bore at the patch centroid, or at an explicit patch position.
+- `bolt` / `angle-bracket` — `{ bracket, edge }`. `bracket` is a member id that is one of the connection members. Same layout as the screw angle-bracket, on every contact patch between the bracket and each other member (a saddle fastens both flanges, not only the largest). Clearance bores run through the bracket and the wood.
 - `none` — `{ kind: none }`. No stock or variant. The connection stays, but this recipe adds no fastener, bore, or joint.
 
 `justify` is `space-between` or `space-around`. `separation` is the **maximum** gap. The layout chooses the count and the actual distance: `space-between` pins fasteners to both ends of an open path (or starts a closed path at the first vertex); `space-around` leaves a half-gap at each end of an open path (or offsets a closed path by half a gap).
@@ -221,7 +223,7 @@ connections:
 Derived bores merge with the member's authored `bores` for meshing and cut lists:
 
 - **Screw** — a pilot in the receiving member (diameter is 0.7× the screw's major diameter). When the screw is longer than the head member's thickness along the screw axis, a clearance bore (major diameter) goes through the head and the pilot depth is what remains of the screw. A butt screw that does not span the head starts at the contact and pilots only the tip.
-- **Bolt** — a clearance bore through every member the bolt passes, diameter equal to the bolt diameter.
+- **Bolt** — a clearance bore through every member the bolt passes, diameter equal to the bolt diameter. The rendered solid is one purchase-list line: hex head, washer, shank, washer, and nut. Head, washer, and nut diameters follow the shank diameter; a longer bolt is not a fatter bolt. The nut sits at the grip (head face to the far exit). A bolt shorter than that grip keeps a warning.
 - **Glue** — no bores.
 
 ## Fasteners
@@ -253,7 +255,7 @@ fasteners:
 
 ### Fastener fields
 
-- `stock` — catalog id of kind `fastener` (`screw` or `glue`).
+- `stock` — catalog id of kind `fastener` (`screw`, `bolt`, or `glue`).
 - `members` — two or more attachments.
 
 ### Member fields
@@ -266,7 +268,7 @@ fasteners:
 
 Rules:
 
-- Screws require exactly two members. Glue requires two or more.
+- Screws and bolts require exactly two members, and every member needs `direction` (head → tip). Glue requires two or more.
 - Members must name a member that is actually placed in the referenced component, including L-bracket hardware members (a screw through a bracket names the bracket and the wood it bites).
 
 Connectivity: fasteners and expanded connections are undirected edges between member instances (glue with N members is a clique). The **seed** is the first member of the first component. Any instance not reachable from the seed is drawn with red/white hazard stripes. The seed itself is always treated as fastened.
@@ -317,14 +319,32 @@ Each cut clips whatever remains. Both ends of a board can be mitered by followin
 
 ## Catalog
 
-v1 ships a small built-in dataset in `src/lib/catalog.ts`. Catalog `size` is always **actual L×W×T**, longest → shortest (a 2×4×8 is 8′ × 3.5″ × 1.5″). Trade names stay (it is still a 2×4). Sheet goods are 96″ × 48″ × listed thickness. Angle L-brackets (`bracket-l-*`, two square flanges at 90°) and flat L-brackets (`bracket-flat-l-*`, a single-plane L plate) are renderable hardware members; they do not take planar cuts. Fasteners (screws, glue) are rendered as instances. Other hardware is catalogued for later rendering and procedural use.
+v1 ships a small built-in dataset in `src/lib/catalog.ts`. Catalog `size` is always **actual L×W×T**, longest → shortest (a 2×4×8 is 8′ × 3.5″ × 1.5″). Trade names stay (it is still a 2×4). Sheet goods are 96″ × 48″ × listed thickness. Lumber and sheet goods are discrete rows: a 2×10 is not a scaled 2×4, because actual thickness stays 1.5″ while actual width changes. Angle L-brackets, flat L-brackets, the post-to-beam T-connector, and the post saddle are renderable hardware members; they do not take planar cuts. Round rods are renderable hardware too. A rod is a round prism inscribed in its L×W×T box, and it takes the same planar cuts as lumber. Fasteners (screws, bolts, glue) are rendered as instances. Hinges and drawer slides are catalogued for later rendering and procedural use.
+
+Parameterized stock (`bracket-l`, `connector-t`, `saddle`) stores a spec per axis. A member's `size` lists only the free axes. Fixed axes and extra features stay at the catalog value, so lengthening a plate does not thicken it or change stem or flange height.
+
+```yaml
+- { label: Post cap, stock: connector-t, size: [7.5, 5.5] }  # L and W; gauge stays 1/4″, riser stays 3″
+- { label: Post bracket, stock: bracket-l, size: [6, 4] }    # leg and fold; gauge stays 1/8″
+```
 
 | id | kind | actual L × W × T (in) | notes |
 | --- | --- | --- | --- |
 | `2x4x8` | lumber | 96 × 3.5 × 1.5 | pine |
 | `2x4x10` | lumber | 120 × 3.5 × 1.5 | pine |
+| `2x6x8` | lumber | 96 × 5.5 × 1.5 | pine |
+| `2x6x10` | lumber | 120 × 5.5 × 1.5 | pine |
+| `2x6x12` | lumber | 144 × 5.5 × 1.5 | pine |
+| `6x6x8` | lumber | 96 × 5.5 × 5.5 | pine |
+| `6x6x10` | lumber | 120 × 5.5 × 5.5 | pine |
+| `6x6x12` | lumber | 144 × 5.5 × 5.5 | pine |
+| `plywood-1/4-4x8` | sheet | 96 × 48 × 0.25 | |
+| `plywood-3/8-4x8` | sheet | 96 × 48 × 0.375 | |
 | `plywood-1/2-4x8` | sheet | 96 × 48 × 0.5 | |
+| `plywood-5/8-4x8` | sheet | 96 × 48 × 0.625 | |
 | `plywood-3/4-4x8` | sheet | 96 × 48 × 0.75 | |
+| `mdf-1/4-4x8` | sheet | 96 × 48 × 0.25 | |
+| `mdf-1/2-4x8` | sheet | 96 × 48 × 0.5 | |
 | `mdf-3/4-4x8` | sheet | 96 × 48 × 0.75 | |
 | `screw-wood-6x1.25` | fastener | #6 × 1¼″ wood screw | rendered as a fastener |
 | `screw-wood-8x1.25` | fastener | #8 × 1¼″ wood screw | rendered as a fastener |
@@ -332,19 +352,39 @@ v1 ships a small built-in dataset in `src/lib/catalog.ts`. Catalog `size` is alw
 | `screw-wood-8x2.5` | fastener | #8 × 2½″ wood screw | rendered as a fastener |
 | `screw-wood-10x3` | fastener | #10 × 3″ wood screw | rendered as a fastener |
 | `wood-glue` | fastener | wood glue bead | rendered as a fastener |
-| `bracket-l-1.5x1.5` | hardware | 1½″ × 1½″ angle L-bracket | placed as a part |
-| `bracket-l-2x2` | hardware | 2″ × 2″ angle L-bracket | placed as a part |
+| `bracket-l-1.5x1.5` | hardware | 1½″ × 1½″ angle L-bracket | placed as a part; gauge ⅛″ |
+| `bracket-l-2x2` | hardware | 2″ × 2″ angle L-bracket | placed as a part; gauge ⅛″ |
+| `bracket-l` | hardware | angle L-bracket | L and W each 1.5–12 (default 2); gauge fixed ⅛″ |
 | `bracket-flat-l-2x1` | hardware | 2″ × 1″ flat L-bracket | placed as a part |
 | `bracket-flat-l-3x1` | hardware | 3″ × 1″ flat L-bracket | placed as a part |
-| `bolt-1/4-20x3` | hardware | ¼-20 × 3″ hex bolt | not rendered in v1 |
+| `connector-t` | hardware | post-to-beam T | L and W each 3.5–12 (default 5.5); gauge fixed ¼″; stem height fixed 3″ |
+| `saddle` | hardware | post saddle | L and inside width W each 1.5–12 (default 5.5); gauge fixed ¼″; flange height fixed 2″ |
+| `rod-1x12` | hardware | 12 × 1 × 1 | black round bar, 1″ diameter |
+| `rod-1x16` | hardware | 16 × 1 × 1 | black round bar, 1″ diameter |
+| `rod-1x21` | hardware | 21 × 1 × 1 | black round bar, 1″ diameter |
+| `bolt-hex-1/4x2` | fastener | ¼″ × 2″ hex bolt | head, washers, nut |
+| `bolt-hex-1/4x3` | fastener | ¼″ × 3″ hex bolt | head, washers, nut |
+| `bolt-hex-1/4x4` | fastener | ¼″ × 4″ hex bolt | head, washers, nut |
+| `bolt-hex-3/8x3` | fastener | ⅜″ × 3″ hex bolt | head, washers, nut |
+| `bolt-hex-3/8x4` | fastener | ⅜″ × 4″ hex bolt | head, washers, nut |
+| `bolt-hex-3/8x6` | fastener | ⅜″ × 6″ hex bolt | head, washers, nut |
+| `bolt-hex-1/2x4` | fastener | ½″ × 4″ hex bolt | head, washers, nut |
+| `bolt-hex-1/2x6` | fastener | ½″ × 6″ hex bolt | head, washers, nut |
+| `bolt-hex-1/2x8` | fastener | ½″ × 8″ hex bolt | head, washers, nut |
 | `hinge-overlay-35mm` | hardware | 35 mm overlay hinge | not rendered in v1 |
 | `drawer-slide-18` | hardware | 18 × 1.5 × 0.5 | 18″ side-mount slide (pair); not rendered in v1 |
 
 Catalog entries have `material` and `color` used by the viewport for lumber, sheet goods, L-brackets, and fastener solids.
 
-L-bracket part axes: origin at the inside corner. Axis 0 is the first flange along +X, axis 1 is the fold along +Z, axis 2 is plate thickness along +Y. The second flange rises along +Y (thin +X). Default pose sits the first flange on `LxW@0` with the second flange standing. Planar cuts are not allowed.
+L-bracket part axes: origin at the inside corner. Axis 0 is the first flange along +X, axis 1 is the fold along +Z, axis 2 is plate thickness along +Y. The second flange rises along +Y (thin +X) and is the same leg length and the same gauge. Default pose sits the first flange on `LxW@0` with the second flange standing. Planar cuts are not allowed.
 
 Flat L-bracket part axes: origin at the outer corner of a single-plane L between `LxW@0` and `LxW@1` (the XZ plane). Axis 0 is the first leg (+X), axis 1 is the second leg (+Z), axis 2 is plate thickness (+Y). `size` is `[leg, arm width, thickness]`. Planar cuts are not allowed.
+
+T-connector (`connector-t`) part axes: origin at the outside corner of the bed, same convention as an L-bracket. The bed is L×W×T on `LxW@0`. The stem is centered across W, gauge T, and rises the catalog `riser` (3″) along +Y. L and W are the timber fit and are independent of each other; T and `riser` do not follow them. Planar cuts are not allowed.
+
+Saddle (`saddle`) part axes: origin at the outside corner of the seat. The seat is L long and T thick. The clear opening is W, and a flange of gauge T and catalog height `flange` (2″) rises along +Y at each edge of that opening. Widening W does not change flange height or gauge. Planar cuts are not allowed.
+
+Round rod (`rod-1x12`, `rod-1x16`, `rod-1x21`): a 16-side prism along L. The circle of diameter min(W, T) is inscribed in the W×T square, so a 1″ rod’s bounding box stays L×1×1. It takes the same planar cuts as lumber.
 
 ## Procedural components
 
@@ -398,7 +438,7 @@ components:
 - Left pane: YAML editor (CodeMirror) with a walnut/amber theme and lint markers on diagnostics.
 - Right pane: react-three-fiber scene — warm hemisphere + shadowed directional light, 1″ grid with 12″ sections, orbit controls, wood-tone materials with CAD edges.
 - Click a member to inspect `id`, stock, finished AABB (L × W × T of the cut solid), whether it is fastened, and the members attached to it. Non-selected members fade so fasteners inside the assembly stay visible; attached fasteners highlight.
-- Fasteners render as solids: screws (head + shank) and glue beads. Connection recipes expand into those instances. L-brackets render as ordinary steel members.
+- Fasteners render as solids: screws (head + shank), bolts (hex head, washers, shank, and nut), and glue beads. Connection recipes expand into those instances. L-brackets, T-connectors, and saddles render as ordinary metal members.
 - Drilled bores, including derived pilot and clearance bores, are cut out of the rendered member. A blind bore has a bottom at `depth`. A through bore is open on the exit face. A mesh that is not one watertight solid keeps a dark marker instead of a cut.
 - An explode slider radiates members from the scene center (distance-proportional); fasteners travel with their members.
 - Any member not reachable from the first member of the first component is drawn with red/white hazard stripes.
@@ -416,5 +456,5 @@ Edits are one-way in v1 (YAML → 3D). GUI → YAML round-trip is on the roadmap
 - Cut-list optimizer (nest parts onto stock, kerf, waste).
 - CSV / STL export.
 - Implement procedural `drawer` and `cabinet-door`.
-- Render remaining hardware (bolts, hinges, slides) as solids / instances.
+- Render remaining hardware (hinges, slides) as solids / instances.
 - Species / grain materials and joinery annotations.

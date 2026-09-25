@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { getCatalogPart, getFastenerSubtype } from "./catalog";
+import { getCatalogPart, getFastenerSubtype, resolveStockSize, type Vec3 } from "./catalog";
 import { FACE_IDS, placeBore, type FaceId, type PlacedBore } from "./geometry/faces";
 import { assignIds, isValidId } from "./identity";
 import { parseAt, parseDimension, type DimensionInput } from "./units";
@@ -51,6 +51,8 @@ const MemberSchema = z.object({
   id: z.string().optional(),
   label: z.string().min(1),
   stock: z.string().min(1),
+  /** Free axes of parameterized stock, in L, W, T order. Fixed axes are omitted. */
+  size: z.array(DimensionSchema).min(1).max(3).optional(),
   cuts: z.array(CutSchema).optional(),
   bores: z.array(BoreSchema).default([]),
 });
@@ -101,10 +103,17 @@ const GlueVariantSchema = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("edge"), edge: DimensionSchema }),
 ]);
 
-const BoltVariantSchema = z.object({
-  kind: z.literal("through"),
-  at: z.tuple([DimensionSchema, DimensionSchema]).optional(),
-});
+const BoltVariantSchema = z.discriminatedUnion("kind", [
+  z.object({
+    kind: z.literal("through"),
+    at: z.tuple([DimensionSchema, DimensionSchema]).optional(),
+  }),
+  z.object({
+    kind: z.literal("angle-bracket"),
+    bracket: z.string().min(1),
+    edge: DimensionSchema,
+  }),
+]);
 
 const ConnectionFastenerSchema = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("screw"), stock: z.string().min(1), variant: ScrewVariantSchema }),
@@ -163,6 +172,10 @@ export type ResolvedMember = {
   id: string;
   label: string;
   stock: string;
+  /** Actual L×W×T. Catalog default when the member omits `size`. */
+  size: Vec3;
+  /** Named feature sizes (riser, flange) from the catalog. Empty for a box. */
+  features: Record<string, number>;
   cuts: ResolvedCut[];
   bores: ResolvedBore[];
 };
@@ -194,7 +207,9 @@ export type ResolvedScrewVariant =
 
 export type ResolvedGlueVariant = { kind: "patch" } | { kind: "edge"; edge: number };
 
-export type ResolvedBoltVariant = { kind: "through"; at?: [number, number] };
+export type ResolvedBoltVariant =
+  | { kind: "through"; at?: [number, number] }
+  | { kind: "angle-bracket"; bracket: string; edge: number };
 
 export type ResolvedConnectionFastener =
   | { kind: "screw"; stock: string; variant: ResolvedScrewVariant }
@@ -247,7 +262,7 @@ function parseVec3(
 
 function resolveMemberBores(
   rawBores: RawBore[],
-  stockId: string,
+  size: Vec3,
 ): { bores: ResolvedBore[]; issues: ValidationIssue[] } {
   const issues: ValidationIssue[] = [];
   const parsed: { face: FaceId; at: [number, number]; diameter: number; depth?: number }[] = [];
@@ -268,13 +283,10 @@ function resolveMemberBores(
   }
   if (issues.length > 0) return { bores: [], issues };
 
-  const catalog = getCatalogPart(stockId);
-  if (!catalog) return { bores: [], issues: [] };
-
   const bores: ResolvedBore[] = [];
   for (const [bIndex, bore] of parsed.entries()) {
     try {
-      bores.push(placeBore(bore, catalog.size));
+      bores.push(placeBore(bore, size));
     } catch (error) {
       issues.push({
         message: error instanceof Error ? error.message : String(error),
@@ -429,9 +441,9 @@ function resolveExplicitFastener(
     return undefined;
   }
 
-  if (subtype === "screw" && raw.members.length !== 2) {
+  if ((subtype === "screw" || subtype === "bolt") && raw.members.length !== 2) {
     issues.push({
-      message: `Screws require exactly two members, got ${raw.members.length}`,
+      message: `${subtype === "bolt" ? "Bolts" : "Screws"} require exactly two members, got ${raw.members.length}`,
       path: [...path, "members"],
     });
     return undefined;
@@ -456,10 +468,10 @@ function resolveExplicitFastener(
       continue;
     }
 
-    if (subtype === "screw") {
+    if (subtype === "screw" || subtype === "bolt") {
       if (!direction) {
         issues.push({
-          message: "Screw members require `direction` (member-local, head → tip)",
+          message: `${subtype === "bolt" ? "Bolt" : "Screw"} members require \`direction\` (member-local, head → tip)`,
           path: [...memberPath, "direction"],
         });
         continue;
@@ -519,6 +531,22 @@ function resolveConnectionFastener(
   }
 
   if (raw.kind === "bolt") {
+    if (raw.variant.kind === "angle-bracket") {
+      if (!memberIds.has(raw.variant.bracket)) {
+        issues.push({
+          message: `angle-bracket bracket "${raw.variant.bracket}" must be one of the connection members`,
+          path: [...path, "variant", "bracket"],
+        });
+        return undefined;
+      }
+      const edge = parseMeasure(raw.variant.edge, [...path, "variant", "edge"], "edge", issues, "nonnegative");
+      if (edge === undefined) return undefined;
+      return {
+        kind: "bolt",
+        stock: raw.stock,
+        variant: { kind: "angle-bracket", bracket: raw.variant.bracket, edge },
+      };
+    }
     let at: [number, number] | undefined;
     if (raw.variant.at) {
       try {
@@ -671,7 +699,25 @@ export function validateDocument(input: unknown): {
       continue;
     }
 
-    const resolvedBores = resolveMemberBores(member.bores, member.stock);
+    const catalog = getCatalogPart(member.stock);
+    let size: Vec3 = [0, 0, 0];
+    let features: Record<string, number> = {};
+    if (catalog) {
+      try {
+        const override = member.size?.map((value) => parseDimension(value));
+        const resolved = resolveStockSize(catalog, override);
+        size = resolved.size;
+        features = resolved.features;
+      } catch (error) {
+        issues.push({
+          message: error instanceof Error ? error.message : String(error),
+          path: ["members", index, "size"],
+        });
+        continue;
+      }
+    }
+
+    const resolvedBores = catalog ? resolveMemberBores(member.bores, size) : { bores: [], issues: [] };
     for (const issue of resolvedBores.issues) {
       issues.push({
         message: issue.message,
@@ -684,6 +730,8 @@ export function validateDocument(input: unknown): {
       id: member.id,
       label: member.label,
       stock: member.stock,
+      size,
+      features,
       cuts,
       bores: resolvedBores.bores,
     });

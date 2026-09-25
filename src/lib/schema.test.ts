@@ -578,4 +578,104 @@ describe("validateDocument", () => {
     });
     expect(edge.issues.some((issue) => issue.message.includes("edge must be 0 or greater"))).toBe(true);
   });
+
+  it("resolves a parametric size onto the free axes and keeps fixed features", () => {
+    const { document, issues } = validateDocument({
+      ...base,
+      members: [{ label: "Cap", stock: "connector-t", size: [7.5, 5.5] }],
+    });
+    expect(issues).toEqual([]);
+    expect(document?.members[0].size).toEqual([7.5, 5.5, 0.25]);
+    expect(document?.members[0].features).toEqual({ riser: 3 });
+  });
+
+  it("fills omitted free axes from the catalog default", () => {
+    const { document, issues } = validateDocument({
+      ...base,
+      members: [{ label: "Bracket", stock: "bracket-l", size: [6] }],
+    });
+    expect(issues).toEqual([]);
+    expect(document?.members[0].size).toEqual([6, 2, 0.125]);
+    expect(document?.members[0].features).toEqual({});
+  });
+
+  it("rejects size on stock that is not parameterized", () => {
+    const { document, issues } = validateDocument({
+      ...base,
+      members: [{ label: "Leg", stock: "2x4x8", size: [10] }],
+    });
+    expect(document).toBeUndefined();
+    expect(issues.some((issue) => issue.message.includes("is not parameterized"))).toBe(true);
+  });
+
+  it("rejects a size value past the free axes", () => {
+    const { issues } = validateDocument({
+      ...base,
+      members: [{ label: "Bracket", stock: "bracket-l", size: [6, 4, 0.25] }],
+    });
+    expect(issues.some((issue) => issue.message.includes("T is fixed"))).toBe(true);
+  });
+
+  it("rejects a size outside the axis range", () => {
+    const { issues } = validateDocument({
+      ...base,
+      members: [{ label: "Cap", stock: "connector-t", size: [13, 5.5] }],
+    });
+    expect(issues.some((issue) => issue.message.includes("L must be between 3.5 and 12"))).toBe(true);
+  });
+
+  it("accepts a bolt angle-bracket variant", () => {
+    const { document, issues } = validateDocument({
+      ...twoParts,
+      members: [...twoParts.members, { label: "Saddle", stock: "saddle", size: [5.5, 5.5] }],
+      components: [
+        {
+          label: "Box",
+          members: [{ id: "a-1" }, { id: "b-1" }, { id: "saddle-1" }],
+          connections: [
+            {
+              members: [{ id: "saddle-1" }, { id: "a-1" }],
+              fasteners: [
+                {
+                  kind: "bolt",
+                  stock: "bolt-hex-3/8x4",
+                  variant: { kind: "angle-bracket", bracket: "saddle-1", edge: 0.25 },
+                },
+              ],
+            },
+          ],
+        },
+      ],
+    });
+    expect(issues).toEqual([]);
+    expect(document?.components[0].connections[0].fasteners[0]).toEqual({
+      kind: "bolt",
+      stock: "bolt-hex-3/8x4",
+      variant: { kind: "angle-bracket", bracket: "saddle-1", edge: 0.25 },
+    });
+  });
+
+  it("rejects a bolt angle-bracket that is not one of the connection members", () => {
+    const { issues } = validateDocument({
+      ...twoParts,
+      components: [
+        {
+          ...twoParts.components[0],
+          connections: [
+            {
+              members: [{ id: "a-1" }, { id: "b-1" }],
+              fasteners: [
+                {
+                  kind: "bolt",
+                  stock: "bolt-hex-1/4x3",
+                  variant: { kind: "angle-bracket", bracket: "missing-1", edge: 0.25 },
+                },
+              ],
+            },
+          ],
+        },
+      ],
+    });
+    expect(issues.some((issue) => issue.message.includes("must be one of the connection members"))).toBe(true);
+  });
 });

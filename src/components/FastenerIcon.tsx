@@ -26,6 +26,15 @@ export function FastenerIcon({ kind }: FastenerIconProps) {
       </svg>
     );
   }
+  if (kind === "bolt") {
+    return (
+      <svg viewBox="0 0 24 24" className="h-7 w-7" aria-hidden="true">
+        <polygon points="12,2 16.2,4.4 16.2,8.4 12,10.8 7.8,8.4 7.8,4.4" fill="currentColor" />
+        <path fill="currentColor" d="M10.2 8.2h3.6V16h-3.6z" />
+        <polygon points="12,15.2 16.2,17.6 16.2,21.2 12,23.2 7.8,21.2 7.8,17.6" fill="currentColor" />
+      </svg>
+    );
+  }
   if (kind === "glue") {
     return (
       <svg viewBox="0 0 24 24" className="h-7 w-7" aria-hidden="true">

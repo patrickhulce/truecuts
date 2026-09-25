@@ -68,6 +68,52 @@ function ScrewMesh({
   );
 }
 
+function BoltMesh({
+  fastener,
+  highlighted,
+  offset,
+}: {
+  fastener: SceneFastener;
+  highlighted: boolean;
+  offset: Vec3;
+}) {
+  const quaternion = useMemo(() => lookAlongY(fastener.direction), [fastener.direction]);
+  const diameter = Math.max(fastener.diameter, 0.08);
+  const shankR = diameter / 2;
+  const acrossFlats = diameter * 1.5;
+  const headR = acrossFlats / Math.sqrt(3);
+  const headH = diameter * 0.65;
+  const washerR = diameter * 1.1;
+  const washerH = Math.max(diameter * 0.16, 0.04);
+  const nutH = diameter * 0.8;
+  const span = fastener.grip && fastener.grip > 1e-4 ? fastener.grip : fastener.length;
+  const shankH = Math.max(fastener.length, 0.1);
+  return (
+    <group position={add(fastener.origin, offset)} quaternion={quaternion}>
+      <mesh position={[0, -(washerH + headH / 2), 0]} castShadow>
+        <cylinderGeometry args={[headR, headR, headH, 6]} />
+        <Steel color={fastener.color} highlighted={highlighted} />
+      </mesh>
+      <mesh position={[0, -washerH / 2, 0]} castShadow>
+        <cylinderGeometry args={[washerR, washerR, washerH, 24]} />
+        <Steel color={fastener.color} highlighted={highlighted} />
+      </mesh>
+      <mesh position={[0, shankH / 2, 0]} castShadow>
+        <cylinderGeometry args={[shankR, shankR, shankH, 12]} />
+        <Steel color={fastener.color} highlighted={highlighted} />
+      </mesh>
+      <mesh position={[0, span + washerH / 2, 0]} castShadow>
+        <cylinderGeometry args={[washerR, washerR, washerH, 24]} />
+        <Steel color={fastener.color} highlighted={highlighted} />
+      </mesh>
+      <mesh position={[0, span + washerH + nutH / 2, 0]} castShadow>
+        <cylinderGeometry args={[headR, headR, nutH, 6]} />
+        <Steel color={fastener.color} highlighted={highlighted} />
+      </mesh>
+    </group>
+  );
+}
+
 function GlueMesh({
   fastener,
   highlighted,
@@ -120,6 +166,9 @@ export function FastenerMesh({
 }) {
   if (fastener.subtype === "glue") {
     return <GlueMesh fastener={fastener} highlighted={highlighted} offset={offset} />;
+  }
+  if (fastener.subtype === "bolt") {
+    return <BoltMesh fastener={fastener} highlighted={highlighted} offset={offset} />;
   }
   return <ScrewMesh fastener={fastener} highlighted={highlighted} offset={offset} />;
 }

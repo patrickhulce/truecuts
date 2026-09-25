@@ -251,6 +251,7 @@ export function setConnectionFastener(
 export function defaultConnectionFastener(stock: string): RawConnectionFastener {
   const subtype = getFastenerSubtype(stock);
   if (subtype === "glue") return { kind: "glue", stock, variant: { kind: "patch" } };
+  if (subtype === "bolt") return { kind: "bolt", stock, variant: { kind: "through" } };
   return {
     kind: "screw",
     stock: subtype === "screw" ? stock : "screw-wood-8x2",

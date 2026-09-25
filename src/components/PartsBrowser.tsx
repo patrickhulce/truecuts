@@ -144,7 +144,7 @@ function bracketMemberIds(connections: SceneConnection[], selectedKey: string): 
   for (const connection of connections) {
     if (!connection.memberKeys.includes(selectedKey)) continue;
     for (const fastener of connection.fasteners) {
-      if (fastener.kind === "screw" && fastener.variant.kind === "angle-bracket") {
+      if ((fastener.kind === "screw" || fastener.kind === "bolt") && fastener.variant.kind === "angle-bracket") {
         ids.add(fastener.variant.bracket);
       }
     }
@@ -159,8 +159,10 @@ function connectionSummary(connection: SceneConnection): {
 } {
   const recipes = connection.fasteners.filter((recipe) => recipe.kind !== "none");
   if (recipes.length === 0) return { kind: "none", label: "None", detail: "" };
-  const bracket = recipes.find((recipe) => recipe.kind === "screw" && recipe.variant.kind === "angle-bracket");
-  if (bracket && bracket.kind === "screw") {
+  const bracket = recipes.find(
+    (recipe) => (recipe.kind === "screw" || recipe.kind === "bolt") && recipe.variant.kind === "angle-bracket",
+  );
+  if (bracket && (bracket.kind === "screw" || bracket.kind === "bolt")) {
     const catalog = getCatalogPart(bracket.stock);
     const detail = catalog ? `${formatInches(catalog.size[0])} × ${formatInches(catalog.size[1])}` : bracket.stock;
     return { kind: "bracket", label: "Bracket", detail };

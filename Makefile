@@ -4,19 +4,19 @@ default: ci
 ci: build lint typecheck test
 
 build:
-	npm run build
+	pnpm run build
 
 lint:
-	npm run lint
+	pnpm run lint
 
 typecheck:
-	npm run typecheck
+	pnpm run typecheck
 
 test:
-	npm test
+	pnpm test
 
 serve:
-	npm run serve
+	pnpm run serve
 
 dev:
-	npm run dev
+	pnpm run dev

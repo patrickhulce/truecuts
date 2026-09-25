@@ -54,7 +54,8 @@ function memberIdsOf(connection: SceneConnection): string[] {
   return ids;
 }
 
-function withKind(kind: "screw" | "glue"): ResolvedConnectionFastener {
+function withKind(kind: "screw" | "glue" | "none"): ResolvedConnectionFastener {
+  if (kind === "none") return { kind: "none" };
   if (kind === "glue") return { kind: "glue", stock: "wood-glue", variant: { kind: "patch" } };
   return {
     kind: "screw",
@@ -120,7 +121,7 @@ function FastenerFields({
     <section className="mb-4 border-b border-[#3d2a18]/70 pb-4 last:border-b-0">
       <div className="text-[10px] uppercase tracking-widest text-[#8a7355]">Kind</div>
       <div className="mt-1 flex gap-1">
-        {(["screw", "glue"] as const).map((kind) => (
+        {(["screw", "glue", "none"] as const).map((kind) => (
           <Choice
             key={kind}
             selected={fastener.kind === kind}
@@ -133,7 +134,7 @@ function FastenerFields({
         ))}
       </div>
 
-      {fastener.kind === "screw" ? (
+      {fastener.kind === "none" ? null : fastener.kind === "screw" ? (
         <>
           <div className="mt-3 text-[10px] uppercase tracking-widest text-[#8a7355]">Variant</div>
           <div className="mt-1 flex flex-wrap gap-1">
@@ -173,32 +174,35 @@ function FastenerFields({
             ))}
           </div>
         </>
-      ) : (
+      ) : fastener.kind === "bolt" ? (
         <p className="mt-3 text-xs text-[#8a7355]">Through-bolt layout is fixed.</p>
+      ) : null}
+
+      {fastener.kind === "none" ? null : (
+        <>
+          <div className="mt-3 text-[10px] uppercase tracking-widest text-[#8a7355]">Stock</div>
+          <ul className="mt-1 space-y-1">
+            {stocks.map((item) => (
+              <li key={item.id}>
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (fastener.stock !== item.id) onChange({ ...fastener, stock: item.id });
+                  }}
+                  className={`w-full cursor-pointer rounded border px-2 py-1.5 text-left text-sm ${
+                    fastener.stock === item.id
+                      ? "border-[#f59e0b] text-[#f59e0b]"
+                      : "border-[#3d2a18] text-[#d6c3a3] hover:border-[#6b4a2b]"
+                  }`}
+                >
+                  {item.label}
+                </button>
+              </li>
+            ))}
+          </ul>
+          <VariantOptions fastener={fastener} memberIds={memberIds} onChange={onChange} />
+        </>
       )}
-
-      <div className="mt-3 text-[10px] uppercase tracking-widest text-[#8a7355]">Stock</div>
-      <ul className="mt-1 space-y-1">
-        {stocks.map((item) => (
-          <li key={item.id}>
-            <button
-              type="button"
-              onClick={() => {
-                if (fastener.stock !== item.id) onChange({ ...fastener, stock: item.id });
-              }}
-              className={`w-full cursor-pointer rounded border px-2 py-1.5 text-left text-sm ${
-                fastener.stock === item.id
-                  ? "border-[#f59e0b] text-[#f59e0b]"
-                  : "border-[#3d2a18] text-[#d6c3a3] hover:border-[#6b4a2b]"
-              }`}
-            >
-              {item.label}
-            </button>
-          </li>
-        ))}
-      </ul>
-
-      <VariantOptions fastener={fastener} memberIds={memberIds} onChange={onChange} />
     </section>
   );
 }
@@ -212,6 +216,7 @@ function VariantOptions({
   memberIds: string[];
   onChange: (fastener: ResolvedConnectionFastener) => void;
 }) {
+  if (fastener.kind === "none") return null;
   const variant = fastener.variant;
   return (
     <div className="mt-3 grid grid-cols-2 gap-2">

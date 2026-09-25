@@ -1,8 +1,24 @@
 type FastenerIconProps = {
-  kind: "screw" | "glue" | "bolt" | "bracket";
+  kind: "screw" | "glue" | "bolt" | "bracket" | "none";
 };
 
 export function FastenerIcon({ kind }: FastenerIconProps) {
+  if (kind === "none") {
+    return (
+      <svg viewBox="0 0 24 24" className="h-7 w-7" aria-hidden="true">
+        <line
+          x1="3"
+          y1="12"
+          x2="21"
+          y2="12"
+          stroke="currentColor"
+          strokeWidth="1.6"
+          strokeDasharray="1.5 2.5"
+          strokeLinecap="round"
+        />
+      </svg>
+    );
+  }
   if (kind === "bracket") {
     return (
       <svg viewBox="0 0 24 24" className="h-7 w-7" aria-hidden="true">

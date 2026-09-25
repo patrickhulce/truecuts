@@ -110,6 +110,7 @@ const ConnectionFastenerSchema = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("screw"), stock: z.string().min(1), variant: ScrewVariantSchema }),
   z.object({ kind: z.literal("glue"), stock: z.string().min(1), variant: GlueVariantSchema.optional() }),
   z.object({ kind: z.literal("bolt"), stock: z.string().min(1), variant: BoltVariantSchema }),
+  z.object({ kind: z.literal("none") }),
 ]);
 
 const ConnectionSchema = z.object({
@@ -198,7 +199,8 @@ export type ResolvedBoltVariant = { kind: "through"; at?: [number, number] };
 export type ResolvedConnectionFastener =
   | { kind: "screw"; stock: string; variant: ResolvedScrewVariant }
   | { kind: "glue"; stock: string; variant: ResolvedGlueVariant }
-  | { kind: "bolt"; stock: string; variant: ResolvedBoltVariant };
+  | { kind: "bolt"; stock: string; variant: ResolvedBoltVariant }
+  | { kind: "none" };
 
 export type ResolvedConnectionMember = {
   component: string;
@@ -490,6 +492,7 @@ function resolveConnectionFastener(
   memberIds: Set<string>,
   issues: ValidationIssue[],
 ): ResolvedConnectionFastener | undefined {
+  if (raw.kind === "none") return { kind: "none" };
   const catalog = getCatalogPart(raw.stock);
   const subtype = getFastenerSubtype(raw.stock);
   if (!catalog || catalog.kind !== "fastener" || !subtype) {

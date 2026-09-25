@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { layoutScrewPoints, SCREW_PILOT_RATIO } from "./connections";
+import { attachmentNeighborKeys, layoutScrewPoints, SCREW_PILOT_RATIO } from "./connections";
 import { compileDocument } from "./compile";
 import type { Face, Vec3 } from "./geometry";
 
@@ -135,6 +135,7 @@ describe("expandConnections", () => {
       ),
     ).toBe(true);
     expect(scene!.connections[0].bores).toHaveLength(8);
+    expect(screws.every((fastener) => fastener.headCovered)).toBe(false);
   });
 
   it("pilots only the tip when the screw does not span the head", () => {
@@ -171,6 +172,7 @@ components:
     expect(tip?.derivedBores).toHaveLength(1);
     expect(tip?.derivedBores[0].depth).toBeCloseTo(2, 4);
     expect(tip?.derivedBores[0].diameter).toBeCloseTo(0.164 * SCREW_PILOT_RATIO, 6);
+    expect(result.scene?.fasteners[0].headCovered).toBe(true);
   });
 
   it("places a glue bead and no bores", () => {
@@ -187,6 +189,21 @@ components:
     expect(result.scene?.connections[0].bores).toEqual([]);
   });
 
+  it("keeps a connection with no fastener and no contact warning", () => {
+    const result = compileDocument(`${STACK.replace("position: [0, 1.5, 0]", "position: [0, 10, 0]")}    connections:
+      - members:
+          - { id: a-1 }
+          - { id: b-1 }
+        fasteners:
+          - { kind: none }
+`);
+    expect(result.diagnostics.filter((item) => item.message.includes("no contact"))).toEqual([]);
+    expect(result.scene?.fasteners).toEqual([]);
+    expect(result.scene?.connections).toHaveLength(1);
+    expect(result.scene?.connections[0].fasteners).toEqual([{ kind: "none" }]);
+    expect(result.scene?.connections[0].bores).toEqual([]);
+  });
+
   it("warns when a member never touches the others and still renders", () => {
     const result = compileDocument(`${STACK.replace("position: [0, 1.5, 0]", "position: [0, 10, 0]")}    connections:
       - members:
@@ -199,5 +216,32 @@ components:
     expect(result.diagnostics.some((item) => item.severity === "warning" && item.message.includes("no contact"))).toBe(
       true,
     );
+  });
+});
+
+describe("attachmentNeighborKeys", () => {
+  it("lists the other member of a none connection", () => {
+    expect(attachmentNeighborKeys("box-1/a-1#0", [{ memberKeys: ["box-1/a-1#0", "box-1/b-1#0"] }], [])).toEqual([
+      "box-1/b-1#0",
+    ]);
+  });
+
+  it("keeps the wood neighbor when the direct screw is cleared and a bracket connection remains", () => {
+    const apron = "bench-1/long-apron-1#0";
+    const leg = "bench-1/leg-1#0";
+    const bracket = "bench-1/corner-bracket-1#0";
+    const keys = attachmentNeighborKeys(
+      apron,
+      [{ memberKeys: [apron, leg] }, { memberKeys: [bracket, apron, leg] }],
+      [],
+    );
+    expect(keys).toContain(leg);
+    expect(keys).toContain(bracket);
+  });
+
+  it("includes an explicit fastener neighbor that has no connection", () => {
+    expect(
+      attachmentNeighborKeys("a", [], [{ members: [{ instanceKey: "a" }, { instanceKey: "c" }] }]),
+    ).toEqual(["c"]);
   });
 });

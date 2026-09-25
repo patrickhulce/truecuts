@@ -74,6 +74,31 @@ export function connectionKey(componentId: string | null, index: number): string
   return componentId ? `${componentId}/connection#${index}` : `connection#${index}`;
 }
 
+/**
+ * Other instances that belong in the detail pane's Attached list.
+ * Connections count even when every recipe is `none` (no expanded fastener).
+ */
+export function attachmentNeighborKeys(
+  selectedKey: string,
+  connections: Array<Pick<SceneConnection, "memberKeys">>,
+  fasteners: Array<{ members: Array<{ instanceKey: string }> }>,
+): string[] {
+  const keys = new Set<string>();
+  for (const connection of connections) {
+    if (!connection.memberKeys.includes(selectedKey)) continue;
+    for (const key of connection.memberKeys) {
+      if (key !== selectedKey) keys.add(key);
+    }
+  }
+  for (const fastener of fasteners) {
+    if (!fastener.members.some((member) => member.instanceKey === selectedKey)) continue;
+    for (const member of fastener.members) {
+      if (member.instanceKey !== selectedKey) keys.add(member.instanceKey);
+    }
+  }
+  return [...keys];
+}
+
 /** Instance pairs whose shared contact the connection layout edits. */
 export function connectionContactPairs(connection: SceneConnection): Array<[string, string]> {
   const pairs: Array<[string, string]> = [];
@@ -418,6 +443,7 @@ function expandFastener(
   const edges: Array<[string, string]> = [];
   const bores: DerivedBore[] = [];
   const touched = new Set<string>();
+  if (recipe.kind === "none") return { fasteners, edges, bores, touched };
   const catalog = catalogOf(recipe.stock, [...path, "fasteners", recipeIndex, "stock"], issues);
   if (!catalog || members.length < 2) return { fasteners, edges, bores, touched };
 
@@ -573,13 +599,16 @@ function expandOne(
     for (const id of expanded.touched) touched.add(id);
   }
 
-  for (const solid of members) {
-    if (touched.has(solid.key)) continue;
-    issues.push({
-      message: `Connection has no contact between "${solid.memberId}" and the other members`,
-      path,
-      severity: "warning",
-    });
+  const onlyNone = connection.fasteners.every((recipe) => recipe.kind === "none");
+  if (!onlyNone) {
+    for (const solid of members) {
+      if (touched.has(solid.key)) continue;
+      issues.push({
+        message: `Connection has no contact between "${solid.memberId}" and the other members`,
+        path,
+        severity: "warning",
+      });
+    }
   }
 
   return {

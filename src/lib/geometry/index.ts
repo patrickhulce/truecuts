@@ -21,6 +21,9 @@ export {
   faceNormal,
   flatLBracketPolyhedron,
   lBracketPolyhedron,
+  rodPolyhedron,
+  saddlePolyhedron,
+  tConnectorPolyhedron,
   polyhedronVolume,
   vertexCount,
 } from "./solids";

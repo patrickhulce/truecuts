@@ -6,9 +6,10 @@ import { Group, Panel, Separator, usePanelRef } from "react-resizable-panels";
 import { useDocument } from "@/hooks/useDocument";
 import { clearBuilds } from "@/lib/builds-storage";
 import { compileDocument } from "@/lib/compile";
-import { addMember, deleteMember, setPlacementPose, type NewMemberInput } from "@/lib/edit";
+import { addMember, deleteMember, duplicateMember, setPlacementPose, type NewMemberInput } from "@/lib/edit";
 import { parseInstanceKey } from "@/lib/fasteners";
 import type { Vec3 } from "@/lib/geometry";
+import { localShiftForWorldX } from "@/lib/geometry/pose";
 import {
   DEFAULT_PREFERENCES,
   PREFERENCES_KEY,
@@ -58,9 +59,20 @@ export function Workspace() {
   const storedPreferences = useSyncExternalStore(subscribePreferences, preferencesSnapshot, () => "");
   const preferences = readPreferences(storedPreferences || null);
   const selectedKeyRef = useRef(selectedKey);
+  const textRef = useRef(text);
+  const compiledRef = useRef(compiled);
+  const clipboardRef = useRef<{
+    memberId: string;
+    componentId: string;
+    position: Vec3;
+    rotation: Vec3;
+    worldSpanX: number;
+  } | null>(null);
   useEffect(() => {
     selectedKeyRef.current = selectedKey;
-  }, [selectedKey]);
+    textRef.current = text;
+    compiledRef.current = compiled;
+  }, [compiled, selectedKey, text]);
 
   const setPreferences = useCallback((next: Preferences | ((current: Preferences) => Preferences)) => {
     const current = readPreferences(window.localStorage.getItem(PREFERENCES_KEY));
@@ -177,11 +189,58 @@ export function Workspace() {
         event.preventDefault();
         event.stopPropagation();
         redo();
+        return;
+      }
+      if (isTextField(event.target) || event.repeat) return;
+      if (key === "c" && !event.shiftKey && !event.altKey) {
+        const selection = window.getSelection();
+        if (selection && !selection.isCollapsed && selection.toString().trim()) return;
+        const selected = selectedKeyRef.current;
+        const scene = compiledRef.current.scene;
+        if (!selected || !scene) return;
+        const instance = scene.components.flatMap((component) => component.members).find((member) => member.key === selected);
+        if (!instance) return;
+        event.preventDefault();
+        const { componentId } = parseInstanceKey(instance.key);
+        clipboardRef.current = {
+          memberId: instance.memberId,
+          componentId,
+          position: [instance.position[0], instance.position[1], instance.position[2]],
+          rotation: [instance.rotation[0], instance.rotation[1], instance.rotation[2]],
+          worldSpanX: instance.worldBounds.max[0] - instance.worldBounds.min[0],
+        };
+        return;
+      }
+      if (key === "v" && !event.shiftKey && !event.altKey) {
+        const copied = clipboardRef.current;
+        const scene = compiledRef.current.scene;
+        const document = compiledRef.current.document;
+        if (!copied || !scene || !document) return;
+        const component = scene.components.find((item) => item.id === copied.componentId);
+        if (!component) return;
+        event.preventDefault();
+        const delta = localShiftForWorldX(component.rotation, copied.worldSpanX + 1);
+        const position: Vec3 = [
+          copied.position[0] + delta[0],
+          copied.position[1] + delta[1],
+          copied.position[2] + delta[2],
+        ];
+        try {
+          const before = new Set(document.members.map((member) => member.id));
+          const next = duplicateMember(textRef.current, copied.memberId, copied.componentId, position, copied.rotation);
+          commit(next);
+          const added = compileDocument(next).scene?.components
+            .flatMap((item) => item.members)
+            .find((member) => !before.has(member.memberId));
+          if (added) handleSelect(added.key);
+        } catch {
+          // Leave the YAML alone if the member cannot be copied.
+        }
       }
     };
     window.addEventListener("keydown", onKeyDown, true);
     return () => window.removeEventListener("keydown", onKeyDown, true);
-  }, [redo, undo]);
+  }, [commit, handleSelect, redo, undo]);
 
   return (
     <div className="flex h-full min-h-0 flex-col">
@@ -286,6 +345,14 @@ export function Workspace() {
       </Group>
     </div>
   );
+}
+
+function isTextField(target: EventTarget | null): boolean {
+  const element = target instanceof Element ? target : null;
+  if (!element) return false;
+  if (element instanceof HTMLInputElement || element instanceof HTMLTextAreaElement) return true;
+  if (element instanceof HTMLElement && element.isContentEditable) return true;
+  return element.closest("input, textarea, [contenteditable='true']") !== null;
 }
 
 function SidePanelIcon() {

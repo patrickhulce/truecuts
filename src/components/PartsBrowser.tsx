@@ -1,11 +1,12 @@
 "use client";
 
 import { useEffect, useRef, useState, type ReactNode } from "react";
-import { getCatalogPart } from "@/lib/catalog";
-import { attachmentNeighborKeys, connectionKey, type SceneConnection } from "@/lib/connections";
-import { promoteExplicitFasteners, setConnectionFastener } from "@/lib/edit";
+import { fitsTConnector, getCatalogPart } from "@/lib/catalog";
+import { connectionKey, connectionNailReach, detailNeighborKeys, type SceneConnection } from "@/lib/connections";
+import { addConnection, promoteExplicitFasteners, setConnectionFastener } from "@/lib/edit";
 import { parseInstanceKey } from "@/lib/fasteners";
 import type { ResolvedBore, ResolvedConnectionFastener, ResolvedCut, ResolvedDocument, ResolvedMember } from "@/lib/schema";
+import type { SceneContacts } from "@/lib/geometry";
 import type { SceneFastener, SceneModel, SceneMemberInstance } from "@/lib/scene";
 import { formatInches } from "@/lib/units";
 import { ConnectionEditor } from "./ConnectionEditor";
@@ -100,10 +101,11 @@ function attachedPartsFor(
   selectedKey: string,
   fasteners: SceneFastener[],
   connections: Array<Pick<SceneConnection, "memberKeys">>,
+  contacts: SceneContacts,
   byKey: Map<string, SceneMemberInstance>,
 ): AttachedPart[] {
   const byNeighbor = new Map<string, SceneFastener[]>();
-  for (const key of attachmentNeighborKeys(selectedKey, connections, fasteners)) {
+  for (const key of detailNeighborKeys(selectedKey, connections, fasteners, contacts)) {
     byNeighbor.set(key, []);
   }
   for (const fastener of fasteners) {
@@ -153,12 +155,15 @@ function bracketMemberIds(connections: SceneConnection[], selectedKey: string): 
 }
 
 function connectionSummary(connection: SceneConnection): {
-  kind: "screw" | "glue" | "bolt" | "bracket" | "none";
+  kind: "screw" | "nail" | "glue" | "bolt" | "bracket" | "connector" | "none";
   label: string;
   detail: string;
 } {
   const recipes = connection.fasteners.filter((recipe) => recipe.kind !== "none");
   if (recipes.length === 0) return { kind: "none", label: "None", detail: "" };
+  if (recipes.some((recipe) => recipe.kind === "connector")) {
+    return { kind: "connector", label: "T-connector", detail: "" };
+  }
   const bracket = recipes.find(
     (recipe) => (recipe.kind === "screw" || recipe.kind === "bolt") && recipe.variant.kind === "angle-bracket",
   );
@@ -167,13 +172,61 @@ function connectionSummary(connection: SceneConnection): {
     const detail = catalog ? `${formatInches(catalog.size[0])} × ${formatInches(catalog.size[1])}` : bracket.stock;
     return { kind: "bracket", label: "Bracket", detail };
   }
-  const primary = recipes.find((recipe) => recipe.kind === "screw") ?? recipes[0];
-  const kinds = (["screw", "bolt", "glue"] as const).filter((kind) => recipes.some((recipe) => recipe.kind === kind));
+  const primary =
+    recipes.find((recipe) => recipe.kind === "screw") ??
+    recipes.find((recipe) => recipe.kind === "nail") ??
+    recipes[0];
+  const kinds = (["screw", "nail", "bolt", "glue"] as const).filter((kind) =>
+    recipes.some((recipe) => recipe.kind === kind),
+  );
   const label = kinds.map(titleKind).join(" + ");
   if (!primary || primary.kind === "glue") return { kind: "glue", label: label || "Glue", detail: "bead" };
   const catalog = getCatalogPart(primary.stock);
   const detail = catalog ? `${formatInches(catalog.size[0])} × ${formatInches(catalog.size[1])}` : primary.stock;
   return { kind: primary.kind, label, detail };
+}
+
+function iconKind(subtype: string): "screw" | "nail" | "glue" | "bolt" | "connector" {
+  if (subtype === "glue" || subtype === "bolt" || subtype === "nail" || subtype === "connector") return subtype;
+  return "screw";
+}
+
+function occurrenceOf(scene: SceneModel, key: string): number {
+  const { componentId, memberId } = parseInstanceKey(key);
+  const component = scene.components.find((item) => item.id === componentId);
+  if (!component) return 0;
+  let seen = 0;
+  for (const member of component.members) {
+    if (member.memberId !== memberId) continue;
+    if (member.key === key) return seen;
+    seen += 1;
+  }
+  return 0;
+}
+
+function allowsTConnector(connection: SceneConnection, byKey: Map<string, SceneMemberInstance>): boolean {
+  return connection.memberKeys.some((key) => {
+    const part = getCatalogPart(byKey.get(key)?.stockId ?? "");
+    return part ? fitsTConnector(part) : false;
+  });
+}
+
+function nailReachFor(connection: SceneConnection, scene: SceneModel): number | undefined {
+  const posed = [];
+  for (const key of connection.memberKeys) {
+    const component = scene.components.find((item) => item.members.some((member) => member.key === key));
+    const part = component?.members.find((member) => member.key === key);
+    if (!component || !part) continue;
+    posed.push({
+      key,
+      faces: part.faces,
+      position: part.position,
+      rotation: part.rotation,
+      componentPosition: component.position,
+      componentRotation: component.rotation,
+    });
+  }
+  return connectionNailReach(scene.contacts, posed);
 }
 
 export function PartsBrowser({
@@ -355,7 +408,7 @@ function PartDetail({
   }, [text]);
   useEffect(() => () => onActiveConnection(null), [onActiveConnection]);
   const cuts = definition?.cuts ?? [];
-  const attached = attachedPartsFor(instance.key, fasteners, scene.connections, byKey).filter(
+  const attached = attachedPartsFor(instance.key, fasteners, scene.connections, scene.contacts, byKey).filter(
     (neighbor) => !bracketMemberIds(scene.connections, instance.key).has(neighbor.instance.memberId),
   );
   const active = scene.connections.find((connection) => connection.key === activeKey) ?? null;
@@ -377,6 +430,30 @@ function PartDetail({
       commitNext(setConnectionFastener(textRef.current, componentId, active.index, index, fastener));
     } catch {
       // Leave the YAML alone if the AST cannot be updated.
+    }
+  }
+
+  function attachNone(neighborKey: string) {
+    const selectedRef = parseInstanceKey(instance.key);
+    const neighborRef = parseInstanceKey(neighborKey);
+    const shared = selectedRef.componentId === neighborRef.componentId ? selectedRef.componentId : null;
+    const nextIndex = shared
+      ? (document.components.find((component) => component.id === shared)?.connections.length ?? 0)
+      : document.connections.length;
+    try {
+      commitNext(
+        addConnection(textRef.current, [
+          { componentId: selectedRef.componentId, id: selectedRef.memberId, index: occurrenceOf(scene, instance.key) },
+          {
+            componentId: neighborRef.componentId,
+            id: neighborRef.memberId,
+            index: occurrenceOf(scene, neighborKey),
+          },
+        ]),
+      );
+      chooseConnection(connectionKey(shared, nextIndex));
+    } catch {
+      // Leave the YAML alone if the connection cannot be appended.
     }
   }
 
@@ -483,6 +560,23 @@ function PartDetail({
                           onOpen={() => chooseConnection(activeKey === connection.key ? null : connection.key)}
                         />
                       ))}
+                      {pair.length === 0 && explicit.length === 0 ? (
+                        <button
+                          type="button"
+                          onClick={(event) => {
+                            event.preventDefault();
+                            event.stopPropagation();
+                            attachNone(neighbor.instance.key);
+                          }}
+                          className="flex w-[4.75rem] cursor-pointer flex-col items-center gap-0.5 rounded border border-dashed border-[#8a7355] px-1 py-1.5 text-[#a89070] hover:border-[#d6c3a3]"
+                        >
+                          <span className="grid h-10 w-10 place-items-center rounded bg-[#140e09]">
+                            <FastenerIcon kind="none" />
+                          </span>
+                          <span className="text-center text-xs leading-tight">None</span>
+                          <span className="text-[10px] text-[#8a7355]"> </span>
+                        </button>
+                      ) : null}
                       {pair.length === 0 && explicit.length > 0 ? (
                         <button
                           type="button"
@@ -494,7 +588,7 @@ function PartDetail({
                           className="flex w-[4.75rem] cursor-pointer flex-col items-center gap-0.5 rounded border border-[#3d2a18] px-1 py-1.5 text-[#d6c3a3] hover:border-[#6b4a2b]"
                         >
                           <span className="grid h-10 w-10 place-items-center rounded bg-[#140e09] text-[#f59e0b]">
-                            <FastenerIcon kind={explicit[0].subtype === "glue" ? "glue" : "screw"} />
+                            <FastenerIcon kind={iconKind(explicit[0].subtype)} />
                           </span>
                           <span className="text-xs">{titleKind(explicit[0].subtype)}</span>
                           <span className="text-[10px] text-[#8a7355]">{formatFastenerLine(explicit[0])}</span>
@@ -510,7 +604,13 @@ function PartDetail({
       </div>
       {active ? (
         <div className="flex min-h-0 basis-0 flex-1 flex-col border-t border-[#3d2a18]">
-          <ConnectionEditor connection={active} onChange={writeFastener} onClose={() => chooseConnection(null)} />
+          <ConnectionEditor
+            connection={active}
+            allowConnector={allowsTConnector(active, byKey)}
+            nailReach={nailReachFor(active, scene)}
+            onChange={writeFastener}
+            onClose={() => chooseConnection(null)}
+          />
         </div>
       ) : null}
     </div>

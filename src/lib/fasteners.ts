@@ -21,6 +21,15 @@ export type SceneFastener = {
   size: Vec3;
   /** Head face to tip exit, for a through bolt. The nut sits here. */
   grip?: number;
+  /** In-plane axis of a T-connector bed. Local +X. Stem is `direction` (local +Y). */
+  across?: Vec3;
+  /** Stem height of a T-connector. */
+  riser?: number;
+  /**
+   * Bed thickness seated opposite the stem. The plate sits on the post and the
+   * flange continues through the beam.
+   */
+  bedInset?: number;
   members: SceneFastenerMember[];
   /** Set when this instance was expanded from a connection recipe. */
   connectionKey?: string;
@@ -180,8 +189,8 @@ function resolveOne(
     return undefined;
   }
 
-  if ((subtype === "screw" || subtype === "bolt") && members.length === 2) {
-    const noun = subtype === "bolt" ? "Bolt" : "Screw";
+  if ((subtype === "screw" || subtype === "bolt" || subtype === "nail") && members.length === 2) {
+    const noun = subtype === "bolt" ? "Bolt" : subtype === "nail" ? "Nail" : "Screw";
     const gap = len([
       members[0].point[0] - members[1].point[0],
       members[0].point[1] - members[1].point[1],

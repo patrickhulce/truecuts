@@ -2,7 +2,7 @@ export type Vec3 = [number, number, number];
 
 export type CatalogKind = "lumber" | "sheet" | "hardware" | "fastener";
 
-export type FastenerSubtype = "screw" | "glue" | "bolt";
+export type FastenerSubtype = "screw" | "glue" | "bolt" | "nail" | "connector";
 
 export type StockGeometry = "box" | "bracket-l" | "bracket-flat-l" | "connector-t" | "saddle" | "rod";
 
@@ -65,6 +65,21 @@ function hexBolt(diameter: number, length: number): CatalogPart {
     material: "steel",
     color: STEEL,
     notes: "Rendered as a fastener: hex head, washer, shank, washer, and nut. Length and diameter are independent.",
+    renderable: false,
+  };
+}
+
+function commonNail(penny: number, length: number, diameter: number): CatalogPart {
+  const lengthLabel = length === 2.5 ? "2½" : length === 3.5 ? "3½" : String(length);
+  return {
+    id: `nail-common-${penny}x${length}`,
+    kind: "fastener",
+    label: `${penny}d × ${lengthLabel}″ common nail`,
+    subtype: "nail",
+    size: [length, diameter, diameter],
+    material: "steel",
+    color: STEEL,
+    notes: "Rendered as a fastener. Driven through the thinner member from the face opposite the joint.",
     renderable: false,
   };
 }
@@ -308,6 +323,12 @@ export const CATALOG: CatalogPart[] = [
     notes: "Rendered as a fastener instance; not valid as part stock.",
     renderable: false,
   },
+  ...[
+    [6, 2, 0.113],
+    [8, 2.5, 0.131],
+    [10, 3, 0.148],
+    [16, 3.5, 0.162],
+  ].map(([penny, length, diameter]) => commonNail(penny, length, diameter)),
   {
     id: "wood-glue",
     kind: "fastener",
@@ -462,10 +483,21 @@ export function listCatalog(kind?: CatalogKind): CatalogPart[] {
 export function getFastenerSubtype(id: string): FastenerSubtype | undefined {
   const item = byId.get(id);
   if (!item || item.kind !== "fastener") return undefined;
-  if (item.subtype === "screw" || item.subtype === "glue" || item.subtype === "bolt") {
+  if (item.subtype === "screw" || item.subtype === "glue" || item.subtype === "bolt" || item.subtype === "nail") {
     return item.subtype;
   }
   return undefined;
+}
+
+/** Lumber whose cross-section fits a post-to-beam T-connector (both shorter sides in the connector's L and W range). */
+export function fitsTConnector(part: CatalogPart): boolean {
+  if (part.kind !== "lumber") return false;
+  const axes = byId.get("connector-t")?.axes;
+  if (!axes || !("min" in axes.L) || !("min" in axes.W)) return false;
+  const low = Math.max(axes.L.min, axes.W.min);
+  const high = Math.min(axes.L.max, axes.W.max);
+  const inRange = (value: number) => value >= low - 1e-6 && value <= high + 1e-6;
+  return inRange(part.size[1]) && inRange(part.size[2]);
 }
 
 export function isLBracket(part: CatalogPart): boolean {

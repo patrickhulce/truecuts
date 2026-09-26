@@ -7,6 +7,7 @@ import {
   defaultConnectionFastener,
   deleteMember,
   EditError,
+  parseCatalogDrag,
   promoteExplicitFasteners,
   roundDegrees,
   roundInches,
@@ -279,6 +280,27 @@ describe("addMember", () => {
   it("rejects a blank label", () => {
     expect(() => addMember(COMMENTED, { label: "  ", stock: "2x4x8" })).toThrow(EditError);
   });
+
+  it("places into the requested component at the drop point", () => {
+    const split = `${COMMENTED}  - label: Extra
+    members: []
+`;
+    const next = addMember(split, {
+      label: "Leg",
+      stock: "2x4x8",
+      componentId: "extra-1",
+      position: [4, 0, 8],
+      rotation: [0, 0, 0],
+    });
+    const result = compileDocument(next);
+    expect(result.diagnostics.filter((item) => item.severity === "error")).toEqual([]);
+    expect(result.document?.components.find((component) => component.id === "box-1")?.members).toHaveLength(1);
+    expect(result.document?.components.find((component) => component.id === "extra-1")?.members[0]).toMatchObject({
+      id: "leg-1",
+      position: [4, 0, 8],
+      rotation: [0, 0, 0],
+    });
+  });
 });
 
 describe("addConnection", () => {
@@ -395,6 +417,18 @@ components:
     expect(() => setMemberDimension(COMMENTED.replace("stock: 2x4x8", "stock: bracket-l-1.5x1.5"), "a-1", 0, 1)).toThrow(
       /fixed/,
     );
+  });
+});
+
+describe("parseCatalogDrag", () => {
+  it("reads a catalog drop payload", () => {
+    expect(parseCatalogDrag(JSON.stringify({ label: "Board", stock: "2x4x8", cuts: [{ axis: 0, angle: 90, at: 24 }] }))).toEqual({
+      label: "Board",
+      stock: "2x4x8",
+      size: undefined,
+      cuts: [{ axis: 0, angle: 90, at: 24 }],
+    });
+    expect(parseCatalogDrag("not json")).toBeNull();
   });
 });
 

@@ -172,7 +172,34 @@ export type NewMemberInput = {
   /** Free axes of parameterized stock, in L, W, then T order. */
   size?: number[];
   cuts?: MemberCutInput[];
+  /** Place into this component. Omitted uses the first component, or creates a Build. */
+  componentId?: string;
+  position?: Vec3;
+  rotation?: Vec3;
 };
+
+export const CATALOG_DRAG_MIME = "application/x-truecuts-catalog";
+
+export function parseCatalogDrag(raw: string): NewMemberInput | null {
+  let data: unknown;
+  try {
+    data = JSON.parse(raw);
+  } catch {
+    return null;
+  }
+  if (!data || typeof data !== "object") return null;
+  const record = data as { label?: unknown; stock?: unknown; size?: unknown; cuts?: unknown };
+  if (typeof record.label !== "string" || typeof record.stock !== "string") return null;
+  if (record.size !== undefined && !isNumberList(record.size)) return null;
+  const cuts = record.cuts === undefined ? undefined : parseDragCuts(record.cuts);
+  if (cuts === null) return null;
+  return {
+    label: record.label,
+    stock: record.stock,
+    size: isNumberList(record.size) ? record.size : undefined,
+    cuts,
+  };
+}
 
 function flowSequences(node: unknown, keys: Set<string>): void {
   if (!isMap(node)) return;
@@ -206,9 +233,13 @@ function memberNode(doc: Document, input: NewMemberInput) {
   return node;
 }
 
-function placementNode(doc: Document, memberId: string) {
+function placementNode(doc: Document, memberId: string, position?: Vec3, rotation?: Vec3) {
   const node = doc.createNode(
-    { id: memberId, position: [0, 0, 0], rotation: [0, 0, 0] },
+    {
+      id: memberId,
+      position: roundVec(position ?? [0, 0, 0], 4),
+      rotation: roundVec(rotation ?? [0, 0, 0], 1),
+    },
     { flow: true },
   );
   flowSequences(node, new Set(["position", "rotation"]));
@@ -245,7 +276,13 @@ export function addMember(text: string, input: NewMemberInput): string {
       label: "Build",
       position: [0, 0, 0],
       rotation: [0, 0, 0],
-      members: [{ id: newId, position: [0, 0, 0], rotation: [0, 0, 0] }],
+      members: [
+        {
+          id: newId,
+          position: roundVec(input.position ?? [0, 0, 0], 4),
+          rotation: roundVec(input.rotation ?? [0, 0, 0], 1),
+        },
+      ],
     });
     flowSequences(component, new Set(["position", "rotation"]));
     if (isMap(component)) {
@@ -259,9 +296,13 @@ export function addMember(text: string, input: NewMemberInput): string {
     ensureSeq(doc, ["components"]);
     doc.setIn(["components", 0], component);
   } else {
-    ensureSeq(doc, ["components", 0, "members"]);
-    const placementIndex = seqLength(doc, ["components", 0, "members"]);
-    doc.setIn(["components", 0, "members", placementIndex], placementNode(doc, newId));
+    const cIndex = input.componentId ? componentIndex(doc, input.componentId) : 0;
+    ensureSeq(doc, ["components", cIndex, "members"]);
+    const placementIndex = seqLength(doc, ["components", cIndex, "members"]);
+    doc.setIn(
+      ["components", cIndex, "members", placementIndex],
+      placementNode(doc, newId, input.position, input.rotation),
+    );
   }
 
   return doc.toString(STRINGIFY);

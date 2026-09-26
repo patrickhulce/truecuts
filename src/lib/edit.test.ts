@@ -11,6 +11,7 @@ import {
   roundDegrees,
   roundInches,
   setConnectionFastener,
+  setMemberDimension,
   setPlacementPose,
   SNAP_DEG,
   SNAP_DEG_FINE,
@@ -343,6 +344,57 @@ describe("rounding", () => {
     expect(roundInches(1.23456)).toBe(1.2346);
     expect(roundDegrees(90)).toBe(90);
     expect(roundDegrees(12.34)).toBe(12.3);
+  });
+});
+
+describe("setMemberDimension", () => {
+  const cutBoard = `version: 1
+name: Cut
+members:
+  - label: Leg
+    stock: 2x4x8
+    cuts:
+      - { axis: 0, angle: 90, at: 30 }
+components:
+  - label: Box
+    members:
+      - { id: leg-1, position: [0, 0, 0] }
+`;
+
+  it("adds a square crosscut when fixed stock is shortened", () => {
+    const next = setMemberDimension(COMMENTED, "a-1", 0, 30);
+    const result = compileDocument(next);
+    expect(result.diagnostics.filter((item) => item.severity === "error")).toEqual([]);
+    expect(result.document?.members[0].cuts).toEqual([{ axis: 0, angle: 90, at: 30, side: "end" }]);
+  });
+
+  it("moves the only square crosscut", () => {
+    const next = setMemberDimension(cutBoard, "leg-1", 0, 36);
+    const result = compileDocument(next);
+    expect(result.diagnostics.filter((item) => item.severity === "error")).toEqual([]);
+    expect(result.document?.members[0].cuts[0]).toMatchObject({ axis: 0, at: 36 });
+  });
+
+  it("removes the crosscut when the length returns to full stock", () => {
+    const next = setMemberDimension(cutBoard, "leg-1", 0, 96);
+    const result = compileDocument(next);
+    expect(result.diagnostics.filter((item) => item.severity === "error")).toEqual([]);
+    expect(result.document?.members[0].cuts).toEqual([]);
+  });
+
+  it("writes a parametric size override", () => {
+    const next = setMemberDimension(COMMENTED.replace("stock: 2x4x8", "stock: connector-t"), "a-1", 0, 7);
+    const result = compileDocument(next);
+    expect(result.diagnostics.filter((item) => item.severity === "error")).toEqual([]);
+    expect(result.document?.members[0].size).toEqual([7, 5.5, 0.25]);
+  });
+
+  it("rejects a longer-than-stock length and mixed cuts", () => {
+    expect(() => setMemberDimension(COMMENTED, "a-1", 0, 120)).toThrow(/longer than stock/);
+    expect(() => setMemberDimension(cutBoard, "leg-1", 1, 2)).toThrow(/Edit cuts in YAML/);
+    expect(() => setMemberDimension(COMMENTED.replace("stock: 2x4x8", "stock: bracket-l-1.5x1.5"), "a-1", 0, 1)).toThrow(
+      /fixed/,
+    );
   });
 });
 

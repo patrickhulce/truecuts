@@ -1,8 +1,10 @@
 import { isMap, isScalar, isSeq, parseDocument, type Document } from "yaml";
-import { getFastenerSubtype } from "./catalog";
+import { getCatalogPart, getFastenerSubtype, resolveStockSize, stockGeometry, type AxisName } from "./catalog";
+import { freeAxes, sizeOverride } from "./catalog-families";
 import { assignIds, type Labeled } from "./identity";
 import type { Vec3 } from "./geometry";
 import type { RawConnectionFastener } from "./schema";
+import { formatInches, parseDimension } from "./units";
 
 export class EditError extends Error {
   constructor(message: string) {
@@ -454,4 +456,215 @@ export function addConnection(
   if (!isSeq(existing)) doc.setIn(connectionsPath, doc.createNode([]));
   doc.setIn([...connectionsPath, nextIndex], doc.createNode({ members: memberNodes, fasteners: [fastener] }));
   return doc.toString(STRINGIFY);
+}
+
+const DIMENSION_AXIS = ["L", "W", "T"] as const;
+
+type StoredCut = MemberCutInput & { side?: "end" | "start" };
+
+function isNumberList(value: unknown): value is number[] {
+  return Array.isArray(value) && value.every((item) => typeof item === "number" && Number.isFinite(item));
+}
+
+function parseDragCuts(value: unknown): MemberCutInput[] | null {
+  if (!Array.isArray(value)) return null;
+  const cuts: MemberCutInput[] = [];
+  for (const item of value) {
+    if (!item || typeof item !== "object") return null;
+    const cut = item as { axis?: unknown; angle?: unknown; at?: unknown; side?: unknown; around?: unknown };
+    if (cut.axis !== 0 && cut.axis !== 1 && cut.axis !== 2) return null;
+    if (typeof cut.angle !== "number" || !Number.isFinite(cut.angle)) return null;
+    const next: MemberCutInput = { axis: cut.axis, angle: cut.angle, at: 0 };
+    if (typeof cut.at === "number" && Number.isFinite(cut.at)) next.at = cut.at;
+    else if (isNumberList(cut.at) && cut.at.length === 2) next.at = [cut.at[0], cut.at[1]];
+    else return null;
+    if (cut.side === "end" || cut.side === "start") next.side = cut.side;
+    if (cut.around === 0 || cut.around === 1 || cut.around === 2) next.around = cut.around;
+    cuts.push(next);
+  }
+  return cuts;
+}
+
+function asInches(value: unknown, label: string): number {
+  if (typeof value !== "number" && typeof value !== "string") {
+    throw new EditError(`${label} is not a dimension`);
+  }
+  try {
+    return parseDimension(value);
+  } catch (error) {
+    throw new EditError(error instanceof Error ? error.message : String(error));
+  }
+}
+
+function readSizeOverride(value: unknown): number[] | undefined {
+  if (value === undefined || value === null) return undefined;
+  if (!Array.isArray(value)) throw new EditError("Member size is not a list");
+  return value.map((item, index) => asInches(item, `Size value ${index + 1}`));
+}
+
+function readStoredCuts(value: unknown): StoredCut[] | null {
+  if (value === undefined || value === null) return [];
+  if (!Array.isArray(value)) return null;
+  const cuts: StoredCut[] = [];
+  for (const item of value) {
+    if (!item || typeof item !== "object") return null;
+    const cut = item as { axis?: unknown; angle?: unknown; at?: unknown; side?: unknown; around?: unknown };
+    if (cut.axis !== 0 && cut.axis !== 1 && cut.axis !== 2) return null;
+    if (typeof cut.angle !== "number" || !Number.isFinite(cut.angle)) return null;
+    let at: number | [number, number];
+    if (Array.isArray(cut.at)) {
+      if (cut.at.length !== 2) return null;
+      at = [asInches(cut.at[0], "Cut at"), asInches(cut.at[1], "Cut at")];
+    } else {
+      at = asInches(cut.at, "Cut at");
+    }
+    const stored: StoredCut = { axis: cut.axis, angle: cut.angle, at };
+    if (cut.side === "end" || cut.side === "start") stored.side = cut.side;
+    if (cut.around === 0 || cut.around === 1 || cut.around === 2) stored.around = cut.around;
+    cuts.push(stored);
+  }
+  return cuts;
+}
+
+function memberRecord(doc: Document, index: number): { stock: string; size?: number[]; cuts: StoredCut[] | null } {
+  const node = doc.getIn(["members", index]);
+  const value = isMap(node) ? node.toJS(doc) : node;
+  if (!value || typeof value !== "object") throw new EditError("Member is missing");
+  const record = value as { stock?: unknown; size?: unknown; cuts?: unknown };
+  if (typeof record.stock !== "string" || record.stock.length === 0) {
+    throw new EditError("Member stock is missing");
+  }
+  return {
+    stock: record.stock,
+    size: readSizeOverride(record.size),
+    cuts: readStoredCuts(record.cuts),
+  };
+}
+
+function axisIndex(axis: AxisName): 0 | 1 | 2 {
+  if (axis === "L") return 0;
+  if (axis === "W") return 1;
+  return 2;
+}
+
+function nearly(a: number, b: number): boolean {
+  return Math.abs(a - b) < 1e-4;
+}
+
+function isSquareCut(cut: StoredCut): cut is StoredCut & { at: number } {
+  return Math.abs(cut.angle - 90) < 1e-6 && typeof cut.at === "number" && cut.around === undefined;
+}
+
+function canCrosscut(part: NonNullable<ReturnType<typeof getCatalogPart>>): boolean {
+  const geometry = stockGeometry(part);
+  return geometry === "box" || geometry === "rod";
+}
+
+function writeMemberSize(doc: Document, memberIndex: number, size: number[] | undefined): void {
+  const path = ["members", memberIndex, "size"] as Array<string | number>;
+  if (!size || size.length === 0) {
+    if (doc.getIn(path) !== undefined) doc.deleteIn(path);
+    return;
+  }
+  const node = doc.createNode(size.map((value) => roundInches(value)));
+  if (isSeq(node)) node.flow = true;
+  doc.setIn(path, node);
+}
+
+function writeMemberCuts(doc: Document, memberIndex: number, cuts: MemberCutInput[]): void {
+  const path = ["members", memberIndex, "cuts"] as Array<string | number>;
+  if (cuts.length === 0) {
+    if (doc.getIn(path) !== undefined) doc.deleteIn(path);
+    return;
+  }
+  const node = doc.createNode(cuts);
+  if (isSeq(node)) {
+    for (const child of node.items) {
+      if (isMap(child)) child.flow = true;
+    }
+  }
+  doc.setIn(path, node);
+}
+
+const YAML_CUTS = "Edit cuts in YAML to change this dimension.";
+
+/**
+ * Set one finished dimension (0 = L, 1 = W, 2 = T).
+ * Uncut parameterized stock writes a size override. Uncut fixed lumber or sheet
+ * goods, and a member with a single square cut on this axis, write that crosscut.
+ */
+export function setMemberDimension(
+  text: string,
+  memberId: string,
+  axis: 0 | 1 | 2,
+  inches: number,
+): string {
+  if (!Number.isFinite(inches) || inches <= 0) {
+    throw new EditError("Dimension must be greater than 0.");
+  }
+  const doc = parseEditDocument(text);
+  const { members } = identified(doc);
+  const memberIndex = members.findIndex((member) => member.id === memberId);
+  if (memberIndex < 0) throw new EditError(`Unknown member "${memberId}"`);
+
+  const raw = memberRecord(doc, memberIndex);
+  const part = getCatalogPart(raw.stock);
+  if (!part) throw new EditError(`Unknown stock "${raw.stock}"`);
+  if (raw.cuts === null) throw new EditError(YAML_CUTS);
+
+  let stockSize: Vec3;
+  try {
+    stockSize = resolveStockSize(part, raw.size).size;
+  } catch (error) {
+    throw new EditError(error instanceof Error ? error.message : String(error));
+  }
+
+  const axisName = DIMENSION_AXIS[axis];
+  const free = freeAxes(part);
+  const cuttable = canCrosscut(part);
+  const longer = `${axisName} cannot be longer than stock (${formatInches(stockSize[axis])}).`;
+
+  if (raw.cuts.length === 0 && free.some((spec) => axisIndex(spec.axis) === axis)) {
+    const values: Partial<Record<AxisName, number>> = {};
+    for (const spec of free) {
+      const index = axisIndex(spec.axis);
+      values[spec.axis] = index === axis ? inches : stockSize[index];
+    }
+    if (free.every((spec) => nearly(values[spec.axis] ?? spec.default, stockSize[axisIndex(spec.axis)]))) {
+      return text;
+    }
+    try {
+      resolveStockSize(
+        part,
+        free.map((spec) => values[spec.axis] ?? spec.default),
+      );
+    } catch (error) {
+      throw new EditError(error instanceof Error ? error.message : String(error));
+    }
+    writeMemberSize(doc, memberIndex, sizeOverride(part, values));
+    return doc.toString(STRINGIFY);
+  }
+
+  if (raw.cuts.length === 0) {
+    if (!cuttable) throw new EditError(`${axisName} is fixed on this stock.`);
+    if (inches > stockSize[axis] + 1e-6) throw new EditError(longer);
+    if (nearly(inches, stockSize[axis])) return text;
+    writeMemberCuts(doc, memberIndex, [{ axis, angle: 90, at: roundInches(inches) }]);
+    return doc.toString(STRINGIFY);
+  }
+
+  const only = raw.cuts.length === 1 ? raw.cuts[0] : undefined;
+  if (only && isSquareCut(only) && only.axis === axis && cuttable) {
+    if (inches > stockSize[axis] + 1e-6) throw new EditError(longer);
+    if (inches >= stockSize[axis] - 1e-6) {
+      writeMemberCuts(doc, memberIndex, []);
+      return doc.toString(STRINGIFY);
+    }
+    const at = (only.side ?? "end") === "start" ? stockSize[axis] - inches : inches;
+    if (!(at > 1e-6) || at >= stockSize[axis] - 1e-6) throw new EditError(YAML_CUTS);
+    doc.setIn(["members", memberIndex, "cuts", 0, "at"], roundInches(at));
+    return doc.toString(STRINGIFY);
+  }
+
+  throw new EditError(YAML_CUTS);
 }

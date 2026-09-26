@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import { compileDocument } from "./compile";
 import { DEMO_YAML } from "./demo";
 import { applyPose, type Vec3 } from "./geometry";
-import type { SceneComponent, SceneMemberInstance } from "./scene";
+import { computeExplodeOffsets, type SceneComponent, type SceneMemberInstance, type SceneModel } from "./scene";
 
 const UNDERSIDE_ORIGINS: Record<string, { position: Vec3; side: "left" | "right" }> = {
   "corner-bracket-1": { position: [3.5, 26.5, 1.5], side: "left" },
@@ -244,5 +244,92 @@ components:
     expect(result.scene).toBeUndefined();
     expect(result.diagnostics.length).toBeGreaterThan(0);
     expect(result.diagnostics[0].line).toBeDefined();
+  });
+});
+
+function explodeFixture(
+  center: Vec3,
+  parts: Array<{ key: string; worldCenter: Vec3; minY: number }>,
+): SceneModel {
+  return {
+    name: "explode",
+    center,
+    components: [
+      {
+        id: "assembly",
+        label: "Assembly",
+        position: [0, 0, 0],
+        rotation: [0, 0, 0],
+        members: parts.map((part) => ({
+          key: part.key,
+          memberId: part.key,
+          label: part.key,
+          stockId: "stock",
+          stockLabel: "stock",
+          material: "wood",
+          color: "#fff",
+          faces: [],
+          bores: [],
+          derivedBores: [],
+          position: [0, 0, 0],
+          rotation: [0, 0, 0],
+          bounds: { min: [0, 0, 0], max: [1, 1, 1] },
+          worldBounds: {
+            min: [part.worldCenter[0] - 1, part.minY, part.worldCenter[2] - 1],
+            max: [part.worldCenter[0] + 1, part.minY + 2, part.worldCenter[2] + 1],
+          },
+          worldCenter: part.worldCenter,
+          finished: { length: 1, width: 1, thickness: 1 },
+          fastened: true,
+        })),
+      },
+    ],
+    fasteners: [],
+    contacts: { hosts: [], patches: [] },
+    connections: [],
+  };
+}
+
+describe("computeExplodeOffsets", () => {
+  it("returns no offsets when explode is zero", () => {
+    const scene = compileDocument(DEMO_YAML).scene!;
+    expect(computeExplodeOffsets(scene, 0).size).toBe(0);
+  });
+
+  it("slides floor-resting demo members sideways", () => {
+    const scene = compileDocument(DEMO_YAML).scene!;
+    const offsets = computeExplodeOffsets(scene, 1);
+    const byId = new Map(scene.components.flatMap((component) => component.members).map((part) => [part.memberId, part]));
+    for (const id of ["leg-1", "spare-block-1"]) {
+      const part = byId.get(id)!;
+      const offset = offsets.get(part.key)!;
+      expect(part.worldBounds.min[1], id).toBeCloseTo(0, 4);
+      expect(offset[1], id).toBe(0);
+      expect(offset[0], id).not.toBeCloseTo(0, 4);
+      expect(offset[2], id).not.toBeCloseTo(0, 4);
+    }
+  });
+
+  it("keeps every demo member on or above the floor", () => {
+    const scene = compileDocument(DEMO_YAML).scene!;
+    for (const explode of [0.25, 0.5, 1]) {
+      const offsets = computeExplodeOffsets(scene, explode);
+      for (const part of scene.components.flatMap((component) => component.members)) {
+        const offset = offsets.get(part.key)!;
+        expect(part.worldBounds.min[1] + offset[1], part.memberId).toBeGreaterThanOrEqual(-1e-5);
+      }
+    }
+  });
+
+  it("lets elevated members drop until they meet the floor", () => {
+    const scene = explodeFixture([0, 20, 0], [
+      { key: "high", worldCenter: [10, 6, 8], minY: 4 },
+      { key: "clear", worldCenter: [10, 18, 8], minY: 16 },
+      { key: "above", worldCenter: [-4, 24, -6], minY: 22 },
+    ]);
+    const offsets = computeExplodeOffsets(scene, 1);
+    expect(offsets.get("high")).toEqual([10, -4, 8]);
+    expect(offsets.get("clear")).toEqual([10, -2, 8]);
+    expect(offsets.get("above")).toEqual([-4, 4, -6]);
   });
 });

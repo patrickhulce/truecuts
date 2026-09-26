@@ -440,7 +440,7 @@ components:
 - Click a member to inspect `id`, stock, finished AABB (L × W × T of the cut solid), whether it is fastened, and the members attached to it. Non-selected members fade so fasteners inside the assembly stay visible; attached fasteners highlight.
 - Fasteners render as solids: screws (head + shank), bolts (hex head, washers, shank, and nut), and glue beads. Connection recipes expand into those instances. L-brackets, T-connectors, and saddles render as ordinary metal members.
 - Drilled bores, including derived pilot and clearance bores, are cut out of the rendered member. A blind bore has a bottom at `depth`. A through bore is open on the exit face. A mesh that is not one watertight solid keeps a dark marker instead of a cut.
-- An explode slider radiates members from the scene center (distance-proportional); fasteners travel with their members.
+- An explode slider radiates members from the scene center (distance-proportional). Parts resting on the floor slide horizontally; downward motion stops at the floor so nothing sinks through it. Fasteners travel with their members.
 - Any member not reachable from the first member of the first component is drawn with red/white hazard stripes.
 - A screw whose head is covered by a member it joins (no driver access) keeps the red/white hazard hatch along its shank, including when that member is selected, whichever way the screw points. The parts list and selection card call it out.
 - The document autosaves to `localStorage`. **Reset demo** restores `examples/demo.yaml`.

@@ -43,6 +43,7 @@ export type SceneMemberInstance = {
   position: Vec3;
   rotation: Vec3;
   bounds: { min: Vec3; max: Vec3 };
+  worldBounds: { min: Vec3; max: Vec3 };
   worldCenter: Vec3;
   finished: { length: number; width: number; thickness: number };
   fastened: boolean;
@@ -147,6 +148,28 @@ function centerFromWorldCenters(centers: Vec3[]): Vec3 {
     max[2] = Math.max(max[2], point[2]);
   }
   return midpoint(min, max);
+}
+
+const FLOOR_REST_SLACK = 1e-4;
+
+/** Radiate members from the scene center. Downward motion stops at `floorY`. */
+export function computeExplodeOffsets(scene: SceneModel, explode: number, floorY = 0): Map<string, Vec3> {
+  const map = new Map<string, Vec3>();
+  if (explode === 0) return map;
+  for (const component of scene.components) {
+    for (const part of component.members) {
+      const dx = (part.worldCenter[0] - scene.center[0]) * explode;
+      const dz = (part.worldCenter[2] - scene.center[2]) * explode;
+      const desiredDy = (part.worldCenter[1] - scene.center[1]) * explode;
+      const partMinY = part.worldBounds.min[1];
+      let dy = desiredDy;
+      if (desiredDy < 0) {
+        dy = partMinY <= floorY + FLOOR_REST_SLACK ? 0 : Math.max(desiredDy, floorY - partMinY);
+      }
+      map.set(part.key, [dx, dy, dz]);
+    }
+  }
+  return map;
 }
 
 const GEOMETRY_LABEL: Record<Exclude<StockGeometry, "box" | "rod">, string> = {
@@ -261,6 +284,15 @@ export function buildScene(document: ResolvedDocument): {
       const mesh = meshes.get(placement.id);
       if (!mesh) return [];
       const bounds = boundingBox(mesh.faces);
+      const worldBounds = boundingBox(
+        worldPolyhedron(
+          mesh.faces,
+          placement.position,
+          placement.rotation,
+          component.position,
+          component.rotation,
+        ),
+      );
       return [
         {
           key: instanceKey(component.id, placement.id, index),
@@ -276,6 +308,7 @@ export function buildScene(document: ResolvedDocument): {
           position: placement.position,
           rotation: placement.rotation,
           bounds,
+          worldBounds,
           worldCenter: worldPoint(midpoint(bounds.min, bounds.max), placement, component),
           finished: finishedFromBounds(bounds),
           fastened: false,

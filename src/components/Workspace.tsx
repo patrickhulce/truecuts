@@ -5,7 +5,9 @@ import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "
 import { Group, Panel, Separator, usePanelRef } from "react-resizable-panels";
 import { useDocument } from "@/hooks/useDocument";
 import { clearBuilds } from "@/lib/builds-storage";
-import { deleteMember, setPlacementPose } from "@/lib/edit";
+import { compileDocument } from "@/lib/compile";
+import { addMember, deleteMember, setPlacementPose, type NewMemberInput } from "@/lib/edit";
+import { parseInstanceKey } from "@/lib/fasteners";
 import type { Vec3 } from "@/lib/geometry";
 import {
   DEFAULT_PREFERENCES,
@@ -88,6 +90,43 @@ export function Workspace() {
       }
     },
     [commit, compiled.document, text],
+  );
+
+  const handlePlaceMember = useCallback(
+    (input: NewMemberInput, position: Vec3) => {
+      let componentId: string | undefined;
+      const selected = selectedKeyRef.current;
+      if (selected && compiled.document) {
+        try {
+          const parsed = parseInstanceKey(selected);
+          if (compiled.document.components.some((component) => component.id === parsed.componentId)) {
+            componentId = parsed.componentId;
+          }
+        } catch {
+          componentId = undefined;
+        }
+      }
+      try {
+        const before = new Set(compiled.document?.members.map((member) => member.id) ?? []);
+        const next = addMember(text, {
+          label: input.label,
+          stock: input.stock,
+          size: input.size,
+          cuts: input.cuts,
+          componentId,
+          position,
+          rotation: [0, 0, 0],
+        });
+        commit(next);
+        const added = compileDocument(next).scene?.components
+          .flatMap((component) => component.members)
+          .find((member) => !before.has(member.memberId));
+        if (added) handleSelect(added.key);
+      } catch {
+        // Leave the YAML alone if the member cannot be added.
+      }
+    },
+    [commit, compiled.document, handleSelect, text],
   );
 
   const handleChangePose = useCallback(
@@ -211,6 +250,7 @@ export function Workspace() {
             showContacts={preferences.showContacts}
             onShowContacts={(showContacts) => setPreferences((current) => ({ ...current, showContacts }))}
             fineSnap={preferences.fineSnap}
+            onPlaceMember={handlePlaceMember}
           />
         </Panel>
         <Separator className="w-1.5 bg-[#3d2a18] hover:bg-[#d97706]" />

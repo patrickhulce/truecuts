@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState, type DragEvent } from "react";
 import {
   familyParts,
   freeAxes,
@@ -11,8 +11,10 @@ import {
   type StockFamily,
 } from "@/lib/catalog-families";
 import { getCatalogPart, type AxisName, type CatalogKind, type CatalogPart } from "@/lib/catalog";
-import { addMember, type MemberCutInput } from "@/lib/edit";
+import { addMember, CATALOG_DRAG_MIME, type MemberCutInput, type NewMemberInput } from "@/lib/edit";
 import { formatInches, parseDimension } from "@/lib/units";
+import { FastenerIcon } from "./FastenerIcon";
+import { CatalogThumbnail } from "./MemberThumbnail";
 
 type CatalogTabProps = {
   text: string;
@@ -20,6 +22,74 @@ type CatalogTabProps = {
 };
 
 type Filter = "all" | CatalogKind;
+
+type CatalogDraft = {
+  familyId: string;
+  part: CatalogPart;
+  input: NewMemberInput;
+  cutAt?: number;
+};
+
+function fastenerKind(part: CatalogPart): "screw" | "nail" | "glue" | "bolt" | "bracket" | "connector" {
+  if (part.subtype === "nail" || part.subtype === "glue" || part.subtype === "bolt" || part.subtype === "connector") {
+    return part.subtype;
+  }
+  if (part.subtype === "bracket" || part.subtype === "bracket-flat") return "bracket";
+  return "screw";
+}
+
+function FastenerSwatch({ part }: { part: CatalogPart }) {
+  return (
+    <div className="pointer-events-none grid h-16 w-16 shrink-0 place-items-center rounded border border-[#3d2a18] bg-[#140e09] text-[#a89070]">
+      <FastenerIcon kind={fastenerKind(part)} />
+    </div>
+  );
+}
+
+function CatalogSwatch({
+  part,
+  size,
+  cutAt,
+}: {
+  part: CatalogPart | undefined;
+  size?: number[];
+  cutAt?: number;
+}) {
+  if (!part) return <div className="h-16 w-16 shrink-0 rounded border border-[#3d2a18] bg-[#140e09]" />;
+  if (!part.renderable) return <FastenerSwatch part={part} />;
+  return <CatalogThumbnail part={part} size={size} cutAt={cutAt} />;
+}
+
+function beginCatalogDrag(event: DragEvent, input: NewMemberInput) {
+  const payload = JSON.stringify(input);
+  event.dataTransfer.setData(CATALOG_DRAG_MIME, payload);
+  event.dataTransfer.setData("text/plain", payload);
+  event.dataTransfer.effectAllowed = "copy";
+}
+
+function dragInput(family: StockFamily, draft: CatalogDraft | null): NewMemberInput {
+  if (draft && draft.familyId === family.id) {
+    return { ...draft.input, label: draft.input.label.trim() || family.defaultLabel };
+  }
+  return { label: family.defaultLabel, stock: family.variants[0] ?? "" };
+}
+
+function configuredCut(
+  family: StockFamily,
+  part: CatalogPart,
+  axes: Partial<Record<AxisName, number>>,
+  cutText: string,
+): number | undefined {
+  if (!family.allowsCut || !cutText.trim()) return undefined;
+  try {
+    const at = parseDimension(cutText.trim());
+    const length = stockLength(part, axes);
+    if (at > 0 && at < length - 1e-6) return at;
+  } catch {
+    return undefined;
+  }
+  return undefined;
+}
 
 const FILTERS: { id: Filter; label: string }[] = [
   { id: "all", label: "All" },
@@ -32,6 +102,10 @@ const FILTERS: { id: Filter; label: string }[] = [
 export function CatalogTab({ text, onCommit }: CatalogTabProps) {
   const [filter, setFilter] = useState<Filter>("all");
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [draft, setDraft] = useState<CatalogDraft | null>(null);
+  const rememberDraft = useCallback((next: CatalogDraft) => {
+    setDraft(next);
+  }, []);
   const families = STOCK_FAMILIES.filter((family) => filter === "all" || family.kind === filter);
   const selected = STOCK_FAMILIES.find((family) => family.id === selectedId) ?? null;
 
@@ -57,24 +131,33 @@ export function CatalogTab({ text, onCommit }: CatalogTabProps) {
         </div>
         <div className="grid grid-cols-2 gap-2 p-3">
           {families.map((family) => {
-            const part = getCatalogPart(family.variants[0] ?? "");
+            const configured = draft?.familyId === family.id ? draft : null;
+            const part = configured?.part ?? getCatalogPart(family.variants[0] ?? "");
             const active = family.id === selectedId;
+            const placeable = Boolean(part?.renderable);
             return (
               <button
                 key={family.id}
                 type="button"
                 aria-pressed={active}
+                draggable={placeable}
+                onDragStart={(event) => {
+                  if (!part?.renderable) {
+                    event.preventDefault();
+                    return;
+                  }
+                  beginCatalogDrag(event, dragInput(family, draft));
+                }}
                 onClick={() => setSelectedId(family.id)}
-                className={`cursor-pointer rounded border p-2 text-left ${
-                  active ? "border-[#f59e0b]" : "border-[#3d2a18] hover:border-[#6b4a2b]"
-                }`}
+                className={`flex items-center gap-2 rounded border p-2 text-left ${
+                  placeable ? "cursor-grab active:cursor-grabbing" : "cursor-pointer"
+                } ${active ? "border-[#f59e0b]" : "border-[#3d2a18] hover:border-[#6b4a2b]"}`}
               >
-                <span
-                  className="mb-2 block h-1.5 rounded"
-                  style={{ background: part?.color ?? "#8a7355" }}
-                />
-                <span className="block text-sm text-[#d6c3a3]">{family.title}</span>
-                <span className="mt-0.5 block text-[11px] leading-snug text-[#8a7355]">{family.summary}</span>
+                <CatalogSwatch part={part} size={configured?.input.size} cutAt={configured?.cutAt} />
+                <span className="min-w-0">
+                  <span className="block text-sm text-[#d6c3a3]">{family.title}</span>
+                  <span className="mt-0.5 block text-[11px] leading-snug text-[#8a7355]">{family.summary}</span>
+                </span>
               </button>
             );
           })}
@@ -86,7 +169,11 @@ export function CatalogTab({ text, onCommit }: CatalogTabProps) {
           family={selected}
           text={text}
           onCommit={onCommit}
-          onClose={() => setSelectedId(null)}
+          onDraft={rememberDraft}
+          onClose={() => {
+            setDraft(null);
+            setSelectedId(null);
+          }}
         />
       ) : null}
     </div>
@@ -97,11 +184,13 @@ function StockConfig({
   family,
   text,
   onCommit,
+  onDraft,
   onClose,
 }: {
   family: StockFamily;
   text: string;
   onCommit: (value: string) => void;
+  onDraft: (draft: CatalogDraft) => void;
   onClose: () => void;
 }) {
   const parts = useMemo(() => familyParts(family), [family]);
@@ -112,6 +201,23 @@ function StockConfig({
   const [cutText, setCutText] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [added, setAdded] = useState<string | null>(null);
+  const cutAt = part ? configuredCut(family, part, axes, cutText) : undefined;
+  const previewSize = useMemo(() => (part ? sizeOverride(part, axes) : undefined), [axes, part]);
+
+  useEffect(() => {
+    if (!part) return;
+    onDraft({
+      familyId: family.id,
+      part,
+      cutAt,
+      input: {
+        label: label.trim(),
+        stock: part.id,
+        size: previewSize,
+        cuts: cutAt === undefined ? undefined : [{ axis: 0, angle: 90, at: cutAt }],
+      },
+    });
+  }, [cutAt, family.id, label, onDraft, part, previewSize]);
 
   function chooseVariant(next: CatalogPart) {
     setVariantId(next.id);
@@ -169,8 +275,26 @@ function StockConfig({
 
   return (
     <div className="flex min-h-0 basis-0 flex-1 flex-col overflow-auto border-t border-[#3d2a18]">
-      <div className="flex items-center justify-between px-3 pt-3">
-        <h2 className="font-[family-name:var(--font-display)] text-base text-[#f59e0b]">{family.title}</h2>
+      <div className="flex items-start justify-between gap-2 px-3 pt-3">
+        <div
+          className={`flex min-w-0 items-center gap-3 ${part.renderable ? "cursor-grab active:cursor-grabbing" : ""}`}
+          draggable={part.renderable}
+          onDragStart={(event) => {
+            if (!part.renderable) {
+              event.preventDefault();
+              return;
+            }
+            beginCatalogDrag(event, {
+              label: label.trim() || family.defaultLabel,
+              stock: part.id,
+              size: previewSize,
+              cuts: cutAt === undefined ? undefined : [{ axis: 0, angle: 90, at: cutAt }],
+            });
+          }}
+        >
+          <CatalogSwatch part={part} size={previewSize} cutAt={cutAt} />
+          <h2 className="font-[family-name:var(--font-display)] text-base text-[#f59e0b]">{family.title}</h2>
+        </div>
         <button type="button" onClick={onClose} className="cursor-pointer text-xs text-[#a89070] hover:text-[#f59e0b]">
           Close
         </button>

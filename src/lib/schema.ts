@@ -103,6 +103,21 @@ const GlueVariantSchema = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("edge"), edge: DimensionSchema }),
 ]);
 
+const NailVariantSchema = z.discriminatedUnion("kind", [
+  z.object({ kind: z.literal("four-corners"), edge: DimensionSchema }),
+  z.object({
+    kind: z.literal("perimeter"),
+    edge: DimensionSchema,
+    separation: DimensionSchema,
+    justify: JustifySchema,
+  }),
+  z.object({
+    kind: z.literal("centered"),
+    separation: DimensionSchema,
+    justify: JustifySchema,
+  }),
+]);
+
 const BoltVariantSchema = z.discriminatedUnion("kind", [
   z.object({
     kind: z.literal("through"),
@@ -117,8 +132,10 @@ const BoltVariantSchema = z.discriminatedUnion("kind", [
 
 const ConnectionFastenerSchema = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("screw"), stock: z.string().min(1), variant: ScrewVariantSchema }),
+  z.object({ kind: z.literal("nail"), stock: z.string().min(1), variant: NailVariantSchema }),
   z.object({ kind: z.literal("glue"), stock: z.string().min(1), variant: GlueVariantSchema.optional() }),
   z.object({ kind: z.literal("bolt"), stock: z.string().min(1), variant: BoltVariantSchema }),
+  z.object({ kind: z.literal("connector"), stock: z.string().min(1) }),
   z.object({ kind: z.literal("none") }),
 ]);
 
@@ -205,6 +222,11 @@ export type ResolvedScrewVariant =
   | { kind: "perimeter"; edge: number; separation: number; justify: ScrewJustify }
   | { kind: "centered"; separation: number; justify: ScrewJustify };
 
+export type ResolvedNailVariant =
+  | { kind: "four-corners"; edge: number }
+  | { kind: "perimeter"; edge: number; separation: number; justify: ScrewJustify }
+  | { kind: "centered"; separation: number; justify: ScrewJustify };
+
 export type ResolvedGlueVariant = { kind: "patch" } | { kind: "edge"; edge: number };
 
 export type ResolvedBoltVariant =
@@ -213,8 +235,10 @@ export type ResolvedBoltVariant =
 
 export type ResolvedConnectionFastener =
   | { kind: "screw"; stock: string; variant: ResolvedScrewVariant }
+  | { kind: "nail"; stock: string; variant: ResolvedNailVariant }
   | { kind: "glue"; stock: string; variant: ResolvedGlueVariant }
   | { kind: "bolt"; stock: string; variant: ResolvedBoltVariant }
+  | { kind: "connector"; stock: string }
   | { kind: "none" };
 
 export type ResolvedConnectionMember = {
@@ -441,9 +465,11 @@ function resolveExplicitFastener(
     return undefined;
   }
 
-  if ((subtype === "screw" || subtype === "bolt") && raw.members.length !== 2) {
+  const mechanical = subtype === "screw" || subtype === "bolt" || subtype === "nail";
+  const plural = subtype === "bolt" ? "Bolts" : subtype === "nail" ? "Nails" : "Screws";
+  if (mechanical && raw.members.length !== 2) {
     issues.push({
-      message: `${subtype === "bolt" ? "Bolts" : "Screws"} require exactly two members, got ${raw.members.length}`,
+      message: `${plural} require exactly two members, got ${raw.members.length}`,
       path: [...path, "members"],
     });
     return undefined;
@@ -468,10 +494,11 @@ function resolveExplicitFastener(
       continue;
     }
 
-    if (subtype === "screw" || subtype === "bolt") {
+    if (subtype === "screw" || subtype === "bolt" || subtype === "nail") {
+      const noun = subtype === "bolt" ? "Bolt" : subtype === "nail" ? "Nail" : "Screw";
       if (!direction) {
         issues.push({
-          message: `${subtype === "bolt" ? "Bolt" : "Screw"} members require \`direction\` (member-local, head → tip)`,
+          message: `${noun} members require \`direction\` (member-local, head → tip)`,
           path: [...memberPath, "direction"],
         });
         continue;
@@ -505,6 +532,17 @@ function resolveConnectionFastener(
   issues: ValidationIssue[],
 ): ResolvedConnectionFastener | undefined {
   if (raw.kind === "none") return { kind: "none" };
+  if (raw.kind === "connector") {
+    const catalog = getCatalogPart(raw.stock);
+    if (!catalog || catalog.geometry !== "connector-t") {
+      issues.push({
+        message: `Connector stock must be "connector-t"`,
+        path: [...path, "stock"],
+      });
+      return undefined;
+    }
+    return { kind: "connector", stock: raw.stock };
+  }
   const catalog = getCatalogPart(raw.stock);
   const subtype = getFastenerSubtype(raw.stock);
   if (!catalog || catalog.kind !== "fastener" || !subtype) {
@@ -560,6 +598,40 @@ function resolveConnectionFastener(
       }
     }
     return { kind: "bolt", stock: raw.stock, variant: { kind: "through", at } };
+  }
+
+  if (raw.kind === "nail") {
+    const variant = raw.variant;
+    if (variant.kind === "four-corners") {
+      const edge = parseMeasure(variant.edge, [...path, "variant", "edge"], "edge", issues, "nonnegative");
+      if (edge === undefined) return undefined;
+      return { kind: "nail", stock: raw.stock, variant: { kind: "four-corners", edge } };
+    }
+    const edge =
+      variant.kind === "perimeter"
+        ? parseMeasure(variant.edge, [...path, "variant", "edge"], "edge", issues, "nonnegative")
+        : undefined;
+    if (variant.kind === "perimeter" && edge === undefined) return undefined;
+    const separation = parseMeasure(
+      variant.separation,
+      [...path, "variant", "separation"],
+      "separation",
+      issues,
+      "positive",
+    );
+    if (separation === undefined) return undefined;
+    if (variant.kind === "perimeter") {
+      return {
+        kind: "nail",
+        stock: raw.stock,
+        variant: { kind: "perimeter", edge: edge ?? 0, separation, justify: variant.justify },
+      };
+    }
+    return {
+      kind: "nail",
+      stock: raw.stock,
+      variant: { kind: "centered", separation, justify: variant.justify },
+    };
   }
 
   const variant = raw.variant;

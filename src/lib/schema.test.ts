@@ -436,6 +436,52 @@ describe("validateDocument", () => {
     expect(document?.components[0].connections[0].fasteners).toEqual([{ kind: "none" }]);
   });
 
+  it("accepts a nail and a t-connector recipe", () => {
+    const { document, issues } = validateDocument({
+      ...twoParts,
+      components: [
+        {
+          ...twoParts.components[0],
+          connections: [
+            {
+              members: [{ id: "a-1" }, { id: "b-1" }],
+              fasteners: [
+                {
+                  kind: "nail",
+                  stock: "nail-common-8x2.5",
+                  variant: { kind: "centered", separation: 4, justify: "space-around" },
+                },
+                { kind: "connector", stock: "connector-t" },
+              ],
+            },
+          ],
+        },
+      ],
+    });
+    expect(issues).toEqual([]);
+    expect(document?.components[0].connections[0].fasteners[0]?.kind).toBe("nail");
+    expect(document?.components[0].connections[0].fasteners[1]).toEqual({ kind: "connector", stock: "connector-t" });
+  });
+
+  it("rejects a connector recipe that is not connector-t", () => {
+    const { document, issues } = validateDocument({
+      ...twoParts,
+      components: [
+        {
+          ...twoParts.components[0],
+          connections: [
+            {
+              members: [{ id: "a-1" }, { id: "b-1" }],
+              fasteners: [{ kind: "connector", stock: "screw-wood-8x2" }],
+            },
+          ],
+        },
+      ],
+    });
+    expect(document).toBeUndefined();
+    expect(issues.some((issue) => issue.message.includes("connector-t"))).toBe(true);
+  });
+
   it("rejects unknown connection stock", () => {
     const { issues } = validateDocument({
       ...twoParts,

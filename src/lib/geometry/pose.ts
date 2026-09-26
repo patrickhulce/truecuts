@@ -72,3 +72,8 @@ export function inverseRotateEulerXYZ(v: Vec3, rotationDeg: Vec3): Vec3 {
 export function unapplyPose(point: Vec3, position: Vec3, rotationDeg: Vec3): Vec3 {
   return inverseRotateEulerXYZ(sub(point, position), rotationDeg);
 }
+
+/** Component-local translation that moves a placement by `distance` along world +X. */
+export function localShiftForWorldX(componentRotation: Vec3, distance: number): Vec3 {
+  return inverseRotateEulerXYZ([distance, 0, 0], componentRotation);
+}

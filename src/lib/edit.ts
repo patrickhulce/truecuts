@@ -1,4 +1,4 @@
-import { isMap, isSeq, parseDocument, type Document } from "yaml";
+import { isMap, isScalar, isSeq, parseDocument, type Document } from "yaml";
 import { getFastenerSubtype } from "./catalog";
 import { assignIds, type Labeled } from "./identity";
 import type { Vec3 } from "./geometry";
@@ -154,6 +154,115 @@ function stripConnectionSeq(doc: Document, seqPath: Array<string | number>, memb
       doc.deleteIn([...seqPath, index]);
     }
   }
+}
+
+export type MemberCutInput = {
+  axis: 0 | 1 | 2;
+  angle: number;
+  at: number | [number, number];
+  side?: "end" | "start";
+  around?: 0 | 1 | 2;
+};
+
+export type NewMemberInput = {
+  label: string;
+  stock: string;
+  /** Free axes of parameterized stock, in L, W, then T order. */
+  size?: number[];
+  cuts?: MemberCutInput[];
+};
+
+function flowSequences(node: unknown, keys: Set<string>): void {
+  if (!isMap(node)) return;
+  for (const item of node.items) {
+    const key = isScalar(item.key) ? item.key.value : undefined;
+    if (isSeq(item.value) && typeof key === "string" && keys.has(key)) {
+      item.value.flow = true;
+      for (const child of item.value.items) {
+        if (isMap(child)) {
+          child.flow = true;
+          flowSequences(child, keys);
+        }
+      }
+    } else if (isMap(item.value)) {
+      flowSequences(item.value, keys);
+    } else if (isSeq(item.value)) {
+      for (const child of item.value.items) flowSequences(child, keys);
+    }
+  }
+}
+
+function memberNode(doc: Document, input: NewMemberInput) {
+  const value: Record<string, unknown> = {
+    label: input.label.trim(),
+    stock: input.stock,
+  };
+  if (input.size && input.size.length > 0) value.size = input.size;
+  if (input.cuts && input.cuts.length > 0) value.cuts = input.cuts;
+  const node = doc.createNode(value);
+  flowSequences(node, new Set(["size", "cuts", "at"]));
+  return node;
+}
+
+function placementNode(doc: Document, memberId: string) {
+  const node = doc.createNode(
+    { id: memberId, position: [0, 0, 0], rotation: [0, 0, 0] },
+    { flow: true },
+  );
+  flowSequences(node, new Set(["position", "rotation"]));
+  return node;
+}
+
+function ensureSeq(doc: Document, path: Array<string | number>): void {
+  if (!isSeq(doc.getIn(path))) doc.setIn(path, doc.createNode([]));
+}
+
+/**
+ * Append a member and place it at the origin of the first component.
+ * A document with no components gains a Build component for that placement.
+ */
+export function addMember(text: string, input: NewMemberInput): string {
+  const label = input.label.trim();
+  if (!label) throw new EditError("Member label is required");
+  if (!input.stock.trim()) throw new EditError("Member stock is required");
+  if (input.size?.some((value) => !Number.isFinite(value))) {
+    throw new EditError("Size values must be finite numbers");
+  }
+
+  const doc = parseEditDocument(text);
+  ensureSeq(doc, ["members"]);
+  const memberIndex = seqLength(doc, ["members"]);
+  doc.setIn(["members", memberIndex], memberNode(doc, { ...input, label }));
+
+  const { members } = identified(doc);
+  const newId = members[members.length - 1]?.id;
+  if (!newId) throw new EditError("Could not assign a member id");
+
+  if (seqLength(doc, ["components"]) === 0) {
+    const component = doc.createNode({
+      label: "Build",
+      position: [0, 0, 0],
+      rotation: [0, 0, 0],
+      members: [{ id: newId, position: [0, 0, 0], rotation: [0, 0, 0] }],
+    });
+    flowSequences(component, new Set(["position", "rotation"]));
+    if (isMap(component)) {
+      const membersPair = component.items.find((item) => isScalar(item.key) && item.key.value === "members");
+      if (membersPair && isSeq(membersPair.value)) {
+        for (const placement of membersPair.value.items) {
+          if (isMap(placement)) placement.flow = true;
+        }
+      }
+    }
+    ensureSeq(doc, ["components"]);
+    doc.setIn(["components", 0], component);
+  } else {
+    ensureSeq(doc, ["components", 0, "members"]);
+    const placementIndex = seqLength(doc, ["components", 0, "members"]);
+    doc.setIn(["components", 0, "members", placementIndex], placementNode(doc, newId));
+  }
+
+  return doc.toString(STRINGIFY);
 }
 
 /**

@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { compileDocument } from "./compile";
 import { DEMO_YAML } from "./demo";
 import {
+  addMember,
   defaultConnectionFastener,
   deleteMember,
   EditError,
@@ -209,6 +210,72 @@ describe("promoteExplicitFasteners", () => {
     expect(result.document?.components[0].connections).toHaveLength(1);
     expect(result.document?.components[0].connections[0].members.map((member) => member.id)).toEqual(["a-1", "b-1"]);
     expect(result.document?.components[0].connections[0].fasteners[0]).toEqual(defaultConnectionFastener("screw-wood-8x2.5"));
+  });
+});
+
+const COMMENTED = `# keep me
+version: 1
+name: Box
+members:
+  - label: A
+    stock: 2x4x8
+components:
+  - label: Box
+    members:
+      - { id: a-1, position: [0, 0, 0] }
+`;
+
+describe("addMember", () => {
+  it("appends a member and a placement without dropping comments", () => {
+    const next = addMember(COMMENTED, {
+      label: "Leg",
+      stock: "2x4x8",
+      cuts: [{ axis: 0, angle: 90, at: 30 }],
+    });
+    const result = compileDocument(next);
+    expect(result.diagnostics.filter((item) => item.severity === "error")).toEqual([]);
+    expect(next).toContain("# keep me");
+    expect(result.document?.members.map((part) => part.id)).toEqual(["a-1", "leg-1"]);
+    expect(result.document?.members[1]).toMatchObject({
+      label: "Leg",
+      stock: "2x4x8",
+      cuts: [{ axis: 0, angle: 90, at: 30, side: "end" }],
+    });
+    expect(result.document?.components[0].members[1]).toMatchObject({
+      id: "leg-1",
+      position: [0, 0, 0],
+      rotation: [0, 0, 0],
+    });
+  });
+
+  it("writes a parametric size override", () => {
+    const next = addMember(COMMENTED, { label: "Cap", stock: "connector-t", size: [7, 6] });
+    const result = compileDocument(next);
+    expect(result.diagnostics.filter((item) => item.severity === "error")).toEqual([]);
+    expect(result.document?.members.find((part) => part.id === "cap-1")?.size).toEqual([7, 6, 0.25]);
+  });
+
+  it("creates a Build component when the document has none", () => {
+    const next = addMember("version: 1\nname: Empty\n", { label: "Board", stock: "2x4x8" });
+    const result = compileDocument(next);
+    expect(result.diagnostics.filter((item) => item.severity === "error")).toEqual([]);
+    expect(result.document?.components[0]).toMatchObject({ id: "build-1", label: "Build" });
+    expect(result.document?.components[0].members[0]).toMatchObject({
+      id: "board-1",
+      position: [0, 0, 0],
+      rotation: [0, 0, 0],
+    });
+  });
+
+  it("numbers a repeated label", () => {
+    const next = addMember(COMMENTED, { label: "A", stock: "2x4x8" });
+    const result = compileDocument(next);
+    expect(result.diagnostics.filter((item) => item.severity === "error")).toEqual([]);
+    expect(result.document?.components[0].members.map((placement) => placement.id)).toEqual(["a-1", "a-2"]);
+  });
+
+  it("rejects a blank label", () => {
+    expect(() => addMember(COMMENTED, { label: "  ", stock: "2x4x8" })).toThrow(EditError);
   });
 });
 

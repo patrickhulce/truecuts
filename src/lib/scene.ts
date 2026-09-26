@@ -114,7 +114,7 @@ function screwHeadCovered(
   byKey: Map<string, SceneMemberInstance>,
   componentOf: Map<string, SceneComponent>,
 ): boolean {
-  if (fastener.subtype !== "screw") return false;
+  if (fastener.subtype !== "screw" && fastener.subtype !== "nail") return false;
   const backward = scale(normalize(fastener.direction), -1);
   return fastener.members.some((member) => {
     const instance = byKey.get(member.instanceKey);
@@ -350,6 +350,7 @@ export function buildScene(document: ResolvedDocument): {
       componentPosition: component.position,
       componentRotation: component.rotation,
       stockSize: meshes.get(member.memberId)?.member.size ?? [0, 0, 0],
+      stockId: meshes.get(member.memberId)?.stock.id ?? "",
     })),
   );
   const expanded = expandConnections(document, solids, contacts);
@@ -370,7 +371,7 @@ export function buildScene(document: ResolvedDocument): {
   );
   const fasteners = [...resolved.fasteners, ...expanded.fasteners].map((fastener) => ({
     ...fastener,
-    ...(fastener.subtype === "screw"
+    ...(fastener.subtype === "screw" || fastener.subtype === "nail"
       ? { headCovered: screwHeadCovered(fastener, byKey, componentOf) }
       : {}),
   }));

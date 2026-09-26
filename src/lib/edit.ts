@@ -62,8 +62,8 @@ function seqLength(doc: Document, path: Array<string | number>): number {
   return isSeq(node) ? node.items.length : 0;
 }
 
-export const SNAP_INCH = 0.5;
-export const SNAP_INCH_FINE = 0.0625;
+export const SNAP_INCH = 1;
+export const SNAP_INCH_FINE = 0.125;
 export const SNAP_DEG = 45;
 export const SNAP_DEG_FINE = 15;
 

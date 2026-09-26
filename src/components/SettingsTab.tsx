@@ -178,7 +178,7 @@ export function SettingsTab({
         />
         <span>
           Fine snap
-          <span className="mt-0.5 block text-[11px] text-[#8a7355]">1/16″ and 15°. Off uses 1/2″ and 45°.</span>
+          <span className="mt-0.5 block text-[11px] text-[#8a7355]">1/8″ and 15°. Off uses 1″ and 45°.</span>
         </span>
       </label>
       <label className="mt-3 flex cursor-pointer items-start gap-2 text-xs text-[#d6c3a3]">

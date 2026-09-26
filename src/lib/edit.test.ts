@@ -347,12 +347,12 @@ describe("rounding", () => {
 });
 
 describe("snap", () => {
-  it("snaps translation to half inches", () => {
-    expect(snapPosition([1.24, 3.5, -0.2], SNAP_INCH)).toEqual([1, 3.5, 0]);
+  it("snaps translation to whole inches", () => {
+    expect(snapPosition([1.24, 3.5, -0.2], SNAP_INCH)).toEqual([1, 4, 0]);
   });
 
-  it("snaps translation to sixteenths when fine", () => {
-    expect(snapPosition([1.04, 0, 0.04], SNAP_INCH_FINE)).toEqual([1.0625, 0, 0.0625]);
+  it("snaps translation to eighths when fine", () => {
+    expect(snapPosition([1.1, 0, 0.1], SNAP_INCH_FINE)).toEqual([1.125, 0, 0.125]);
   });
 
   it("snaps rotation to 45° or 15°", () => {

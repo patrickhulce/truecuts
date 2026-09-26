@@ -87,15 +87,11 @@ members:
   - label: Corner bracket
     stock: bracket-l-1.5x1.5
 
-  # 6×6 post, T-connector cap, and a beam in a bolted saddle.
+  # 6×6 post and a beam in a bolted saddle.
   - label: Post
     stock: 6x6x8
     cuts:
       - { axis: 0, angle: 90, at: 30 }
-
-  - label: Cap
-    stock: connector-t
-    size: [5.5, 5.5]
 
   - label: Beam
     stock: 6x6x8
@@ -130,9 +126,8 @@ components:
       - { id: corner-bracket-2, position: [ 36.5, 26.5, 0 ], rotation: [ 0, 0, 180 ] }
       - { id: corner-bracket-3, position: [ 3.5, 26.5, 24 ], rotation: [ 180, 0, 0 ] }
       - { id: corner-bracket-4, position: [ 36.5, 26.5, 22.5 ], rotation: [ 0, 0, 180 ] }
-      # Post stands against leg-2. Cap sits on the post. Beam sits in the saddle and butts the post.
+      # Post stands against leg-2. Beam sits in the saddle and butts the post.
       - { id: post-1, position: [ 40, 0, 0 ], rotation: [ 90, 90, 0 ] }
-      - { id: cap-1, position: [ 40, 30, 0 ], rotation: [ 0, 0, 0 ] }
       - { id: beam-saddle-1, position: [ 45.5, 0, -0.25 ], rotation: [ 0, 0, 0 ] }
       - { id: beam-1, position: [ 45.5, 0.25, 0 ], rotation: [ 0, 0, 0 ] }
     connections:
@@ -217,12 +212,6 @@ components:
           - { id: leg-2 }
         fasteners:
           - { kind: screw, stock: screw-wood-10x3, variant: { kind: centered, separation: 8, justify: space-around } }
-      # The stem stands on the center of the bed, so the cap is glued rather than screwed through that point.
-      - members:
-          - { id: cap-1 }
-          - { id: post-1 }
-        fasteners:
-          - { kind: glue, stock: wood-glue }
       - members:
           - { id: beam-1 }
           - { id: post-1 }

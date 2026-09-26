@@ -61,7 +61,7 @@ describe("compileDocument", () => {
   it("compiles the demo YAML into a scene", () => {
     const result = compileDocument(DEMO_YAML);
     expect(result.diagnostics.filter((item) => item.severity === "error")).toEqual([]);
-    expect(result.document?.members).toHaveLength(20);
+    expect(result.document?.members).toHaveLength(19);
     expect(result.document?.members.map((part) => part.id)).toEqual([
       "leg-1",
       "leg-2",
@@ -80,12 +80,11 @@ describe("compileDocument", () => {
       "corner-bracket-3",
       "corner-bracket-4",
       "post-1",
-      "cap-1",
       "beam-1",
       "beam-saddle-1",
     ]);
     expect(result.scene?.components).toHaveLength(3);
-    expect(result.scene?.components[0].members).toHaveLength(18);
+    expect(result.scene?.components[0].members).toHaveLength(17);
     expect(result.scene?.fasteners.length).toBeGreaterThan(0);
     expect(result.diagnostics.filter((item) => item.severity === "warning")).toEqual([]);
 
@@ -118,10 +117,8 @@ describe("compileDocument", () => {
     expect(byId.get("brace-1")?.fastened).toBe(true);
     expect(byId.get("spare-block-1")?.fastened).toBe(false);
     expect(byId.get("post-1")?.fastened).toBe(true);
-    expect(byId.get("cap-1")?.fastened).toBe(true);
     expect(byId.get("beam-1")?.fastened).toBe(true);
     expect(byId.get("beam-saddle-1")?.fastened).toBe(true);
-    expect(byId.get("cap-1")?.finished.thickness).toBeCloseTo(3, 4);
     expect(byId.get("beam-saddle-1")?.finished.thickness).toBeCloseTo(2, 4);
 
     const leg1 = byId.get("leg-1");

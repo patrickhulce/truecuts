@@ -1,4 +1,4 @@
-import { getCatalogPart, type CatalogPart } from "./catalog";
+import { fitsTConnector, getCatalogPart, getFastenerSubtype, listCatalog, type CatalogPart } from "./catalog";
 import { parseInstanceKey, type FastenerIssue, type SceneFastener } from "./fasteners";
 import {
   add,
@@ -9,10 +9,14 @@ import {
   fromPlane2D,
   insetConvex,
   inverseRotateEulerXYZ,
+  rotateEulerXYZ,
   layoutClosed,
   layoutOpen,
   len,
   normalize,
+  patchNeighbor,
+  patchNormalFor,
+  patchesFor,
   planeBasis,
   scale,
   sub,
@@ -36,6 +40,7 @@ import type {
   ResolvedConnectionMember,
   ResolvedDocument,
   ResolvedGlueVariant,
+  ResolvedNailVariant,
   ResolvedScrewVariant,
 } from "./schema";
 
@@ -59,6 +64,7 @@ export type ConnectionSolid = {
   componentPosition: Vec3;
   componentRotation: Vec3;
   stockSize: Vec3;
+  stockId: string;
 };
 
 export type DerivedBore = {
@@ -101,6 +107,20 @@ export function attachmentNeighborKeys(
     for (const member of fastener.members) {
       if (member.instanceKey !== selectedKey) keys.add(member.instanceKey);
     }
+  }
+  return [...keys];
+}
+
+/** Connection neighbors plus every member that shares a contact patch. */
+export function detailNeighborKeys(
+  selectedKey: string,
+  connections: Array<Pick<SceneConnection, "memberKeys">>,
+  fasteners: Array<{ members: Array<{ instanceKey: string }> }>,
+  contacts: SceneContacts,
+): string[] {
+  const keys = new Set(attachmentNeighborKeys(selectedKey, connections, fasteners));
+  for (const patch of patchesFor(contacts, selectedKey)) {
+    keys.add(patchNeighbor(patch, selectedKey).instanceKey);
   }
   return [...keys];
 }
@@ -275,7 +295,11 @@ function centerline(poly: Face, normal: Vec3): { start: Vec3; end: Vec3 } | null
   };
 }
 
-export function layoutScrewPoints(variant: ResolvedScrewVariant, polygon: Face, normal: Vec3): Vec3[] {
+export function layoutScrewPoints(
+  variant: ResolvedScrewVariant | ResolvedNailVariant,
+  polygon: Face,
+  normal: Vec3,
+): Vec3[] {
   if (polygon.length < 3) return [];
   if (variant.kind === "four-corners") {
     return insetConvex(polygon, normal, variant.edge) ?? polygon;
@@ -341,6 +365,19 @@ function dirToLocal(solid: ConnectionSolid, dir: Vec3): Vec3 {
   return inverseRotateEulerXYZ(inverseRotateEulerXYZ(dir, solid.componentRotation), solid.rotation);
 }
 
+function dirToWorld(solid: ConnectionSolid, local: Vec3): Vec3 {
+  return rotateEulerXYZ(rotateEulerXYZ(local, solid.rotation), solid.componentRotation);
+}
+
+/** Contact normal runs along the member's length, so this face is an end. */
+const END_ALIGN = 0.75;
+
+function meetsOnEnd(solid: ConnectionSolid, patch: SharedPatch): boolean {
+  const axis = dirToWorld(solid, [1, 0, 0]);
+  if (len(axis) < 1e-6) return false;
+  return Math.abs(dot(normalize(axis), normalize(patchNormalFor(patch, solid.key)))) >= END_ALIGN;
+}
+
 function makeBore(localCenter: Vec3, outward: Vec3, diameter: number, depth: number, size: Vec3): PlacedBore {
   let face: FaceId = FACE_IDS[0];
   let best = -Infinity;
@@ -375,7 +412,7 @@ function catalogOf(stockId: string, path: Array<string | number>, issues: Fasten
 }
 
 function placeMechanical(
-  kind: "screw" | "bolt",
+  kind: "screw" | "bolt" | "nail",
   point: Vec3,
   head: ConnectionSolid,
   tip: ConnectionSolid,
@@ -391,7 +428,7 @@ function placeMechanical(
   const forward = rayFaceDistance(tipFaces, point, intoTip);
   const length = catalog.size[0];
   const diameter = catalog.size[1];
-  const spansHead = kind === "bolt" || (length > back + THROUGH_SLACK && back > 1e-3);
+  const spansHead = kind === "bolt" || kind === "nail" || (length > back + THROUGH_SLACK && back > 1e-3);
   const origin = spansHead ? add(point, scale(intoTip, -back)) : point;
   const bores: DerivedBore[] = [];
 
@@ -404,7 +441,7 @@ function placeMechanical(
   }
 
   const pilotDepth = spansHead ? Math.min(Math.max(length - back, 0), forward) : Math.min(length, forward);
-  const pilotDiameter = kind === "screw" ? diameter * SCREW_PILOT_RATIO : diameter;
+  const pilotDiameter = kind === "bolt" ? diameter : diameter * SCREW_PILOT_RATIO;
   if (kind === "bolt" && forward > 1e-3) {
     bores.push({
       instanceKey: tip.key,
@@ -441,6 +478,118 @@ function placeMechanical(
     },
     bores,
   };
+}
+
+/** Through the thinner board, plus the same distance into the next, capped by that member. */
+export function nailReachInches(thinner: number, other: number): number {
+  if (!(thinner > 1e-4)) return other > 1e-4 ? other : 0;
+  const bite = Math.min(thinner, other > 1e-4 ? other : thinner);
+  return thinner + bite;
+}
+
+/** Shortest common nail that meets `reach`. The longest nail when none do. */
+export function pickNailStock(reach: number): string {
+  const nails = listCatalog("fastener")
+    .filter((part) => getFastenerSubtype(part.id) === "nail")
+    .sort((a, b) => a.size[0] - b.size[0]);
+  const needed = reach > 1e-4 ? reach : nailReachInches(1.5, 1.5);
+  const fit = nails.find((part) => part.size[0] + 1e-6 >= needed);
+  return (fit ?? nails[nails.length - 1])?.id ?? "nail-common-10x3";
+}
+
+type PosedMember = {
+  key: string;
+  faces: Polyhedron;
+  position: Vec3;
+  rotation: Vec3;
+  componentPosition: Vec3;
+  componentRotation: Vec3;
+};
+
+function posedWorld(member: PosedMember): Polyhedron {
+  return worldPolyhedron(
+    member.faces,
+    member.position,
+    member.rotation,
+    member.componentPosition,
+    member.componentRotation,
+  );
+}
+
+/** Longest nail reach among contact pairs in a connection. Undefined when nothing touches. */
+export function connectionNailReach(contacts: SceneContacts, members: PosedMember[]): number | undefined {
+  let reach = 0;
+  let found = false;
+  for (let i = 0; i < members.length; i++) {
+    for (let j = i + 1; j < members.length; j++) {
+      const patch = largestPatch(patchesBetween(contacts, members[i].key, members[j].key));
+      if (!patch) continue;
+      const sample = centroid3(patch.polygon);
+      const depthA = rayFaceDistance(
+        posedWorld(members[i]),
+        sample,
+        scale(patchNormalFor(patch, members[i].key), -1),
+      );
+      const depthB = rayFaceDistance(
+        posedWorld(members[j]),
+        sample,
+        scale(patchNormalFor(patch, members[j].key), -1),
+      );
+      const measured = [depthA, depthB].filter((depth) => depth > 1e-4);
+      if (measured.length === 0) continue;
+      reach = Math.max(reach, nailReachInches(Math.min(...measured), Math.max(...measured)));
+      found = true;
+    }
+  }
+  return found ? reach : undefined;
+}
+
+function noteNailSpan(
+  length: number,
+  reach: number,
+  catalog: CatalogPart,
+  path: Array<string | number>,
+  issues: FastenerIssue[],
+): void {
+  if (!Number.isFinite(reach)) return;
+  if (length + THROUGH_SLACK < reach) {
+    issues.push({
+      message: `Nail "${catalog.label}" (${length}″) does not reach the next member (${reach.toFixed(2)}″)`,
+      path,
+      severity: "warning",
+    });
+  }
+}
+
+function normalExtent(solid: ConnectionSolid, patch: SharedPatch, point: Vec3): number {
+  const outward = patchNormalFor(patch, solid.key);
+  return rayFaceDistance(worldOf(solid), point, scale(outward, -1));
+}
+
+function fixedFeature(part: CatalogPart, name: string, fallback: number): number {
+  const spec = part.features?.[name];
+  if (spec && "fixed" in spec) return spec.fixed;
+  return fallback;
+}
+
+function bedSize(solid: ConnectionSolid, gauge: number): Vec3 {
+  const width = solid.stockSize[1];
+  const thickness = solid.stockSize[2];
+  const long = Math.max(width, thickness);
+  const short = Math.min(width, thickness);
+  if (long <= 1e-6) return [gauge, gauge, gauge];
+  return [long, short, gauge];
+}
+
+function acrossPatch(polygon: Face, normal: Vec3, direction: Vec3): Vec3 {
+  const line = centerline(polygon, normal);
+  let across = line ? sub(line.end, line.start) : planeBasis(direction).u;
+  across = sub(across, scale(direction, dot(across, direction)));
+  if (len(across) < 1e-6) {
+    const basis = planeBasis(direction);
+    across = basis.u;
+  }
+  return normalize(across);
 }
 
 function noteBoltSpan(
@@ -563,6 +712,106 @@ function expandFastener(
           bores.push(...placed.bores);
           link(bracketSolid.key, target.key);
         }
+      }
+    }
+    return { fasteners, edges, bores, touched };
+  }
+
+  if (recipe.kind === "connector") {
+    const bed =
+      members.find((solid) => {
+        const part = getCatalogPart(solid.stockId);
+        return part ? fitsTConnector(part) : false;
+      }) ?? members[0];
+    let patch: SharedPatch | undefined;
+    let other: ConnectionSolid | undefined;
+    for (const target of members) {
+      if (target.key === bed.key) continue;
+      const candidate = largestPatch(patchesBetween(contacts, bed.key, target.key));
+      if (!candidate) continue;
+      if (!patch || candidate.area > patch.area) {
+        patch = candidate;
+        other = target;
+      }
+    }
+    if (patch && other) {
+      const point = centroid3(patch.polygon);
+      const endBed = meetsOnEnd(bed, patch);
+      const endOther = meetsOnEnd(other, patch);
+      const endButt = endBed !== endOther;
+      const beam = endButt && endOther ? other : bed;
+      const post = beam.key === bed.key ? other : bed;
+      const plate = endButt ? post : bed;
+      const mate = plate.key === bed.key ? other : bed;
+      const direction = endButt
+        ? normalize(scale(patchNormalFor(patch, beam.key), -1))
+        : normalize(patchNormalFor(patch, bed.key));
+      const size = bedSize(plate, catalog.size[2]);
+      const riser = fixedFeature(catalog, "riser", 3);
+      fasteners.push({
+        key: `${keyPrefix}/fastener#${recipeIndex}/connector#0`,
+        connectionKey: keyPrefix,
+        stockId: catalog.id,
+        stockLabel: catalog.label,
+        subtype: "connector",
+        color: catalog.color,
+        origin: point,
+        direction,
+        across: acrossPatch(patch.polygon, patch.normal, direction),
+        length: riser,
+        diameter: size[2],
+        size,
+        riser,
+        ...(endButt ? { bedInset: size[2] } : {}),
+        members: [plate, mate].map((solid) => ({
+          instanceKey: solid.key,
+          point,
+          direction: normalize(dirToLocal(solid, direction)),
+        })),
+      });
+      link(plate.key, mate.key);
+    }
+    return { fasteners, edges, bores, touched };
+  }
+
+  if (recipe.kind === "nail") {
+    const listed = members[0];
+    for (const neighbor of members.slice(1)) {
+      const patch = largestPatch(patchesBetween(contacts, listed.key, neighbor.key));
+      if (!patch || !listed) continue;
+      const sample = centroid3(patch.polygon);
+      const depthListed = normalExtent(listed, patch, sample);
+      const depthNeighbor = normalExtent(neighbor, patch, sample);
+      const measured = [depthListed, depthNeighbor].filter((depth) => depth > 1e-4);
+      const thinner = measured.length > 0 ? Math.min(...measured) : 0;
+      const other = measured.length > 0 ? Math.max(...measured) : 0;
+      noteNailSpan(
+        catalog.size[0],
+        measured.length > 0 ? nailReachInches(thinner, other) : Infinity,
+        catalog,
+        [...path, "fasteners", recipeIndex],
+        issues,
+      );
+      const neighborIsThinner =
+        depthNeighbor > 1e-4 && (depthListed <= 1e-4 || depthNeighbor + 1e-3 < depthListed);
+      const head = neighborIsThinner ? neighbor : listed;
+      const tip = neighborIsThinner ? listed : neighbor;
+      const direction = patchNormalFor(patch, head.key);
+      const points = layoutScrewPoints(recipe.variant, patch.polygon, patch.normal);
+      for (const point of points) {
+        const placed = placeMechanical(
+          "nail",
+          point,
+          head,
+          tip,
+          direction,
+          catalog,
+          `${keyPrefix}/fastener#${recipeIndex}/nail#${fasteners.length}`,
+          keyPrefix,
+        );
+        fasteners.push(placed.fastener);
+        bores.push(...placed.bores);
+        link(head.key, tip.key);
       }
     }
     return { fasteners, edges, bores, touched };

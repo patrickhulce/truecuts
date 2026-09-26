@@ -1,5 +1,13 @@
 import { describe, expect, it } from "vitest";
-import { attachmentNeighborKeys, layoutScrewPoints, SCREW_PILOT_RATIO } from "./connections";
+import {
+  attachmentNeighborKeys,
+  detailNeighborKeys,
+  layoutScrewPoints,
+  nailReachInches,
+  pickNailStock,
+  SCREW_PILOT_RATIO,
+} from "./connections";
+import { fitsTConnector, getCatalogPart } from "./catalog";
 import { compileDocument } from "./compile";
 import type { Face, Vec3 } from "./geometry";
 
@@ -314,5 +322,242 @@ describe("attachmentNeighborKeys", () => {
     expect(
       attachmentNeighborKeys("a", [], [{ members: [{ instanceKey: "a" }, { instanceKey: "c" }] }]),
     ).toEqual(["c"]);
+  });
+});
+
+describe("detailNeighborKeys", () => {
+  it("includes a contact neighbor that has no connection", () => {
+    const keys = detailNeighborKeys("box-1/a-1#0", [], [], {
+      hosts: [],
+      patches: [
+        {
+          key: "patch",
+          a: { instanceKey: "box-1/a-1#0", faceIndex: 0 },
+          b: { instanceKey: "box-1/b-1#0", faceIndex: 1 },
+          polygon: [],
+          area: 1,
+          normal: [0, 1, 0],
+        },
+      ],
+    });
+    expect(keys).toEqual(["box-1/b-1#0"]);
+  });
+});
+
+describe("nail and connector expansion", () => {
+  it("drives a nail through the thinner member into its neighbor", () => {
+    const result = compileDocument(`version: 1
+name: Nail
+members:
+  - label: Board
+    stock: 2x4x8
+    cuts:
+      - { axis: 0, angle: 90, at: 10 }
+  - label: Skin
+    stock: plywood-1/4-4x8
+    cuts:
+      - { axis: 0, angle: 90, at: 10 }
+      - { axis: 1, angle: 90, at: 4 }
+components:
+  - label: Box
+    members:
+      - { id: board-1, position: [0, 0, 0] }
+      - { id: skin-1, position: [0, 1.5, 0] }
+    connections:
+      - members:
+          - { id: board-1 }
+          - { id: skin-1 }
+        fasteners:
+          - { kind: nail, stock: nail-common-8x2.5, variant: { kind: centered, separation: 8, justify: space-around } }
+`);
+    expect(result.diagnostics.filter((item) => item.severity === "error")).toEqual([]);
+    const nails = result.scene?.fasteners.filter((fastener) => fastener.subtype === "nail") ?? [];
+    expect(nails.length).toBeGreaterThan(0);
+    const skin = result.scene?.components[0].members.find((member) => member.memberId === "skin-1");
+    const board = result.scene?.components[0].members.find((member) => member.memberId === "board-1");
+    expect(skin?.derivedBores.length).toBe(nails.length);
+    expect(board?.derivedBores.length).toBe(nails.length);
+    expect(skin?.derivedBores.every((bore) => bore.through && Math.abs(bore.diameter - 0.131) < 1e-6)).toBe(true);
+    expect(
+      board?.derivedBores.every((bore) => Math.abs(bore.diameter - 0.131 * SCREW_PILOT_RATIO) < 1e-6),
+    ).toBe(true);
+    for (const nail of nails) {
+      expect(nail.direction[1]).toBeLessThan(-0.9);
+      expect(nail.origin[1]).toBeCloseTo(1.75, 2);
+      expect(nail.members[0]?.instanceKey).toContain("skin-1");
+    }
+  });
+
+  it("picks a nail that passes through a 2×4 into the next board", () => {
+    expect(nailReachInches(1.5, 1.5)).toBeCloseTo(3, 4);
+    expect(pickNailStock(3)).toBe("nail-common-10x3");
+    expect(pickNailStock(20)).toBe("nail-common-16x3.5");
+    const result = compileDocument(`version: 1
+name: Face nail
+members:
+  - label: A
+    stock: 2x4x8
+    cuts:
+      - { axis: 0, angle: 90, at: 10 }
+  - label: B
+    stock: 2x4x8
+    cuts:
+      - { axis: 0, angle: 90, at: 10 }
+components:
+  - label: Box
+    members:
+      - { id: a-1, position: [0, 0, 0] }
+      - { id: b-1, position: [0, 1.5, 0] }
+    connections:
+      - members:
+          - { id: a-1 }
+          - { id: b-1 }
+        fasteners:
+          - { kind: nail, stock: nail-common-8x2.5, variant: { kind: centered, separation: 4, justify: space-around } }
+`);
+    expect(
+      result.diagnostics.some((item) => item.severity === "warning" && item.message.includes("does not reach the next member")),
+    ).toBe(true);
+    const ten = compileDocument(`version: 1
+name: Face nail
+members:
+  - label: A
+    stock: 2x4x8
+    cuts:
+      - { axis: 0, angle: 90, at: 10 }
+  - label: B
+    stock: 2x4x8
+    cuts:
+      - { axis: 0, angle: 90, at: 10 }
+components:
+  - label: Box
+    members:
+      - { id: a-1, position: [0, 0, 0] }
+      - { id: b-1, position: [0, 1.5, 0] }
+    connections:
+      - members:
+          - { id: a-1 }
+          - { id: b-1 }
+        fasteners:
+          - { kind: nail, stock: nail-common-10x3, variant: { kind: centered, separation: 4, justify: space-around } }
+`);
+    expect(
+      ten.diagnostics.some((item) => item.severity === "warning" && item.message.includes("does not reach the next member")),
+    ).toBe(false);
+  });
+
+  it("warns when a nail does not reach the next member", () => {
+    const result = compileDocument(`version: 1
+name: Short nail
+members:
+  - label: A
+    stock: 2x4x8
+    cuts:
+      - { axis: 0, angle: 90, at: 10 }
+  - label: B
+    stock: 2x4x8
+    cuts:
+      - { axis: 0, angle: 90, at: 10 }
+components:
+  - label: Box
+    members:
+      - { id: a-1, position: [0, 0, 0] }
+      - { id: b-1, position: [10, 0, 0] }
+    connections:
+      - members:
+          - { id: a-1 }
+          - { id: b-1 }
+        fasteners:
+          - { kind: nail, stock: nail-common-16x3.5, variant: { kind: centered, separation: 4, justify: space-around } }
+`);
+    expect(result.scene?.fasteners.some((fastener) => fastener.subtype === "nail")).toBe(true);
+    expect(
+      result.diagnostics.some((item) => item.severity === "warning" && item.message.includes("does not reach the next member")),
+    ).toBe(true);
+    const nail = result.scene?.fasteners.find((fastener) => fastener.subtype === "nail");
+    expect(nail?.direction[0]).toBeGreaterThan(0.9);
+    expect(nail?.origin[0]).toBeCloseTo(0, 2);
+  });
+
+  it("seats a T-connector on the contact without adding a member", () => {
+    const six = getCatalogPart("6x6x8");
+    expect(six && fitsTConnector(six)).toBe(true);
+    expect(fitsTConnector(getCatalogPart("2x4x8")!)).toBe(false);
+    const result = compileDocument(`version: 1
+name: Post
+members:
+  - label: Post
+    stock: 6x6x8
+    cuts:
+      - { axis: 0, angle: 90, at: 12 }
+  - label: Beam
+    stock: 6x6x8
+    cuts:
+      - { axis: 0, angle: 90, at: 12 }
+components:
+  - label: Frame
+    members:
+      - { id: post-1, position: [0, 0, 0] }
+      - { id: beam-1, position: [0, 5.5, 0] }
+    connections:
+      - members:
+          - { id: post-1 }
+          - { id: beam-1 }
+        fasteners:
+          - { kind: connector, stock: connector-t }
+`);
+    expect(result.diagnostics.filter((item) => item.severity === "error")).toEqual([]);
+    expect(result.document?.members).toHaveLength(2);
+    const connectors = result.scene?.fasteners.filter((fastener) => fastener.subtype === "connector") ?? [];
+    expect(connectors).toHaveLength(1);
+    const connector = connectors[0];
+    expect(connector?.size[0]).toBeCloseTo(5.5, 4);
+    expect(connector?.size[1]).toBeCloseTo(5.5, 4);
+    expect(connector?.size[2]).toBeCloseTo(0.25, 4);
+    expect(connector?.riser).toBe(3);
+    expect(connector?.direction[1]).toBeGreaterThan(0.9);
+    expect(connector?.origin[1]).toBeCloseTo(5.5, 2);
+    expect(Math.abs(connector?.across?.[0] ?? 0)).toBeGreaterThan(0.9);
+    expect(connector?.members.map((member) => member.instanceKey).sort()).toEqual([
+      "frame-1/beam-1#1",
+      "frame-1/post-1#0",
+    ]);
+    expect(result.scene?.components[0].members.every((member) => member.derivedBores.length === 0)).toBe(true);
+    expect(result.scene?.components[0].members.every((member) => member.fastened)).toBe(true);
+    expect(connector?.bedInset).toBeUndefined();
+  });
+
+  it("aims a T-connector flange into an end-butted beam and seats the plate on the post", () => {
+    const result = compileDocument(`version: 1
+name: Butt
+members:
+  - label: Post
+    stock: 6x6x8
+    cuts:
+      - { axis: 0, angle: 90, at: 12 }
+  - label: Beam
+    stock: 6x6x8
+    cuts:
+      - { axis: 0, angle: 90, at: 12 }
+components:
+  - label: Frame
+    members:
+      - { id: post-1, position: [0, 0, 0], rotation: [90, 90, 0] }
+      - { id: beam-1, position: [5.5, 0, 0] }
+    connections:
+      - members:
+          - { id: beam-1 }
+          - { id: post-1 }
+        fasteners:
+          - { kind: connector, stock: connector-t }
+`);
+    expect(result.diagnostics.filter((item) => item.severity === "error")).toEqual([]);
+    expect(result.document?.members).toHaveLength(2);
+    const connector = result.scene?.fasteners.find((fastener) => fastener.subtype === "connector");
+    expect(connector?.direction[0]).toBeGreaterThan(0.9);
+    expect(connector?.origin[0]).toBeCloseTo(5.5, 2);
+    expect(connector?.bedInset).toBeCloseTo(0.25, 4);
+    expect(connector?.size[0]).toBeCloseTo(5.5, 4);
+    expect(connector?.size[1]).toBeCloseTo(5.5, 4);
   });
 });

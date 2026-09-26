@@ -1,14 +1,14 @@
 "use client";
 
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
 import { fitsTConnector, getCatalogPart } from "@/lib/catalog";
 import { connectionKey, connectionNailReach, detailNeighborKeys, type SceneConnection } from "@/lib/connections";
-import { addConnection, promoteExplicitFasteners, setConnectionFastener } from "@/lib/edit";
+import { addConnection, promoteExplicitFasteners, setConnectionFastener, setMemberDimension } from "@/lib/edit";
 import { parseInstanceKey } from "@/lib/fasteners";
 import type { ResolvedBore, ResolvedConnectionFastener, ResolvedCut, ResolvedDocument, ResolvedMember } from "@/lib/schema";
 import type { SceneContacts } from "@/lib/geometry";
 import type { SceneFastener, SceneModel, SceneMemberInstance } from "@/lib/scene";
-import { formatInches } from "@/lib/units";
+import { formatInches, parseDimension } from "@/lib/units";
 import { ConnectionEditor } from "./ConnectionEditor";
 import { FastenerIcon } from "./FastenerIcon";
 import { MemberThumbnail } from "./MemberThumbnail";
@@ -457,6 +457,16 @@ function PartDetail({
     }
   }
 
+  function saveDimension(axis: 0 | 1 | 2, inches: number): string | null {
+    try {
+      const next = setMemberDimension(textRef.current, instance.memberId, axis, inches);
+      if (next !== textRef.current) commitNext(next);
+      return null;
+    } catch (cause) {
+      return cause instanceof Error ? cause.message : "Could not update the dimension";
+    }
+  }
+
   function promote(explicit: SceneFastener[]) {
     const homes = explicit.map((fastener) => parseExplicitKey(fastener.key));
     const componentId = homes[0]?.componentId ?? null;
@@ -496,8 +506,27 @@ function PartDetail({
           </div>
 
           <SectionLabel>Dimensions</SectionLabel>
-          <p className="px-3 text-sm text-[#d6c3a3]">{formatFinished(instance.finished)}</p>
-          <p className="px-3 text-[11px] text-[#8a7355]">L × W × T (length × width × thickness)</p>
+          <div className="grid grid-cols-[auto_minmax(0,1fr)] items-center gap-x-3 gap-y-1 px-3 text-sm">
+            <span className="text-[#8a7355]">L</span>
+            <EditableDimension
+              label="Length"
+              value={instance.finished.length}
+              onSave={(inches) => saveDimension(0, inches)}
+            />
+            <span className="text-[#8a7355]">W</span>
+            <EditableDimension
+              label="Width"
+              value={instance.finished.width}
+              onSave={(inches) => saveDimension(1, inches)}
+            />
+            <span className="text-[#8a7355]">T</span>
+            <EditableDimension
+              label="Thickness"
+              value={instance.finished.thickness}
+              onSave={(inches) => saveDimension(2, inches)}
+            />
+          </div>
+          <p className="px-3 pt-1 text-[11px] text-[#8a7355]">L × W × T (length × width × thickness). Click a value to edit.</p>
 
           <SectionLabel>Bores</SectionLabel>
           {instance.bores.length === 0 ? (
@@ -614,6 +643,114 @@ function PartDetail({
         </div>
       ) : null}
     </div>
+  );
+}
+
+function EditableDimension({
+  label,
+  value,
+  onSave,
+}: {
+  label: string;
+  value: number;
+  onSave: (inches: number) => string | null;
+}) {
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState("");
+  const [error, setError] = useState<string | null>(null);
+  const skipBlur = useRef(false);
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    if (!editing) return;
+    inputRef.current?.focus();
+    inputRef.current?.select();
+  }, [editing]);
+
+  function close(clearError: boolean) {
+    skipBlur.current = true;
+    setEditing(false);
+    if (clearError) setError(null);
+  }
+
+  function commitDraft(): boolean {
+    let inches: number;
+    try {
+      inches = parseDimension(draft.trim());
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "Cannot parse dimension");
+      return false;
+    }
+    if (formatInches(inches) === formatInches(value)) {
+      close(true);
+      return true;
+    }
+    const message = onSave(inches);
+    if (message) {
+      setError(message);
+      return false;
+    }
+    close(true);
+    return true;
+  }
+
+  function onKeyDown(event: KeyboardEvent<HTMLInputElement>) {
+    if (event.key === "Escape") {
+      event.preventDefault();
+      close(true);
+      return;
+    }
+    if (event.key === "Enter") {
+      event.preventDefault();
+      commitDraft();
+      return;
+    }
+    if (event.key === "Tab" && !commitDraft()) {
+      event.preventDefault();
+    }
+  }
+
+  if (!editing) {
+    return (
+      <span className="min-w-0">
+        <button
+          type="button"
+          onClick={() => {
+            setDraft(formatInches(value));
+            setError(null);
+            setEditing(true);
+          }}
+          className="cursor-text text-left text-[#d6c3a3] hover:text-[#f59e0b]"
+        >
+          {formatInches(value)}
+        </button>
+        {error ? <span className="mt-0.5 block text-xs text-rose-400">{error}</span> : null}
+      </span>
+    );
+  }
+
+  return (
+    <span className="min-w-0">
+      <input
+        ref={inputRef}
+        aria-label={label}
+        value={draft}
+        onChange={(event) => {
+          setDraft(event.target.value);
+          setError(null);
+        }}
+        onBlur={() => {
+          if (skipBlur.current) {
+            skipBlur.current = false;
+            return;
+          }
+          commitDraft();
+        }}
+        onKeyDown={onKeyDown}
+        className="w-full rounded border border-[#3d2a18] bg-[#1a120b] px-2 py-0.5 text-sm text-[#d6c3a3]"
+      />
+      {error ? <span className="mt-0.5 block text-xs text-rose-400">{error}</span> : null}
+    </span>
   );
 }
 

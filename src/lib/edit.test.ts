@@ -6,6 +6,7 @@ import {
   addMember,
   defaultConnectionFastener,
   deleteMember,
+  duplicateMember,
   EditError,
   parseCatalogDrag,
   promoteExplicitFasteners,
@@ -417,6 +418,42 @@ components:
     expect(() => setMemberDimension(COMMENTED.replace("stock: 2x4x8", "stock: bracket-l-1.5x1.5"), "a-1", 0, 1)).toThrow(
       /fixed/,
     );
+  });
+});
+
+describe("duplicateMember", () => {
+  const bored = `version: 1
+name: Box
+members:
+  - label: A
+    stock: 2x4x8
+    cuts:
+      - { axis: 0, angle: 90, at: 20 }
+    bores:
+      - { face: LxW@1, at: [4, 1], diameter: 0.25, depth: 0.5 }
+components:
+  - label: Box
+    members:
+      - { id: a-1, position: [1, 2, 3], rotation: [0, 90, 0] }
+`;
+
+  it("clones the definition and places a copy with the same rotation", () => {
+    const next = duplicateMember(bored, "a-1", "box-1", [8, 2, 3], [0, 90, 0]);
+    const result = compileDocument(next);
+    expect(result.diagnostics.filter((item) => item.severity === "error")).toEqual([]);
+    expect(result.document?.members.map((part) => part.id)).toEqual(["a-1", "a-2"]);
+    expect(result.document?.members[1]).toMatchObject({
+      label: "A",
+      stock: "2x4x8",
+      cuts: [{ axis: 0, angle: 90, at: 20, side: "end" }],
+    });
+    expect(result.document?.members[1].bores).toHaveLength(1);
+    expect(result.document?.components[0].members[1]).toMatchObject({
+      id: "a-2",
+      position: [8, 2, 3],
+      rotation: [0, 90, 0],
+    });
+    expect(result.document?.components[0].members[0].position).toEqual([1, 2, 3]);
   });
 });
 

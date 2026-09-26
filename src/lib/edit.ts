@@ -1,4 +1,4 @@
-import { isMap, isScalar, isSeq, parseDocument, type Document } from "yaml";
+import { isMap, isPair, isScalar, isSeq, parseDocument, type Document } from "yaml";
 import { getCatalogPart, getFastenerSubtype, resolveStockSize, stockGeometry, type AxisName } from "./catalog";
 import { freeAxes, sizeOverride } from "./catalog-families";
 import { assignIds, type Labeled } from "./identity";
@@ -708,4 +708,47 @@ export function setMemberDimension(
   }
 
   throw new EditError(YAML_CUTS);
+}
+
+/** Clone a member definition and place the copy in the same component. */
+export function duplicateMember(
+  text: string,
+  memberId: string,
+  componentId: string,
+  position: Vec3,
+  rotation: Vec3,
+): string {
+  const doc = parseEditDocument(text);
+  const { members } = identified(doc);
+  const memberIndex = members.findIndex((member) => member.id === memberId);
+  if (memberIndex < 0) throw new EditError(`Unknown member "${memberId}"`);
+  const previous = new Set(members.map((member) => member.id));
+
+  const node = doc.getIn(["members", memberIndex]);
+  if (!isMap(node)) throw new EditError("Member is missing");
+  const copy = node.clone();
+  if (!isMap(copy)) throw new EditError("Could not copy the member");
+  copy.anchor = undefined;
+  for (let index = copy.items.length - 1; index >= 0; index -= 1) {
+    const item = copy.items[index];
+    if (isPair(item) && isScalar(item.key) && item.key.value === "id") {
+      copy.items.splice(index, 1);
+    }
+  }
+
+  ensureSeq(doc, ["members"]);
+  const nextMemberIndex = seqLength(doc, ["members"]);
+  doc.setIn(["members", nextMemberIndex], copy);
+
+  const created = identified(doc).members.find((member) => !previous.has(member.id));
+  if (!created) throw new EditError("Could not assign a member id");
+
+  const cIndex = componentIndex(doc, componentId);
+  ensureSeq(doc, ["components", cIndex, "members"]);
+  const placementIndex = seqLength(doc, ["components", cIndex, "members"]);
+  doc.setIn(
+    ["components", cIndex, "members", placementIndex],
+    placementNode(doc, created.id, position, rotation),
+  );
+  return doc.toString(STRINGIFY);
 }

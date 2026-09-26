@@ -395,7 +395,19 @@ export function Viewport({
         <OrbitControls
           makeDefault
           enabled={!dragging}
-          target={[20, 16, 12]}
+          target={[20, 0, 12]}
+          screenSpacePanning={false}
+          mouseButtons={{
+            LEFT: THREE.MOUSE.ROTATE,
+            MIDDLE: THREE.MOUSE.PAN,
+            RIGHT: THREE.MOUSE.DOLLY,
+          }}
+          onChange={(event) => {
+            const controls = event?.target;
+            if (!controls || Math.abs(controls.target.y) < 1e-6) return;
+            // Assign only. update() is already on the frame loop and re-entering it overflows.
+            controls.target.y = 0;
+          }}
           maxPolarAngle={Math.PI / 2 + (20 * Math.PI) / 180}
         />
         <GizmoHelper alignment="bottom-right" margin={[64, 64]}>

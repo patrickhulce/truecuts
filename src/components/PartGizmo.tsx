@@ -50,17 +50,19 @@ function snapDraft(mode: "Arrow" | "Rotator", start: PartPose, raw: PartPose, fi
 type PartGizmoProps = {
   pose: PartPose;
   bounds: { min: Vec3; max: Vec3 };
+  fineSnap?: boolean;
   onDragStart: () => void;
   onDraft: (position: Vec3, rotation: Vec3) => void;
   onCommit: (position: Vec3, rotation: Vec3) => void;
 };
 
-export function PartGizmo({ pose, bounds, onDragStart, onDraft, onCommit }: PartGizmoProps) {
+export function PartGizmo({ pose, bounds, fineSnap = false, onDragStart, onDraft, onCommit }: PartGizmoProps) {
   const modeRef = useRef<"Arrow" | "Rotator" | null>(null);
   const startRef = useRef(pose);
   const lastRef = useRef(pose);
   const rawRef = useRef<PartPose | null>(null);
-  const fineRef = useRef(false);
+  const fineRef = useRef(fineSnap);
+  const fineSnapRef = useRef(fineSnap);
   const onDraftRef = useRef(onDraft);
   const size: Vec3 = [
     Math.max(bounds.max[0] - bounds.min[0], 0.01),
@@ -80,7 +82,13 @@ export function PartGizmo({ pose, bounds, onDragStart, onDraft, onCommit }: Part
   }, [onDraft]);
 
   useEffect(() => {
-    const applyFine = (fine: boolean) => {
+    fineSnapRef.current = fineSnap;
+    if (!modeRef.current) fineRef.current = fineSnap;
+  }, [fineSnap]);
+
+  useEffect(() => {
+    const applyFine = (modifier: boolean) => {
+      const fine = modifier || fineSnapRef.current;
       if (fineRef.current === fine) return;
       fineRef.current = fine;
       if (!modeRef.current || !rawRef.current) return;

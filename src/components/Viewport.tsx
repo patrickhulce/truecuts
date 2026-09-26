@@ -8,12 +8,13 @@ import { connectionContactPairs } from "@/lib/connections";
 import { parseInstanceKey } from "@/lib/fasteners";
 import { patchesFor, patchNeighbor, type SharedPatch, type Vec3 } from "@/lib/geometry";
 import type { ResolvedBore } from "@/lib/schema";
-import type { SceneConnection, SceneFastener, SceneModel, SceneMemberInstance } from "@/lib/scene";
+import { computeExplodeOffsets, type SceneConnection, type SceneFastener, type SceneModel, type SceneMemberInstance } from "@/lib/scene";
 import { formatInches } from "@/lib/units";
 import { ConnectionFaceOverlay, ContactOverlay } from "./ContactOverlay";
 import { FastenerMesh } from "./FastenerMesh";
 import { PartGizmo, type PartPose } from "./PartGizmo";
 import { MemberMesh } from "./MemberMesh";
+import { RendererToolbar } from "./RendererToolbar";
 
 type DraftPose = PartPose & { key: string };
 
@@ -25,6 +26,13 @@ type ViewportProps = {
   onDeleteMember?: (memberId: string) => void;
   onChangePose?: (componentId: string, placementIndex: number, position: Vec3, rotation: Vec3) => void;
   activeConnection?: SceneConnection | null;
+  canUndo: boolean;
+  canRedo: boolean;
+  onUndo: () => void;
+  onRedo: () => void;
+  showContacts: boolean;
+  onShowContacts: (value: boolean) => void;
+  fineSnap?: boolean;
 };
 
 const ZERO: Vec3 = [0, 0, 0];
@@ -110,7 +118,7 @@ function SelectionCard({
 }) {
   const area = patches.reduce((sum, patch) => sum + patch.area, 0);
   return (
-    <aside className="pointer-events-none absolute left-4 top-4 max-w-sm rounded-md border border-[#3d2a18] bg-[#241a10]/95 px-3 py-2 text-xs text-[#d6c3a3] shadow-lg">
+    <aside className="pointer-events-none absolute left-16 top-4 max-w-sm rounded-md border border-[#3d2a18] bg-[#241a10]/95 px-3 py-2 text-xs text-[#d6c3a3] shadow-lg">
       <div className="font-medium text-[#f59e0b]">{instance.label}</div>
       <dl className="mt-1 grid grid-cols-[auto_1fr] gap-x-3 gap-y-0.5 text-[#a89070]">
         <dt>id</dt>
@@ -157,12 +165,18 @@ export function Viewport({
   onDeleteMember,
   onChangePose,
   activeConnection = null,
+  canUndo,
+  canRedo,
+  onUndo,
+  onRedo,
+  showContacts,
+  onShowContacts,
+  fineSnap = false,
 }: ViewportProps) {
   const rootRef = useRef<HTMLDivElement>(null);
   const [explode, setExplode] = useState(0);
   const [dragging, setDragging] = useState(false);
   const [draft, setDraft] = useState<DraftPose | null>(null);
-  const [showContacts, setShowContacts] = useState(true);
   const [focusedPatch, setFocusedPatch] = useState<string | null>(null);
 
   const selected = scene?.components.flatMap((component) => component.members).find((part) => part.key === selectedKey);
@@ -265,20 +279,10 @@ export function Viewport({
     return [...new Set(labels)];
   }, [partByKey, selectedKey, selectedPatches]);
 
-  const worldOffsets = useMemo(() => {
-    const map = new Map<string, Vec3>();
-    if (!scene || explode === 0) return map;
-    for (const component of scene.components) {
-      for (const part of component.members) {
-        map.set(part.key, [
-          (part.worldCenter[0] - scene.center[0]) * explode,
-          (part.worldCenter[1] - scene.center[1]) * explode,
-          (part.worldCenter[2] - scene.center[2]) * explode,
-        ]);
-      }
-    }
-    return map;
-  }, [scene, explode]);
+  const worldOffsets = useMemo(
+    () => (scene ? computeExplodeOffsets(scene, explode) : new Map<string, Vec3>()),
+    [scene, explode],
+  );
 
   return (
     <div
@@ -353,6 +357,7 @@ export function Viewport({
                     key={`${selected.key}-${selected.position.join(",")}-${selected.rotation.join(",")}`}
                     pose={gizmoPose}
                     bounds={selected.bounds}
+                    fineSnap={fineSnap}
                     onDragStart={() => setDragging(true)}
                     onDraft={(position, rotation) => setDraft({ key: selected.key, position, rotation })}
                     onCommit={commitDraft}
@@ -397,36 +402,19 @@ export function Viewport({
           <GizmoViewport axisColors={["#b45309", "#ca8a04", "#92400e"]} labelColor="#d6c3a3" />
         </GizmoHelper>
       </Canvas>
+      <RendererToolbar
+        canUndo={canUndo}
+        canRedo={canRedo}
+        onUndo={onUndo}
+        onRedo={onRedo}
+        explode={explode}
+        onExplode={setExplode}
+        showContacts={showContacts}
+        onShowContacts={onShowContacts}
+        enabled={Boolean(scene)}
+      />
       {selected ? (
         <SelectionCard instance={selected} attachedFasteners={attachedFasteners} patches={selectedPatches} neighbors={neighborLabels} />
-      ) : null}
-      {scene ? (
-        <div className="absolute bottom-4 left-1/2 z-10 flex -translate-x-1/2 items-center gap-3 rounded-md border border-[#3d2a18] bg-[#241a10]/95 px-3 py-2 text-xs text-[#d6c3a3] shadow-lg">
-          <label htmlFor="explode" className="text-[#a89070]">
-            Explode
-          </label>
-          <input
-            id="explode"
-            type="range"
-            min={0}
-            max={1}
-            step={0.01}
-            value={explode}
-            onChange={(event) => setExplode(Number(event.target.value))}
-            className="h-1 w-40 cursor-pointer accent-[#f59e0b]"
-          />
-          <span className="w-8 tabular-nums text-[#a89070]">{Math.round(explode * 100)}%</span>
-          <label htmlFor="contacts" className="ml-2 flex cursor-pointer items-center gap-1.5 text-[#a89070]">
-            <input
-              id="contacts"
-              type="checkbox"
-              checked={showContacts}
-              onChange={(event) => setShowContacts(event.target.checked)}
-              className="accent-[#f59e0b]"
-            />
-            Contacts
-          </label>
-        </div>
       ) : null}
       {!scene ? (
         <div className="pointer-events-none absolute inset-0 flex items-center justify-center text-sm text-[#a89070]">

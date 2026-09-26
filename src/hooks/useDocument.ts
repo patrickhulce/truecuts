@@ -123,9 +123,18 @@ export function useDocument() {
     void saveHistory(next);
   }, []);
 
+  const replaceDocument = useCallback((value: string) => {
+    const next = seedHistory(value);
+    skipYamlRef.current = value;
+    historyRef.current = next;
+    setHistory(next);
+    setDraft(value);
+    void saveHistory(next);
+  }, []);
+
   const reset = useCallback(() => {
-    commit(DEMO_YAML);
-  }, [commit]);
+    replaceDocument(DEMO_YAML);
+  }, [replaceDocument]);
 
   return {
     text,
@@ -133,6 +142,7 @@ export function useDocument() {
     commit,
     compiled,
     reset,
+    replaceDocument,
     undo,
     redo,
     canUndo: historyCanUndo(history),

@@ -106,10 +106,6 @@ members:
     cuts:
       - { axis: 0, angle: 90, at: 30 }
 
-  - label: Cap
-    stock: connector-t
-    size: [5.5, 5.5]
-
   - label: Beam
     stock: 6x6x8
     cuts:
@@ -125,15 +121,9 @@ components:
     rotation: [ 0, 0, 0 ]
     members:
       - { id: post-1, position: [ 0, 0, 0 ], rotation: [ 90, 90, 0 ] }
-      - { id: cap-1, position: [ 0, 30, 0 ], rotation: [ 0, 0, 0 ] }
       - { id: beam-saddle-1, position: [ 5.5, 0, -0.25 ], rotation: [ 0, 0, 0 ] }
       - { id: beam-1, position: [ 5.5, 0.25, 0 ], rotation: [ 0, 0, 0 ] }
     connections:
-      - members:
-          - { id: cap-1 }
-          - { id: post-1 }
-        fasteners:
-          - { kind: glue, stock: wood-glue }
       - members:
           - { id: beam-1 }
           - { id: post-1 }
@@ -150,7 +140,7 @@ export const SAMPLE_BUILDS: SampleBuild[] = [
   {
     id: "assembly-bench",
     name: "Assembly Bench",
-    description: "Shop demo with legs, aprons, brackets, a post cap, and a bolted saddle.",
+    description: "Shop demo with legs, aprons, brackets, a post, and a bolted saddle.",
     yaml: DEMO_YAML,
   },
   {
@@ -168,7 +158,7 @@ export const SAMPLE_BUILDS: SampleBuild[] = [
   {
     id: "post-and-beam",
     name: "Timber Post & Beam",
-    description: "6×6 post, T-connector cap, beam, and a bolted saddle.",
+    description: "6×6 post, beam, and a bolted saddle.",
     yaml: POST_AND_BEAM_YAML,
   },
   {

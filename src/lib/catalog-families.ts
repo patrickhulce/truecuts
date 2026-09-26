@@ -141,6 +141,15 @@ export const STOCK_FAMILIES: StockFamily[] = [
     allowsCut: false,
   },
   {
+    id: "common-nail",
+    kind: "fastener",
+    title: "Common nail",
+    summary: "Used on connections, not as stock",
+    variants: ["nail-common-6x2", "nail-common-8x2.5", "nail-common-10x3", "nail-common-16x3.5"],
+    defaultLabel: "Nail",
+    allowsCut: false,
+  },
+  {
     id: "wood-glue",
     kind: "fastener",
     title: "Wood glue",
@@ -170,6 +179,7 @@ export function variantLabel(part: CatalogPart): string {
   if (part.kind === "lumber" || part.subtype === "rod") return formatInches(part.size[0]);
   if (part.kind === "sheet") return formatInches(part.size[2]);
   if (part.subtype === "screw") return part.label.replace(/ wood screw$/, "");
+  if (part.subtype === "nail") return part.label.replace(/ common nail$/, "");
   if (part.subtype === "bolt") return part.label.replace(/ hex bolt$/, "");
   if (part.subtype === "bracket" || part.subtype === "bracket-flat") {
     return `${formatInches(part.size[0])} × ${formatInches(part.size[1])}`;

@@ -2,9 +2,10 @@
 
 import { GizmoHelper, GizmoViewport, Grid, OrbitControls } from "@react-three/drei";
 import { Canvas } from "@react-three/fiber";
-import { useMemo, useRef, useState, type KeyboardEvent, type PointerEvent } from "react";
+import { useMemo, useRef, useState, type DragEvent as ReactDragEvent, type KeyboardEvent, type PointerEvent } from "react";
 import * as THREE from "three";
 import { connectionContactPairs } from "@/lib/connections";
+import { CATALOG_DRAG_MIME, parseCatalogDrag, SNAP_INCH, snapValue, type NewMemberInput } from "@/lib/edit";
 import { parseInstanceKey } from "@/lib/fasteners";
 import { patchesFor, patchNeighbor, type SharedPatch, type Vec3 } from "@/lib/geometry";
 import type { ResolvedBore } from "@/lib/schema";
@@ -33,9 +34,29 @@ type ViewportProps = {
   showContacts: boolean;
   onShowContacts: (value: boolean) => void;
   fineSnap?: boolean;
+  onPlaceMember?: (input: NewMemberInput, position: Vec3) => void;
 };
 
 const ZERO: Vec3 = [0, 0, 0];
+const FLOOR = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0);
+
+function hasCatalogDrag(data: DataTransfer): boolean {
+  return Array.from(data.types).includes(CATALOG_DRAG_MIME);
+}
+
+function floorDropPoint(event: ReactDragEvent, camera: THREE.Camera): Vec3 | null {
+  const canvas = event.currentTarget.querySelector("canvas");
+  const rect = (canvas ?? event.currentTarget).getBoundingClientRect();
+  if (rect.width < 1 || rect.height < 1) return null;
+  const x = ((event.clientX - rect.left) / rect.width) * 2 - 1;
+  const y = -((event.clientY - rect.top) / rect.height) * 2 + 1;
+  const raycaster = new THREE.Raycaster();
+  raycaster.setFromCamera(new THREE.Vector2(x, y), camera);
+  const hit = new THREE.Vector3();
+  if (!raycaster.ray.intersectPlane(FLOOR, hit)) return null;
+  if (hit.clone().sub(raycaster.ray.origin).dot(raycaster.ray.direction) <= 0) return null;
+  return [snapValue(hit.x, SNAP_INCH), 0, snapValue(hit.z, SNAP_INCH)];
+}
 
 function deg(rotation: [number, number, number]): [number, number, number] {
   return [
@@ -172,8 +193,11 @@ export function Viewport({
   showContacts,
   onShowContacts,
   fineSnap = false,
+  onPlaceMember,
 }: ViewportProps) {
   const rootRef = useRef<HTMLDivElement>(null);
+  const cameraRef = useRef<THREE.Camera | null>(null);
+  const [dropOver, setDropOver] = useState(false);
   const [explode, setExplode] = useState(0);
   const [dragging, setDragging] = useState(false);
   const [draft, setDraft] = useState<DraftPose | null>(null);
@@ -288,16 +312,44 @@ export function Viewport({
     <div
       ref={rootRef}
       tabIndex={0}
-      className="relative h-full w-full bg-[#1a120b] outline-none"
+      className={`relative h-full w-full bg-[#1a120b] outline-none ${dropOver ? "ring-2 ring-[#f59e0b] ring-inset" : ""}`}
       onPointerDown={handlePointerDown}
       onKeyDown={handleKeyDown}
+      onDragEnter={(event) => {
+        if (!hasCatalogDrag(event.dataTransfer)) return;
+        event.preventDefault();
+        setDropOver(true);
+      }}
+      onDragOver={(event) => {
+        if (!hasCatalogDrag(event.dataTransfer)) return;
+        event.preventDefault();
+        event.dataTransfer.dropEffect = "copy";
+        setDropOver(true);
+      }}
+      onDragLeave={(event) => {
+        const next = event.relatedTarget;
+        if (next instanceof Node && event.currentTarget.contains(next)) return;
+        setDropOver(false);
+      }}
+      onDrop={(event) => {
+        if (!hasCatalogDrag(event.dataTransfer)) return;
+        event.preventDefault();
+        setDropOver(false);
+        const camera = cameraRef.current;
+        if (!camera || !onPlaceMember) return;
+        const input = parseCatalogDrag(event.dataTransfer.getData(CATALOG_DRAG_MIME));
+        const position = floorDropPoint(event, camera);
+        if (!input || !position) return;
+        onPlaceMember(input, position);
+      }}
     >
       <Canvas
         shadows
         camera={{ position: [90, 55, 90], fov: 35, near: 0.1, far: 4000 }}
         onPointerMissed={() => selectPart(null)}
         gl={{ antialias: true }}
-        onCreated={({ gl }) => {
+        onCreated={({ gl, camera }) => {
+          cameraRef.current = camera;
           gl.shadowMap.enabled = true;
           gl.shadowMap.type = THREE.PCFShadowMap;
         }}

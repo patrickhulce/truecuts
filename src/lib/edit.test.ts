@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { compileDocument } from "./compile";
 import { DEMO_YAML } from "./demo";
 import {
+  addConnection,
   addMember,
   defaultConnectionFastener,
   deleteMember,
@@ -276,6 +277,63 @@ describe("addMember", () => {
 
   it("rejects a blank label", () => {
     expect(() => addMember(COMMENTED, { label: "  ", stock: "2x4x8" })).toThrow(EditError);
+  });
+});
+
+describe("addConnection", () => {
+  const pair = `version: 1
+name: Pair
+members:
+  - label: A
+    stock: 2x4x8
+  - label: B
+    stock: 2x4x8
+components:
+  - label: Box
+    members:
+      - { id: a-1, position: [0, 0, 0] }
+      - { id: b-1, position: [4, 0, 0] }
+`;
+
+  it("appends a none connection on the shared component", () => {
+    const next = addConnection(pair, [
+      { componentId: "box-1", id: "a-1" },
+      { componentId: "box-1", id: "b-1" },
+    ]);
+    const result = compileDocument(next);
+    expect(result.diagnostics.filter((item) => item.severity === "error")).toEqual([]);
+    expect(result.document?.components[0].connections).toEqual([
+      { members: [{ component: "box-1", id: "a-1", index: 0 }, { component: "box-1", id: "b-1", index: 0 }], fasteners: [{ kind: "none" }] },
+    ]);
+  });
+
+  it("writes a document-level connection when the members are in different components", () => {
+    const split = `version: 1
+name: Split
+members:
+  - label: A
+    stock: 2x4x8
+  - label: B
+    stock: 2x4x8
+components:
+  - label: Left
+    members:
+      - { id: a-1, position: [0, 0, 0] }
+  - label: Right
+    members:
+      - { id: b-1, position: [4, 0, 0] }
+`;
+    const next = addConnection(split, [
+      { componentId: "left-1", id: "a-1" },
+      { componentId: "right-1", id: "b-1", index: 0 },
+    ]);
+    const result = compileDocument(next);
+    expect(result.diagnostics.filter((item) => item.severity === "error")).toEqual([]);
+    expect(result.document?.connections[0]?.members).toEqual([
+      { component: "left-1", id: "a-1", index: 0 },
+      { component: "right-1", id: "b-1", index: 0 },
+    ]);
+    expect(result.document?.connections[0]?.fasteners).toEqual([{ kind: "none" }]);
   });
 });
 

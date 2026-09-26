@@ -361,6 +361,9 @@ export function defaultConnectionFastener(stock: string): RawConnectionFastener 
   const subtype = getFastenerSubtype(stock);
   if (subtype === "glue") return { kind: "glue", stock, variant: { kind: "patch" } };
   if (subtype === "bolt") return { kind: "bolt", stock, variant: { kind: "through" } };
+  if (subtype === "nail") {
+    return { kind: "nail", stock, variant: { kind: "centered", separation: 4, justify: "space-around" } };
+  }
   return {
     kind: "screw",
     stock: subtype === "screw" ? stock : "screw-wood-8x2",
@@ -418,5 +421,37 @@ export function promoteExplicitFasteners(
   const nextIndex = isSeq(existing) ? existing.items.length : 0;
   if (!isSeq(existing)) doc.setIn(connectionsPath, doc.createNode([]));
   doc.setIn([...connectionsPath, nextIndex], doc.createNode({ members: memberNodes, fasteners: recipes }));
+  return doc.toString(STRINGIFY);
+}
+
+export type ConnectionMemberRef = {
+  componentId: string;
+  id: string;
+  /** Occurrence of this member id in the component. Omitted from YAML when 0. */
+  index?: number;
+};
+
+/** Append a connection. Members in one component stay on that component; otherwise the connection is document-level. */
+export function addConnection(
+  text: string,
+  members: ConnectionMemberRef[],
+  fastener: RawConnectionFastener = { kind: "none" },
+): string {
+  if (members.length < 2) throw new EditError("Need at least two members to add a connection");
+  const doc = parseEditDocument(text);
+  const shared = members.every((member) => member.componentId === members[0]?.componentId)
+    ? (members[0]?.componentId ?? null)
+    : null;
+  const memberNodes = members.map((member) => {
+    const node: { id: string; component?: string; index?: number } = { id: member.id };
+    if (!shared) node.component = member.componentId;
+    if (member.index && member.index > 0) node.index = member.index;
+    return node;
+  });
+  const connectionsPath = connectionBase(doc, shared);
+  const existing = doc.getIn(connectionsPath);
+  const nextIndex = isSeq(existing) ? existing.items.length : 0;
+  if (!isSeq(existing)) doc.setIn(connectionsPath, doc.createNode([]));
+  doc.setIn([...connectionsPath, nextIndex], doc.createNode({ members: memberNodes, fasteners: [fastener] }));
   return doc.toString(STRINGIFY);
 }

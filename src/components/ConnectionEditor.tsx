@@ -2,25 +2,42 @@
 
 import { useState, type ReactNode } from "react";
 import { getFastenerSubtype, listCatalog } from "@/lib/catalog";
-import type { SceneConnection } from "@/lib/connections";
+import { pickNailStock, type SceneConnection } from "@/lib/connections";
 import { parseInstanceKey } from "@/lib/fasteners";
 import type {
   ResolvedBoltVariant,
   ResolvedConnectionFastener,
+  ResolvedNailVariant,
   ResolvedScrewVariant,
   ScrewJustify,
 } from "@/lib/schema";
 
 type ConnectionEditorProps = {
   connection: SceneConnection;
+  allowConnector?: boolean;
+  /** Inches the nail must span. Omitted when the joint has no measured contact. */
+  nailReach?: number;
   onChange: (index: number, fastener: ResolvedConnectionFastener) => void;
   onClose: () => void;
 };
 
 const SCREW_VARIANTS = ["four-corners", "angle-bracket", "perimeter", "centered"] as const;
 type ScrewVariantKind = (typeof SCREW_VARIANTS)[number];
+const NAIL_VARIANTS = ["four-corners", "perimeter", "centered"] as const;
+type NailVariantKind = (typeof NAIL_VARIANTS)[number];
 const BOLT_VARIANTS = ["through", "angle-bracket"] as const;
 type BoltVariantKind = (typeof BOLT_VARIANTS)[number];
+const KINDS = ["screw", "nail", "glue", "bolt", "connector", "none"] as const;
+type FastenerKind = (typeof KINDS)[number];
+
+const KIND_LABEL: Record<FastenerKind, string> = {
+  screw: "Screw",
+  nail: "Nail",
+  glue: "Glue",
+  bolt: "Bolt",
+  connector: "T-connector",
+  none: "None",
+};
 
 const VARIANT_LABEL: Record<ScrewVariantKind | BoltVariantKind | "patch" | "edge", string> = {
   "four-corners": "Four corners",
@@ -39,6 +56,13 @@ function withEdge(fastener: ResolvedConnectionFastener, edge: number): ResolvedC
   if (fastener.kind === "bolt" && fastener.variant.kind === "angle-bracket") {
     return { ...fastener, variant: { ...fastener.variant, edge } };
   }
+  if (fastener.kind === "nail") {
+    const variant = fastener.variant;
+    if (variant.kind === "four-corners" || variant.kind === "perimeter") {
+      return { ...fastener, variant: { ...variant, edge } };
+    }
+    return fastener;
+  }
   if (fastener.kind !== "screw") return fastener;
   const variant = fastener.variant;
   if (variant.kind === "four-corners" || variant.kind === "angle-bracket") {
@@ -46,10 +70,6 @@ function withEdge(fastener: ResolvedConnectionFastener, edge: number): ResolvedC
   }
   if (variant.kind === "perimeter") return { ...fastener, variant: { ...variant, edge } };
   return fastener;
-}
-
-function titleKind(kind: string): string {
-  return kind.charAt(0).toUpperCase() + kind.slice(1);
 }
 
 function memberIdsOf(connection: SceneConnection): string[] {
@@ -61,10 +81,18 @@ function memberIdsOf(connection: SceneConnection): string[] {
   return ids;
 }
 
-function withKind(kind: "screw" | "glue" | "bolt" | "none"): ResolvedConnectionFastener {
+function withKind(kind: FastenerKind, nailReach?: number): ResolvedConnectionFastener {
   if (kind === "none") return { kind: "none" };
   if (kind === "glue") return { kind: "glue", stock: "wood-glue", variant: { kind: "patch" } };
   if (kind === "bolt") return { kind: "bolt", stock: "bolt-hex-3/8x4", variant: { kind: "through" } };
+  if (kind === "nail") {
+    return {
+      kind: "nail",
+      stock: pickNailStock(nailReach ?? 0),
+      variant: { kind: "centered", separation: 4, justify: "space-around" },
+    };
+  }
+  if (kind === "connector") return { kind: "connector", stock: "connector-t" };
   return {
     kind: "screw",
     stock: "screw-wood-8x2",
@@ -87,6 +115,15 @@ function withScrewVariant(
   return { kind: "centered", separation, justify };
 }
 
+function withNailVariant(current: ResolvedNailVariant, kind: NailVariantKind): ResolvedNailVariant {
+  const edge = "edge" in current ? current.edge : 0.75;
+  const separation = "separation" in current ? current.separation : 4;
+  const justify: ScrewJustify = "justify" in current ? current.justify : "space-around";
+  if (kind === "four-corners") return { kind, edge };
+  if (kind === "perimeter") return { kind, edge, separation, justify };
+  return { kind: "centered", separation, justify };
+}
+
 function withBoltVariant(current: ResolvedBoltVariant, kind: BoltVariantKind, memberIds: string[]): ResolvedBoltVariant {
   if (kind === "through") return { kind: "through" };
   const edge = current.kind === "angle-bracket" ? current.edge : 0.25;
@@ -94,7 +131,13 @@ function withBoltVariant(current: ResolvedBoltVariant, kind: BoltVariantKind, me
   return { kind: "angle-bracket", bracket, edge };
 }
 
-export function ConnectionEditor({ connection, onChange, onClose }: ConnectionEditorProps) {
+export function ConnectionEditor({
+  connection,
+  allowConnector = false,
+  nailReach,
+  onChange,
+  onClose,
+}: ConnectionEditorProps) {
   const memberIds = memberIdsOf(connection);
   return (
     <div className="flex min-h-0 flex-1 flex-col">
@@ -114,6 +157,8 @@ export function ConnectionEditor({ connection, onChange, onClose }: ConnectionEd
             key={`${connection.key}-${index}`}
             fastener={fastener}
             memberIds={memberIds}
+            allowConnector={allowConnector || fastener.kind === "connector"}
+            nailReach={nailReach}
             onChange={(next) => onChange(index, next)}
           />
         ))}
@@ -125,26 +170,34 @@ export function ConnectionEditor({ connection, onChange, onClose }: ConnectionEd
 function FastenerFields({
   fastener,
   memberIds,
+  allowConnector,
+  nailReach,
   onChange,
 }: {
   fastener: ResolvedConnectionFastener;
   memberIds: string[];
+  allowConnector: boolean;
+  nailReach?: number;
   onChange: (fastener: ResolvedConnectionFastener) => void;
 }) {
-  const stocks = listCatalog("fastener").filter((item) => getFastenerSubtype(item.id) === fastener.kind);
+  const stocks =
+    fastener.kind === "none" || fastener.kind === "connector"
+      ? []
+      : listCatalog("fastener").filter((item) => getFastenerSubtype(item.id) === fastener.kind);
+  const kinds = KINDS.filter((kind) => kind !== "connector" || allowConnector);
   return (
     <section className="mb-4 border-b border-[#3d2a18]/70 pb-4 last:border-b-0">
       <div className="text-[10px] uppercase tracking-widest text-[#8a7355]">Kind</div>
-      <div className="mt-1 flex gap-1">
-        {(["screw", "glue", "bolt", "none"] as const).map((kind) => (
+      <div className="mt-1 flex flex-wrap gap-1">
+        {kinds.map((kind) => (
           <Choice
             key={kind}
             selected={fastener.kind === kind}
             onClick={() => {
-              if (fastener.kind !== kind) onChange(withKind(kind));
+              if (fastener.kind !== kind) onChange(withKind(kind, nailReach));
             }}
           >
-            {titleKind(kind)}
+            {KIND_LABEL[kind]}
           </Choice>
         ))}
       </div>
@@ -160,6 +213,24 @@ function FastenerFields({
                 onClick={() => {
                   if (fastener.variant.kind === kind) return;
                   onChange({ ...fastener, variant: withScrewVariant(fastener.variant, kind, memberIds) });
+                }}
+              >
+                {VARIANT_LABEL[kind]}
+              </Choice>
+            ))}
+          </div>
+        </>
+      ) : fastener.kind === "nail" ? (
+        <>
+          <div className="mt-3 text-[10px] uppercase tracking-widest text-[#8a7355]">Variant</div>
+          <div className="mt-1 flex flex-wrap gap-1">
+            {NAIL_VARIANTS.map((kind) => (
+              <Choice
+                key={kind}
+                selected={fastener.variant.kind === kind}
+                onClick={() => {
+                  if (fastener.kind !== "nail" || fastener.variant.kind === kind) return;
+                  onChange({ ...fastener, variant: withNailVariant(fastener.variant, kind) });
                 }}
               >
                 {VARIANT_LABEL[kind]}
@@ -209,7 +280,7 @@ function FastenerFields({
         </>
       ) : null}
 
-      {fastener.kind === "none" ? null : (
+      {fastener.kind === "none" || fastener.kind === "connector" ? null : (
         <>
           <div className="mt-3 text-[10px] uppercase tracking-widest text-[#8a7355]">Stock</div>
           <ul className="mt-1 space-y-1">
@@ -247,7 +318,7 @@ function VariantOptions({
   memberIds: string[];
   onChange: (fastener: ResolvedConnectionFastener) => void;
 }) {
-  if (fastener.kind === "none") return null;
+  if (fastener.kind === "none" || fastener.kind === "connector") return null;
   const variant = fastener.variant;
   return (
     <div className="mt-3 grid grid-cols-2 gap-2">
@@ -290,7 +361,7 @@ function VariantOptions({
           min={0}
           exclusive
           onCommit={(separation) => {
-            if (fastener.kind !== "screw" || !("separation" in fastener.variant)) return;
+            if ((fastener.kind !== "screw" && fastener.kind !== "nail") || !("separation" in fastener.variant)) return;
             onChange({ ...fastener, variant: { ...fastener.variant, separation } });
           }}
         />
@@ -304,7 +375,11 @@ function VariantOptions({
                 key={justify}
                 selected={variant.justify === justify}
                 onClick={() => {
-                  if (fastener.kind !== "screw" || !("justify" in fastener.variant) || fastener.variant.justify === justify) {
+                  if (
+                    (fastener.kind !== "screw" && fastener.kind !== "nail") ||
+                    !("justify" in fastener.variant) ||
+                    fastener.variant.justify === justify
+                  ) {
                     return;
                   }
                   onChange({ ...fastener, variant: { ...fastener.variant, justify } });

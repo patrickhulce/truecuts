@@ -1,8 +1,9 @@
 "use client";
 
-import { useMemo } from "react";
+import { useEffect, useMemo, useRef } from "react";
 import * as THREE from "three";
-import type { Vec3 } from "@/lib/geometry";
+import { tConnectorPolyhedron, type Vec3 } from "@/lib/geometry";
+import { facesToGeometry } from "@/lib/mesh/subtract-holes";
 import type { SceneFastener } from "@/lib/scene";
 import { applyScrewStripeShader, screwStripeCacheKey } from "./stripeMaterial";
 
@@ -38,6 +39,89 @@ function Steel({
 
 function add(a: Vec3, b: Vec3): Vec3 {
   return [a[0] + b[0], a[1] + b[1], a[2] + b[2]];
+}
+
+function frameQuaternion(across: Vec3, direction: Vec3): THREE.Quaternion {
+  const y = new THREE.Vector3(direction[0], direction[1], direction[2]);
+  if (y.lengthSq() < 1e-10) return new THREE.Quaternion();
+  y.normalize();
+  const x = new THREE.Vector3(across[0], across[1], across[2]);
+  if (x.lengthSq() < 1e-10) x.set(1, 0, 0);
+  x.addScaledVector(y, -x.dot(y));
+  if (x.lengthSq() < 1e-10) {
+    x.set(1, 0, 0).addScaledVector(y, -y.x);
+    if (x.lengthSq() < 1e-10) x.set(0, 0, 1);
+  }
+  x.normalize();
+  const z = new THREE.Vector3().crossVectors(x, y).normalize();
+  return new THREE.Quaternion().setFromRotationMatrix(new THREE.Matrix4().makeBasis(x, y, z));
+}
+
+function NailMesh({
+  fastener,
+  highlighted,
+  offset,
+}: {
+  fastener: SceneFastener;
+  highlighted: boolean;
+  offset: Vec3;
+}) {
+  const quaternion = useMemo(() => lookAlongY(fastener.direction), [fastener.direction]);
+  const shankR = Math.max(fastener.diameter / 2, 0.03);
+  const headR = shankR * 2.4;
+  const headH = Math.min(0.08, fastener.length * 0.06);
+  const shankH = Math.max(fastener.length - headH, 0.05);
+  return (
+    <group position={add(fastener.origin, offset)} quaternion={quaternion}>
+      <mesh position={[0, headH / 2, 0]} castShadow>
+        <cylinderGeometry args={[headR, headR, headH, 16]} />
+        <Steel color={fastener.color} highlighted={highlighted && !fastener.headCovered} striped={fastener.headCovered} />
+      </mesh>
+      <mesh position={[0, headH + shankH / 2, 0]} castShadow>
+        <cylinderGeometry args={[shankR, shankR, shankH, 10]} />
+        <Steel color={fastener.color} highlighted={highlighted && !fastener.headCovered} striped={fastener.headCovered} />
+      </mesh>
+    </group>
+  );
+}
+
+function ConnectorMesh({
+  fastener,
+  highlighted,
+  offset,
+}: {
+  fastener: SceneFastener;
+  highlighted: boolean;
+  offset: Vec3;
+}) {
+  const [length, width, thickness] = fastener.size;
+  const riser = fastener.riser ?? 3;
+  const geometry = useMemo(
+    () => facesToGeometry(tConnectorPolyhedron([length, width, thickness], riser)),
+    [length, width, thickness, riser],
+  );
+  const live = useRef(geometry);
+  // eslint-disable-next-line react-hooks/refs -- dispose guard must see this render's geometry before effects
+  live.current = geometry;
+  useEffect(() => {
+    const current = geometry;
+    return () => {
+      queueMicrotask(() => {
+        if (live.current !== current) current.dispose();
+      });
+    };
+  }, [geometry]);
+  const quaternion = useMemo(
+    () => frameQuaternion(fastener.across ?? [1, 0, 0], fastener.direction),
+    [fastener.across, fastener.direction],
+  );
+  return (
+    <group position={add(fastener.origin, offset)} quaternion={quaternion}>
+      <mesh geometry={geometry} position={[-length / 2, -(fastener.bedInset ?? 0), -width / 2]} castShadow>
+        <Steel color={fastener.color} highlighted={highlighted} />
+      </mesh>
+    </group>
+  );
 }
 
 function ScrewMesh({
@@ -169,6 +253,12 @@ export function FastenerMesh({
   }
   if (fastener.subtype === "bolt") {
     return <BoltMesh fastener={fastener} highlighted={highlighted} offset={offset} />;
+  }
+  if (fastener.subtype === "nail") {
+    return <NailMesh fastener={fastener} highlighted={highlighted} offset={offset} />;
+  }
+  if (fastener.subtype === "connector") {
+    return <ConnectorMesh fastener={fastener} highlighted={highlighted} offset={offset} />;
   }
   return <ScrewMesh fastener={fastener} highlighted={highlighted} offset={offset} />;
 }

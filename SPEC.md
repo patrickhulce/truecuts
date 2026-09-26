@@ -2,7 +2,7 @@
 
 TrueCuts is a carpenter's CAD planner. A project is a YAML document: **members** cut from catalog **stock**, assembled into **components**, then joined by **connections** (recipes of **fasteners** and the **bores** those fasteners need). A **part** is anything on the purchase and cut list — a member or a fastener. The editor is the source of truth in v1. The 3D view is a live visualization of that document.
 
-This document is the format reference. v1 implements members (lumber, sheet goods, L-brackets, and parameterized post hardware), planar cuts, components, connections (screws, bolts, and wood glue), explicit fasteners as a hand-placed escape hatch, and rendering. Hinges, drawer slides, and procedural components are specified here for later versions.
+This document is the format reference. v1 implements members (lumber, sheet goods, L-brackets, and parameterized post hardware), planar cuts, components, connections (screws, nails, bolts, wood glue, and a derived T-connector), explicit fasteners as a hand-placed escape hatch, and rendering. Hinges, drawer slides, and procedural components are specified here for later versions.
 
 ## Concepts
 
@@ -13,7 +13,7 @@ This document is the format reference. v1 implements members (lumber, sheet good
 | Stock | Raw material from the store. A catalog entry such as `2x4x8`. |
 | Cut | A planar slice that converts stock into a member. |
 | Bore | A depression or hole drilled in a member. Authored bores use YAML key `bores`. Pilot and clearance bores for a connection are derived, not authored. |
-| Fastener | A screw, glue bead, bolt, dowel, cam, bracket, or similar that connects members. A fastener may be a rendered member (a bracket) or a non-stock instance (a screw or glue bead). |
+| Fastener | A screw, nail, glue bead, bolt, T-connector, dowel, cam, bracket, or similar that connects members. A fastener may be a rendered member (a bracket) or a non-stock instance (a screw, nail, or glue bead). A T-connector recipe is a fastener, not an extra member. |
 | Connection | The system of fastener recipes, and the bores those recipes imply, that joins two or more members. |
 | Part | Any member or fastener in the build — the purchase and cut list. |
 | Procedural component | A generator that emits a component from parameters (a drawer of given W×D×H). Specified below; not implemented in v1. |
@@ -207,15 +207,17 @@ connections:
 
 `members[]` entries are `{ id, component?, index? }`. `component` is required at document level and forbidden inside a component. `index` is the 0-based placement occurrence (default `0`).
 
-`fasteners[]` is a discriminated union on `kind`. `stock` must be a catalog entry of kind `fastener` whose subtype matches `kind`, except `none`, which has no stock. Each entry is a recipe, not one instance. `variant` is itself a discriminated object, so a layout only carries the options that apply to it:
+`fasteners[]` is a discriminated union on `kind`. `stock` must be a catalog entry of kind `fastener` whose subtype matches `kind`, except `none` (no stock) and `connector` (stock `connector-t`, the hardware part). Each entry is a recipe, not one instance. `variant` is itself a discriminated object, so a layout only carries the options that apply to it:
 
 - `screw` / `four-corners` — `{ edge }`. One screw near each corner of the contact patch, inset by `edge`.
 - `screw` / `angle-bracket` — `{ bracket, edge }`. `bracket` is a member id that is one of the connection members. One screw on the largest patch between the bracket and each other member, at the centroid of the inset.
 - `screw` / `perimeter` — `{ edge, separation, justify }`. Screws around the inset boundary.
 - `screw` / `centered` — `{ separation, justify }`. Screws along the patch centerline. No `edge`.
+- `nail` / `four-corners`, `perimeter`, `centered` — same fields as the screw layouts of those names. No angle-bracket. The head member is the thinner of the two along the contact normal (a tie keeps the first connection member). The nail is driven from the face opposite that member's contact face, along the contact face's outward normal, so it passes through the thinner member into the neighbor. The length has to clear that board and travel the same distance into the next member, capped by the neighbor's depth. Choosing Nail picks the shortest catalog nail that meets that reach. A shorter nail still places and warns that it does not reach the next member.
 - `glue` — `variant` defaults to `{ kind: patch }` (a bead at the patch centroid). `{ kind: edge, edge }` places the bead in from the longest edge.
 - `bolt` / `through` — `{ at? }`. A through-bore at the patch centroid, or at an explicit patch position.
 - `bolt` / `angle-bracket` — `{ bracket, edge }`. `bracket` is a member id that is one of the connection members. Same layout as the screw angle-bracket, on every contact patch between the bracket and each other member (a saddle fastens both flanges, not only the largest). Clearance bores run through the bracket and the wood.
+- `connector` — `{ kind: connector, stock: connector-t }`. No variant. Seats one T-connector on the largest contact patch. The bed is sized to the fitting timber's W×T (longest first); gauge and the 3″ stem stay at the catalog values. The bed center sits on the patch centroid. On a right-angle butt the plate sits on the post (the side-face member) and the stem points into the beam (the end-grain member), with the plate thickness on the post side of the contact. Face-to-face joints keep the stem along the fitting timber's outward contact normal. The in-plane long axis follows the longer direction of the patch. This does not add a member. The shop demo does not place a cap member; this recipe is how a T-connector is attached. A placed `connector-t` member is still valid hardware.
 - `none` — `{ kind: none }`. No stock or variant. The connection stays, but this recipe adds no fastener, bore, or joint.
 
 `justify` is `space-between` or `space-around`. `separation` is the **maximum** gap. The layout chooses the count and the actual distance: `space-between` pins fasteners to both ends of an open path (or starts a closed path at the first vertex); `space-around` leaves a half-gap at each end of an open path (or offsets a closed path by half a gap).
@@ -223,8 +225,10 @@ connections:
 Derived bores merge with the member's authored `bores` for meshing and cut lists:
 
 - **Screw** — a pilot in the receiving member (diameter is 0.7× the screw's major diameter). When the screw is longer than the head member's thickness along the screw axis, a clearance bore (major diameter) goes through the head and the pilot depth is what remains of the screw. A butt screw that does not span the head starts at the contact and pilots only the tip.
+- **Nail** — a clearance bore through the thinner member and a pilot (0.7× diameter) in the other member for whatever length remains. The head sits on the face opposite the joint.
 - **Bolt** — a clearance bore through every member the bolt passes, diameter equal to the bolt diameter. The rendered solid is one purchase-list line: hex head, washer, shank, washer, and nut. Head, washer, and nut diameters follow the shank diameter; a longer bolt is not a fatter bolt. The nut sits at the grip (head face to the far exit). A bolt shorter than that grip keeps a warning.
 - **Glue** — no bores.
+- **T-connector** — no bores. The solid is the catalog T, posed on the contact.
 
 ## Fasteners
 
@@ -255,7 +259,7 @@ fasteners:
 
 ### Fastener fields
 
-- `stock` — catalog id of kind `fastener` (`screw`, `bolt`, or `glue`).
+- `stock` — catalog id of kind `fastener` (`screw`, `nail`, `bolt`, or `glue`).
 - `members` — two or more attachments.
 
 ### Member fields
@@ -268,7 +272,7 @@ fasteners:
 
 Rules:
 
-- Screws and bolts require exactly two members, and every member needs `direction` (head → tip). Glue requires two or more.
+- Screws, nails, and bolts require exactly two members, and every member needs `direction` (head → tip). Glue requires two or more.
 - Members must name a member that is actually placed in the referenced component, including L-bracket hardware members (a screw through a bracket names the bracket and the wood it bites).
 
 Connectivity: fasteners and expanded connections are undirected edges between member instances (glue with N members is a clique). The **seed** is the first member of the first component. Any instance not reachable from the seed is drawn with red/white hazard stripes. The seed itself is always treated as fastened.
@@ -351,6 +355,10 @@ Parameterized stock (`bracket-l`, `connector-t`, `saddle`) stores a spec per axi
 | `screw-wood-8x2` | fastener | #8 × 2″ wood screw | rendered as a fastener |
 | `screw-wood-8x2.5` | fastener | #8 × 2½″ wood screw | rendered as a fastener |
 | `screw-wood-10x3` | fastener | #10 × 3″ wood screw | rendered as a fastener |
+| `nail-common-6x2` | fastener | 6d × 2″ common nail | driven through the thinner member |
+| `nail-common-8x2.5` | fastener | 8d × 2½″ common nail | driven through the thinner member |
+| `nail-common-10x3` | fastener | 10d × 3″ common nail | driven through the thinner member |
+| `nail-common-16x3.5` | fastener | 16d × 3½″ common nail | driven through the thinner member |
 | `wood-glue` | fastener | wood glue bead | rendered as a fastener |
 | `bracket-l-1.5x1.5` | hardware | 1½″ × 1½″ angle L-bracket | placed as a part; gauge ⅛″ |
 | `bracket-l-2x2` | hardware | 2″ × 2″ angle L-bracket | placed as a part; gauge ⅛″ |
@@ -438,7 +446,7 @@ components:
 - Left pane: YAML editor (CodeMirror) with a walnut/amber theme and lint markers on diagnostics.
 - Right pane: react-three-fiber scene — warm hemisphere + shadowed directional light, 1″ grid with 12″ sections, orbit controls, wood-tone materials with CAD edges.
 - Click a member to inspect `id`, stock, finished AABB (L × W × T of the cut solid), whether it is fastened, and the members attached to it. Non-selected members fade so fasteners inside the assembly stay visible; attached fasteners highlight.
-- Fasteners render as solids: screws (head + shank), bolts (hex head, washers, shank, and nut), and glue beads. Connection recipes expand into those instances. L-brackets, T-connectors, and saddles render as ordinary metal members.
+- Fasteners render as solids: screws (head + shank), nails (flat head + shank), bolts (hex head, washers, shank, and nut), glue beads, and a T-connector seated on a `connector` recipe. Connection recipes expand into those instances. L-brackets, placed T-connector members, and saddles render as ordinary metal members.
 - Drilled bores, including derived pilot and clearance bores, are cut out of the rendered member. A blind bore has a bottom at `depth`. A through bore is open on the exit face. A mesh that is not one watertight solid keeps a dark marker instead of a cut.
 - An explode slider radiates members from the scene center (distance-proportional). Parts resting on the floor slide horizontally; downward motion stops at the floor so nothing sinks through it. Fasteners travel with their members.
 - Any member not reachable from the first member of the first component is drawn with red/white hazard stripes.

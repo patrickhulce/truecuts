@@ -2,12 +2,23 @@
 
 import { GizmoHelper, GizmoViewport, Grid, OrbitControls } from "@react-three/drei";
 import { Canvas } from "@react-three/fiber";
-import { useMemo, useRef, useState, type DragEvent as ReactDragEvent, type KeyboardEvent, type PointerEvent } from "react";
+import { useEffect, useMemo, useRef, useState, type DragEvent as ReactDragEvent, type KeyboardEvent, type PointerEvent } from "react";
 import * as THREE from "three";
 import { connectionContactPairs } from "@/lib/connections";
 import { CATALOG_DRAG_MIME, parseCatalogDrag, SNAP_INCH, snapValue, type NewMemberInput } from "@/lib/edit";
 import { parseInstanceKey } from "@/lib/fasteners";
-import { patchesFor, patchNeighbor, type SharedPatch, type Vec3 } from "@/lib/geometry";
+import {
+  aabbInFrame,
+  nearInstanceKeys,
+  patchesFor,
+  patchNeighbor,
+  translateByWorldDelta,
+  unionAabb,
+  type Aabb,
+  type SharedPatch,
+  type Vec3,
+} from "@/lib/geometry";
+import type { SelectionMode } from "@/lib/selection";
 import type { ResolvedBore } from "@/lib/schema";
 import { computeExplodeOffsets, type SceneConnection, type SceneFastener, type SceneModel, type SceneMemberInstance } from "@/lib/scene";
 import { formatInches } from "@/lib/units";
@@ -19,13 +30,21 @@ import { RendererToolbar } from "./RendererToolbar";
 
 type DraftPose = PartPose & { key: string };
 
+type PoseUpdate = {
+  componentId: string;
+  placementIndex: number;
+  position: Vec3;
+  rotation: Vec3;
+};
+
 type ViewportProps = {
   scene?: SceneModel;
-  selectedKey: string | null;
+  selectedKeys: string[];
+  selectionMode: SelectionMode;
   hoveredKey: string | null;
-  onSelect: (key: string | null) => void;
-  onDeleteMember?: (memberId: string) => void;
-  onChangePose?: (componentId: string, placementIndex: number, position: Vec3, rotation: Vec3) => void;
+  onSelect: (key: string | null, options?: { shift?: boolean }) => void;
+  onDeleteMembers?: (memberIds: string[]) => void;
+  onChangePoses?: (updates: PoseUpdate[]) => void;
   activeConnection?: SceneConnection | null;
   canUndo: boolean;
   canRedo: boolean;
@@ -139,7 +158,7 @@ function SelectionCard({
 }) {
   const area = patches.reduce((sum, patch) => sum + patch.area, 0);
   return (
-    <aside className="pointer-events-none absolute left-16 top-4 max-w-sm rounded-md border border-[#3d2a18] bg-[#241a10]/95 px-3 py-2 text-xs text-[#d6c3a3] shadow-lg">
+    <aside className="pointer-events-none absolute bottom-4 left-4 max-w-sm rounded-md border border-[#3d2a18] bg-[#241a10]/95 px-3 py-2 text-xs text-[#d6c3a3] shadow-lg">
       <div className="font-medium text-[#f59e0b]">{instance.label}</div>
       <dl className="mt-1 grid grid-cols-[auto_1fr] gap-x-3 gap-y-0.5 text-[#a89070]">
         <dt>id</dt>
@@ -178,13 +197,26 @@ function SelectionCard({
   );
 }
 
+function MultiSelectionCard({ instances }: { instances: SceneMemberInstance[] }) {
+  const count = instances.length;
+  return (
+    <aside className="pointer-events-none absolute bottom-4 left-4 max-w-sm rounded-md border border-[#3d2a18] bg-[#241a10]/95 px-3 py-2 text-xs text-[#d6c3a3] shadow-lg">
+      <div className="font-medium text-[#f59e0b]">
+        {count} {count === 1 ? "member" : "members"}
+      </div>
+      <p className="mt-1 line-clamp-6 text-[#d6c3a3]">{instances.map((instance) => instance.label).join(", ")}</p>
+    </aside>
+  );
+}
+
 export function Viewport({
   scene,
-  selectedKey,
+  selectedKeys,
+  selectionMode,
   hoveredKey,
   onSelect,
-  onDeleteMember,
-  onChangePose,
+  onDeleteMembers,
+  onChangePoses,
   activeConnection = null,
   canUndo,
   canRedo,
@@ -201,15 +233,57 @@ export function Viewport({
   const [explode, setExplode] = useState(0);
   const [dragging, setDragging] = useState(false);
   const [draft, setDraft] = useState<DraftPose | null>(null);
+  const [groupDraft, setGroupDraft] = useState<Vec3 | null>(null);
   const [focusedPatch, setFocusedPatch] = useState<string | null>(null);
+  const [pan, setPan] = useState(false);
+  const [grabbing, setGrabbing] = useState(false);
 
-  const selected = scene?.components.flatMap((component) => component.members).find((part) => part.key === selectedKey);
-  const hasSelection = selectedKey !== null;
-  const activeDraft = draft?.key === selectedKey ? draft : null;
+  useEffect(() => {
+    const onKeyDown = (event: globalThis.KeyboardEvent) => {
+      if (event.metaKey || event.ctrlKey || event.altKey || event.repeat) return;
+      if (event.key.toLowerCase() !== "p") return;
+      if (isTextField(event.target)) return;
+      event.preventDefault();
+      setPan((current) => !current);
+      setDragging(false);
+      setDraft(null);
+      setGroupDraft(null);
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, []);
 
-  const posed = (part: SceneMemberInstance): SceneMemberInstance => {
-    if (activeDraft?.key !== part.key) return part;
-    return { ...part, position: activeDraft.position, rotation: activeDraft.rotation };
+  useEffect(() => {
+    if (!grabbing) return;
+    const previous = document.body.style.cursor;
+    document.body.style.cursor = "grabbing";
+    const stop = () => setGrabbing(false);
+    window.addEventListener("pointerup", stop);
+    window.addEventListener("pointercancel", stop);
+    return () => {
+      document.body.style.cursor = previous;
+      window.removeEventListener("pointerup", stop);
+      window.removeEventListener("pointercancel", stop);
+    };
+  }, [grabbing]);
+
+  const selectedSet = useMemo(() => new Set(selectedKeys), [selectedKeys]);
+  const soleKey = selectedKeys.length === 1 ? selectedKeys[0] : null;
+  const singleKey = selectionMode === "single" ? (soleKey ?? null) : null;
+  const hasSelection = selectedKeys.length > 0;
+  const selected = scene?.components
+    .flatMap((component) => component.members)
+    .find((part) => part.key === soleKey);
+  const activeDraft = draft?.key === soleKey ? draft : null;
+
+  const posed = (part: SceneMemberInstance, componentRotation: Vec3): SceneMemberInstance => {
+    if (activeDraft?.key === part.key) {
+      return { ...part, position: activeDraft.position, rotation: activeDraft.rotation };
+    }
+    if (groupDraft && selectedSet.has(part.key)) {
+      return { ...part, position: translateByWorldDelta(part.position, componentRotation, groupDraft) };
+    }
+    return part;
   };
 
   const gizmoPose: PartPose | undefined = selected
@@ -218,11 +292,12 @@ export function Viewport({
       : { position: selected.position, rotation: selected.rotation }
     : undefined;
 
-  const selectPart = (key: string | null) => {
+  const selectPart = (key: string | null, options?: { shift?: boolean }) => {
     setDraft(null);
+    setGroupDraft(null);
     setDragging(false);
     setFocusedPatch(null);
-    onSelect(key);
+    onSelect(key, options);
   };
 
   const handlePointerDown = (event: PointerEvent<HTMLDivElement>) => {
@@ -230,6 +305,7 @@ export function Viewport({
       return;
     }
     rootRef.current?.focus();
+    if (pan && event.button === 0 && event.target instanceof HTMLCanvasElement) setGrabbing(true);
   };
 
   const handleKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
@@ -241,26 +317,51 @@ export function Viewport({
     ) {
       return;
     }
-    if (!selected || !onDeleteMember) return;
+    if (!onDeleteMembers || selectedKeys.length === 0 || !scene) return;
+    const memberIds = scene.components
+      .flatMap((component) => component.members)
+      .filter((part) => selectedSet.has(part.key))
+      .map((part) => part.memberId);
+    if (memberIds.length === 0) return;
     event.preventDefault();
-    onDeleteMember(selected.memberId);
+    onDeleteMembers(memberIds);
   };
 
   const commitDraft = (position: Vec3, rotation: Vec3) => {
     setDragging(false);
-    if (selected && onChangePose) {
+    if (selected && onChangePoses) {
       const { componentId, placementIndex } = parseInstanceKey(selected.key);
-      onChangePose(componentId, placementIndex, position, rotation);
+      onChangePoses([{ componentId, placementIndex, position, rotation }]);
     }
     setDraft(null);
   };
 
+  const commitGroup = (delta: Vec3) => {
+    setDragging(false);
+    setGroupDraft(null);
+    if (!scene || !onChangePoses) return;
+    const updates: PoseUpdate[] = [];
+    for (const component of scene.components) {
+      for (const part of component.members) {
+        if (!selectedSet.has(part.key)) continue;
+        const { componentId, placementIndex } = parseInstanceKey(part.key);
+        updates.push({
+          componentId,
+          placementIndex,
+          position: translateByWorldDelta(part.position, component.rotation, delta),
+          rotation: [part.rotation[0], part.rotation[1], part.rotation[2]],
+        });
+      }
+    }
+    if (updates.length > 0) onChangePoses(updates);
+  };
+
   const attachedFasteners = useMemo(() => {
-    if (!scene || !selectedKey) return [];
+    if (!scene || !singleKey) return [];
     return scene.fasteners.filter((fastener) =>
-      fastener.members.some((member) => member.instanceKey === selectedKey),
+      fastener.members.some((member) => member.instanceKey === singleKey),
     );
-  }, [scene, selectedKey]);
+  }, [scene, singleKey]);
 
   const attachedKeys = useMemo(
     () => new Set(attachedFasteners.map((fastener) => fastener.key)),
@@ -268,20 +369,20 @@ export function Viewport({
   );
 
   const selectedPatches = useMemo(
-    () => (scene && selectedKey ? patchesFor(scene.contacts, selectedKey) : []),
-    [scene, selectedKey],
+    () => (scene && singleKey ? patchesFor(scene.contacts, singleKey) : []),
+    [scene, singleKey],
   );
 
   const editedPatches = useMemo(() => {
-    if (!scene || !selectedKey || !activeConnection) return [];
+    if (!scene || !singleKey || !activeConnection) return [];
     const pairs = connectionContactPairs(activeConnection);
     return scene.contacts.patches.filter((patch) => {
       const a = patch.a.instanceKey;
       const b = patch.b.instanceKey;
-      if (a !== selectedKey && b !== selectedKey) return false;
+      if (a !== singleKey && b !== singleKey) return false;
       return pairs.some(([left, right]) => (a === left && b === right) || (a === right && b === left));
     });
-  }, [activeConnection, scene, selectedKey]);
+  }, [activeConnection, scene, singleKey]);
 
   const editedPatchKeys = useMemo(() => editedPatches.map((patch) => patch.key), [editedPatches]);
 
@@ -295,13 +396,63 @@ export function Viewport({
   }, [scene]);
 
   const neighborLabels = useMemo(() => {
-    if (!selectedKey) return [];
-    const labels = selectedPatches.map((patch) => {
-      const neighbor = partByKey.get(patchNeighbor(patch, selectedKey).instanceKey);
-      return neighbor?.label ?? patchNeighbor(patch, selectedKey).instanceKey;
+    if (!singleKey) return [];
+    const keys: string[] = [];
+    const seen = new Set<string>();
+    const add = (key: string) => {
+      if (key === singleKey || seen.has(key)) return;
+      seen.add(key);
+      keys.push(key);
+    };
+    for (const patch of selectedPatches) add(patchNeighbor(patch, singleKey).instanceKey);
+    for (const key of nearInstanceKeys(singleKey, [...partByKey.values()])) add(key);
+    const labels = keys.map((key) => partByKey.get(key)?.label ?? key);
+    const counts = new Map<string, number>();
+    for (const label of labels) counts.set(label, (counts.get(label) ?? 0) + 1);
+    return keys.map((key, index) => {
+      const label = labels[index] ?? key;
+      if ((counts.get(label) ?? 0) < 2) return label;
+      const id = partByKey.get(key)?.memberId ?? key;
+      return `${label} (${id})`;
     });
-    return [...new Set(labels)];
-  }, [partByKey, selectedKey, selectedPatches]);
+  }, [partByKey, singleKey, selectedPatches]);
+
+  const snapTargets = useMemo(() => {
+    if (!scene || !soleKey) return [];
+    const { componentId } = parseInstanceKey(soleKey);
+    const component = scene.components.find((item) => item.id === componentId);
+    if (!component) return [];
+    const targets: Aabb[] = [];
+    for (const other of scene.components) {
+      for (const part of other.members) {
+        if (part.key === soleKey) continue;
+        targets.push(aabbInFrame(part.worldBounds, component.position, component.rotation));
+      }
+    }
+    return targets;
+  }, [scene, soleKey]);
+
+  const groupBounds = useMemo(() => {
+    if (!scene || selectedKeys.length < 2) return null;
+    const boxes: Aabb[] = [];
+    for (const component of scene.components) {
+      for (const part of component.members) {
+        if (selectedSet.has(part.key)) boxes.push(part.worldBounds);
+      }
+    }
+    return unionAabb(boxes);
+  }, [scene, selectedKeys.length, selectedSet]);
+
+  const groupSnapTargets = useMemo(() => {
+    if (!scene || selectedKeys.length < 2) return [];
+    const targets: Aabb[] = [];
+    for (const component of scene.components) {
+      for (const part of component.members) {
+        if (!selectedSet.has(part.key)) targets.push(part.worldBounds);
+      }
+    }
+    return targets;
+  }, [scene, selectedKeys.length, selectedSet]);
 
   const worldOffsets = useMemo(
     () => (scene ? computeExplodeOffsets(scene, explode) : new Map<string, Vec3>()),
@@ -312,7 +463,7 @@ export function Viewport({
     <div
       ref={rootRef}
       tabIndex={0}
-      className={`relative h-full w-full bg-[#1a120b] outline-none ${dropOver ? "ring-2 ring-[#f59e0b] ring-inset" : ""}`}
+      className={`relative h-full w-full bg-[#1a120b] outline-none ${dropOver ? "ring-2 ring-[#f59e0b] ring-inset" : ""} ${pan ? "cursor-grab" : ""}`}
       onPointerDown={handlePointerDown}
       onKeyDown={handleKeyDown}
       onDragEnter={(event) => {
@@ -346,7 +497,9 @@ export function Viewport({
       <Canvas
         shadows
         camera={{ position: [90, 55, 90], fov: 35, near: 0.1, far: 4000 }}
-        onPointerMissed={() => selectPart(null)}
+        onPointerMissed={() => {
+          if (!pan) selectPart(null);
+        }}
         gl={{ antialias: true }}
         onCreated={({ gl, camera }) => {
           cameraRef.current = camera;
@@ -387,28 +540,30 @@ export function Viewport({
         {scene?.components.map((component) => {
           const qInv = quaternionInverse(component.rotation);
           const showGizmo = Boolean(
-            selected && gizmoPose && onChangePose && parseInstanceKey(selected.key).componentId === component.id,
+            selected && gizmoPose && onChangePoses && parseInstanceKey(selected.key).componentId === component.id,
           );
           return (
             <group key={component.id} position={component.position} rotation={deg(component.rotation)}>
               {component.members.map((part) => (
                 <MemberMesh
                   key={part.key}
-                  instance={posed(part)}
-                  selected={part.key === selectedKey}
-                  preview={part.key === hoveredKey && part.key !== selectedKey}
-                  muted={part.key === selectedKey && activeConnection !== null}
-                  dimmed={hasSelection && part.key !== selectedKey && part.key !== hoveredKey}
+                  instance={posed(part, component.rotation)}
+                  selected={selectedSet.has(part.key)}
+                  preview={part.key === hoveredKey && !selectedSet.has(part.key)}
+                  muted={part.key === singleKey && activeConnection !== null}
+                  dimmed={hasSelection && !selectedSet.has(part.key) && part.key !== hoveredKey}
                   offset={toLocalOffset(worldOffsets.get(part.key) ?? ZERO, qInv)}
+                  interactive={!pan}
                   onSelect={selectPart}
                 />
               ))}
-              {showGizmo && selected && gizmoPose ? (
+              {showGizmo && !pan && selected && gizmoPose ? (
                 <group position={toLocalOffset(worldOffsets.get(selected.key) ?? ZERO, qInv)}>
                   <PartGizmo
                     key={`${selected.key}-${selected.position.join(",")}-${selected.rotation.join(",")}`}
                     pose={gizmoPose}
                     bounds={selected.bounds}
+                    snapTargets={snapTargets}
                     fineSnap={fineSnap}
                     onDragStart={() => setDragging(true)}
                     onDraft={(position, rotation) => setDraft({ key: selected.key, position, rotation })}
@@ -419,6 +574,19 @@ export function Viewport({
             </group>
           );
         })}
+        {groupBounds && onChangePoses && !pan ? (
+          <PartGizmo
+            key={`${selectedKeys.join("|")}:${groupBounds.min.join(",")}:${groupBounds.max.join(",")}`}
+            pose={{ position: groupDraft ?? ZERO, rotation: ZERO }}
+            bounds={groupBounds}
+            snapTargets={groupSnapTargets}
+            fineSnap={fineSnap}
+            disableRotations
+            onDragStart={() => setDragging(true)}
+            onDraft={(position) => setGroupDraft(position)}
+            onCommit={commitGroup}
+          />
+        ) : null}
         {scene?.fasteners.map((fastener) => (
           <FastenerMesh
             key={fastener.key}
@@ -427,21 +595,22 @@ export function Viewport({
             offset={averageOffset(fastener, worldOffsets)}
           />
         ))}
-        {scene && selectedKey && editedPatches.length > 0 ? (
+        {scene && singleKey && editedPatches.length > 0 ? (
           <ConnectionFaceOverlay
             patches={editedPatches}
-            instanceKey={selectedKey}
-            explodeOffset={worldOffsets.get(selectedKey) ?? ZERO}
+            instanceKey={singleKey}
+            explodeOffset={worldOffsets.get(singleKey) ?? ZERO}
           />
         ) : null}
-        {scene && showContacts && selectedKey ? (
+        {scene && showContacts && singleKey ? (
           <ContactOverlay
             contacts={scene.contacts}
-            instanceKey={selectedKey}
-            explodeOffset={worldOffsets.get(selectedKey) ?? ZERO}
+            instanceKey={singleKey}
+            explodeOffset={worldOffsets.get(singleKey) ?? ZERO}
             focusedKey={focusedPatch}
             onFocus={setFocusedPatch}
             omitKeys={editedPatchKeys}
+            interactive={!pan}
           />
         ) : null}
         <OrbitControls
@@ -450,7 +619,7 @@ export function Viewport({
           target={[20, 0, 12]}
           screenSpacePanning={false}
           mouseButtons={{
-            LEFT: THREE.MOUSE.ROTATE,
+            LEFT: pan ? THREE.MOUSE.PAN : THREE.MOUSE.ROTATE,
             MIDDLE: THREE.MOUSE.PAN,
             RIGHT: THREE.MOUSE.DOLLY,
           }}
@@ -473,11 +642,22 @@ export function Viewport({
         onRedo={onRedo}
         explode={explode}
         onExplode={setExplode}
+        pan={pan}
+        onPan={(next) => {
+          setPan(next);
+          setDragging(false);
+          setDraft(null);
+          setGroupDraft(null);
+        }}
         showContacts={showContacts}
         onShowContacts={onShowContacts}
         enabled={Boolean(scene)}
       />
-      {selected ? (
+      {selectedKeys.length > 1 && scene ? (
+        <MultiSelectionCard
+          instances={scene.components.flatMap((component) => component.members).filter((part) => selectedSet.has(part.key))}
+        />
+      ) : selected ? (
         <SelectionCard instance={selected} attachedFasteners={attachedFasteners} patches={selectedPatches} neighbors={neighborLabels} />
       ) : null}
       {!scene ? (
@@ -487,4 +667,13 @@ export function Viewport({
       ) : null}
     </div>
   );
+}
+
+function isTextField(target: EventTarget | null): boolean {
+  const element = target instanceof Element ? target : null;
+  if (!element) return false;
+  if (element instanceof HTMLInputElement || element instanceof HTMLTextAreaElement) return true;
+  if (element instanceof HTMLElement && element.isContentEditable) return true;
+  if (element.closest(".cm-editor")) return true;
+  return element.closest("input, textarea, [contenteditable='true']") !== null;
 }

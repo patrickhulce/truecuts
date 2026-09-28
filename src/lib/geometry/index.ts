@@ -43,7 +43,7 @@ export {
 export { clipPolyhedron } from "./clip";
 export { applyCuts, cutToPlane, defaultAround } from "./cuts";
 export { gapCount, layoutClosed, layoutOpen, type Justify } from "./justify";
-export { applyPose, inverseRotateEulerXYZ, rotateEulerXYZ, unapplyPose } from "./pose";
+export { applyPose, inverseRotateEulerXYZ, rotateEulerXYZ, translateByWorldDelta, unapplyPose } from "./pose";
 export {
   centroid3,
   convexArea,
@@ -54,6 +54,19 @@ export {
   toPlane2D,
   type Vec2,
 } from "./polygon";
+export {
+  aabbDistance,
+  aabbGap,
+  aabbInFrame,
+  unionAabb,
+  boundarySnapDelta,
+  NEAR_REACH,
+  nearInstanceKeys,
+  originCorner,
+  posedAabb,
+  positionForOriginCorner,
+  type Aabb,
+} from "./proximity";
 export {
   CONTACT_GAP,
   findContacts,

@@ -3,12 +3,13 @@
 import { useEffect, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
 import { fitsTConnector, getCatalogPart } from "@/lib/catalog";
 import { connectionKey, connectionNailReach, detailNeighborKeys, type SceneConnection } from "@/lib/connections";
-import { addConnection, promoteExplicitFasteners, setConnectionFastener, setMemberDimension } from "@/lib/edit";
+import { addConnection, promoteExplicitFasteners, setConnectionFastener, setMemberDimension, setPlacementPose } from "@/lib/edit";
 import { parseInstanceKey } from "@/lib/fasteners";
 import type { ResolvedBore, ResolvedConnectionFastener, ResolvedCut, ResolvedDocument, ResolvedMember } from "@/lib/schema";
-import type { SceneContacts } from "@/lib/geometry";
+import { nearInstanceKeys, originCorner, positionForOriginCorner, unionAabb, type SceneContacts } from "@/lib/geometry";
+import type { SelectionMode } from "@/lib/selection";
 import type { SceneFastener, SceneModel, SceneMemberInstance } from "@/lib/scene";
-import { formatInches, parseDimension } from "@/lib/units";
+import { formatInches, parseDimension, parseOffset } from "@/lib/units";
 import { ConnectionEditor } from "./ConnectionEditor";
 import { FastenerIcon } from "./FastenerIcon";
 import { MemberThumbnail } from "./MemberThumbnail";
@@ -18,8 +19,9 @@ type PartsBrowserProps = {
   document?: ResolvedDocument;
   text: string;
   onCommit: (text: string) => void;
-  selectedKey: string | null;
-  onSelect: (key: string | null) => void;
+  selectedKeys: string[];
+  selectionMode: SelectionMode;
+  onSelect: (key: string | null, options?: { shift?: boolean }) => void;
   onHover: (key: string | null) => void;
   onActiveConnection: (key: string | null) => void;
 };
@@ -107,6 +109,9 @@ function attachedPartsFor(
   const byNeighbor = new Map<string, SceneFastener[]>();
   for (const key of detailNeighborKeys(selectedKey, connections, fasteners, contacts)) {
     byNeighbor.set(key, []);
+  }
+  for (const key of nearInstanceKeys(selectedKey, [...byKey.values()])) {
+    if (!byNeighbor.has(key)) byNeighbor.set(key, []);
   }
   for (const fastener of fasteners) {
     for (const member of fastener.members) {
@@ -234,7 +239,8 @@ export function PartsBrowser({
   document,
   text,
   onCommit,
-  selectedKey,
+  selectedKeys,
+  selectionMode,
   onSelect,
   onHover,
   onActiveConnection,
@@ -250,7 +256,8 @@ export function PartsBrowser({
   }
 
   const byKey = instanceMap(scene);
-  const selected = selectedKey ? (byKey.get(selectedKey) ?? null) : null;
+  const selected =
+    selectionMode === "single" && selectedKeys.length === 1 ? (byKey.get(selectedKeys[0] ?? "") ?? null) : null;
   if (selected) {
     return (
       <PartDetail
@@ -278,9 +285,17 @@ export function PartsBrowser({
 
   const { local, assembly } = groupFasteners(scene);
   const unused = unusedMembers(document, scene);
+  const selectedSet = new Set(selectedKeys);
+  const picked = selectedKeys.flatMap((key) => {
+    const instance = byKey.get(key);
+    return instance ? [instance] : [];
+  });
 
   return (
     <div className="min-h-0 flex-1 overflow-auto pb-6">
+      {selectionMode === "multi" && picked.length > 0 ? (
+        <MultiSummary scene={scene} instances={picked} onClear={() => onSelect(null)} onSelect={onSelect} />
+      ) : null}
       {scene.components.map((component) => {
         const fasteners = local.get(component.id) ?? [];
         return (
@@ -297,8 +312,11 @@ export function PartsBrowser({
                   <li key={part.key}>
                     <button
                       type="button"
-                      onClick={() => onSelect(part.key)}
-                      className="flex w-full cursor-pointer flex-col items-start gap-0.5 px-3 py-1.5 text-left hover:bg-[#2a1d12]"
+                      aria-pressed={selectedSet.has(part.key)}
+                      onClick={(event) => onSelect(part.key, { shift: event.shiftKey })}
+                      className={`flex w-full cursor-pointer flex-col items-start gap-0.5 px-3 py-1.5 text-left hover:bg-[#2a1d12] ${
+                        selectedSet.has(part.key) ? "bg-[#3d2a18]" : ""
+                      }`}
                     >
                       <span className="text-sm text-[#d6c3a3]">{part.label}</span>
                       <span className="text-[11px] text-[#8a7355]">
@@ -374,6 +392,63 @@ export function PartsBrowser({
   );
 }
 
+function MultiSummary({
+  scene,
+  instances,
+  onClear,
+  onSelect,
+}: {
+  scene: SceneModel;
+  instances: SceneMemberInstance[];
+  onClear: () => void;
+  onSelect: (key: string) => void;
+}) {
+  const span = unionAabb(instances.map((instance) => instance.worldBounds));
+  const count = instances.length;
+  return (
+    <section className="border-b border-[#3d2a18] bg-[#241a10]">
+      <div className="sticky top-0 border-b border-[#3d2a18] bg-[#241a10] px-3 py-2">
+        <button
+          type="button"
+          onClick={onClear}
+          className="cursor-pointer text-xs text-[#a89070] hover:text-[#f59e0b]"
+        >
+          ← All members
+        </button>
+        <h2 className="mt-2 font-[family-name:var(--font-display)] text-lg text-[#f59e0b]">
+          {count} {count === 1 ? "member" : "members"}
+        </h2>
+        {span ? (
+          <p className="mt-1 text-xs text-[#a89070]">
+            Span {formatInches(span.max[0] - span.min[0])} × {formatInches(span.max[1] - span.min[1])} ×{" "}
+            {formatInches(span.max[2] - span.min[2])}
+          </p>
+        ) : null}
+      </div>
+      <ul>
+        {instances.map((instance) => {
+          const { componentId } = parseInstanceKey(instance.key);
+          const component = scene.components.find((item) => item.id === componentId)?.label ?? componentId;
+          return (
+            <li key={instance.key}>
+              <button
+                type="button"
+                onClick={() => onSelect(instance.key)}
+                className="flex w-full cursor-pointer flex-col items-start gap-0.5 px-3 py-1.5 text-left hover:bg-[#2a1d12]"
+              >
+                <span className="text-sm text-[#d6c3a3]">{instance.label}</span>
+                <span className="text-[11px] text-[#8a7355]">
+                  {instance.memberId} · {instance.stockLabel} · {formatFinished(instance.finished)} · {component}
+                </span>
+              </button>
+            </li>
+          );
+        })}
+      </ul>
+    </section>
+  );
+}
+
 function PartDetail({
   instance,
   definition,
@@ -398,7 +473,7 @@ function PartDetail({
   onActiveConnection: (key: string | null) => void;
   byKey: Map<string, SceneMemberInstance>;
   onBack: () => void;
-  onSelect: (key: string) => void;
+  onSelect: (key: string, options?: { shift?: boolean }) => void;
   onHover: (key: string | null) => void;
 }) {
   const [activeKey, setActiveKey] = useState<string | null>(null);
@@ -467,6 +542,26 @@ function PartDetail({
     }
   }
 
+  const corner = originCorner(instance.bounds, instance.position, instance.rotation);
+
+  function savePosition(axis: 0 | 1 | 2, inches: number): string | null {
+    try {
+      const { componentId, placementIndex } = parseInstanceKey(instance.key);
+      const position = positionForOriginCorner(
+        instance.bounds,
+        instance.position,
+        instance.rotation,
+        axis,
+        inches,
+      );
+      const next = setPlacementPose(textRef.current, componentId, placementIndex, position, instance.rotation);
+      if (next !== textRef.current) commitNext(next);
+      return null;
+    } catch (cause) {
+      return cause instanceof Error ? cause.message : "Could not update the position";
+    }
+  }
+
   function promote(explicit: SceneFastener[]) {
     const homes = explicit.map((fastener) => parseExplicitKey(fastener.key));
     const componentId = homes[0]?.componentId ?? null;
@@ -528,6 +623,35 @@ function PartDetail({
           </div>
           <p className="px-3 pt-1 text-[11px] text-[#8a7355]">L × W × T (length × width × thickness). Click a value to edit.</p>
 
+          <SectionLabel>Position</SectionLabel>
+          <div className="grid grid-cols-[auto_minmax(0,1fr)] items-center gap-x-3 gap-y-1 px-3 text-sm">
+            <span className="text-[#8a7355]">X</span>
+            <EditableDimension
+              label="Position X"
+              value={corner[0]}
+              parse={parseOffset}
+              onSave={(inches) => savePosition(0, inches)}
+            />
+            <span className="text-[#8a7355]">Y</span>
+            <EditableDimension
+              label="Position Y"
+              value={corner[1]}
+              parse={parseOffset}
+              onSave={(inches) => savePosition(1, inches)}
+            />
+            <span className="text-[#8a7355]">Z</span>
+            <EditableDimension
+              label="Position Z"
+              value={corner[2]}
+              parse={parseOffset}
+              onSave={(inches) => savePosition(2, inches)}
+            />
+          </div>
+          <ComponentOrigin scene={scene} instanceKey={instance.key} />
+          <p className="px-3 pt-1 text-[11px] text-[#8a7355]">
+            X · Y · Z of the corner nearest the component origin. Y is the bottom. Click a value to edit.
+          </p>
+
           <SectionLabel>Bores</SectionLabel>
           {instance.bores.length === 0 ? (
             <p className="px-3 text-xs text-[#8a7355]">No bores</p>
@@ -566,7 +690,7 @@ function PartDetail({
                   <li key={neighbor.instance.key} className="flex items-stretch gap-2 border-b border-[#3d2a18]/60 px-2 py-2">
                     <button
                       type="button"
-                      onClick={() => onSelect(neighbor.instance.key)}
+                      onClick={(event) => onSelect(neighbor.instance.key, { shift: event.shiftKey })}
                       onMouseEnter={() => onHover(neighbor.instance.key)}
                       onMouseLeave={() => onHover(null)}
                       className="flex min-w-0 flex-1 cursor-pointer items-center gap-3 rounded px-1 text-left hover:bg-[#2a1d12]"
@@ -650,10 +774,12 @@ function EditableDimension({
   label,
   value,
   onSave,
+  parse = parseDimension,
 }: {
   label: string;
   value: number;
   onSave: (inches: number) => string | null;
+  parse?: (text: string) => number;
 }) {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState("");
@@ -676,7 +802,7 @@ function EditableDimension({
   function commitDraft(): boolean {
     let inches: number;
     try {
-      inches = parseDimension(draft.trim());
+      inches = parse(draft.trim());
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "Cannot parse dimension");
       return false;
@@ -751,6 +877,21 @@ function EditableDimension({
       />
       {error ? <span className="mt-0.5 block text-xs text-rose-400">{error}</span> : null}
     </span>
+  );
+}
+
+function ComponentOrigin({ scene, instanceKey }: { scene: SceneModel; instanceKey: string }) {
+  const { componentId } = parseInstanceKey(instanceKey);
+  const component = scene.components.find((item) => item.id === componentId);
+  if (!component) return null;
+  const [x, y, z] = component.position;
+  const [rx, ry, rz] = component.rotation;
+  const rotated = Math.abs(rx) > 1e-6 || Math.abs(ry) > 1e-6 || Math.abs(rz) > 1e-6;
+  return (
+    <p className="px-3 pt-1 text-[11px] text-[#8a7355]">
+      from {component.label} origin {formatInches(x)}, {formatInches(y)}, {formatInches(z)}
+      {rotated ? ` · rotated ${rx}°, ${ry}°, ${rz}°` : ""}
+    </p>
   );
 }
 

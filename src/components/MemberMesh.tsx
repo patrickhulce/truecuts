@@ -94,7 +94,8 @@ type MemberMeshProps = {
   muted?: boolean;
   isolate?: boolean;
   offset?: Vec3;
-  onSelect?: (key: string) => void;
+  interactive?: boolean;
+  onSelect?: (key: string, options?: { shift: boolean }) => void;
 };
 
 export function MemberMesh({
@@ -105,6 +106,7 @@ export function MemberMesh({
   muted = false,
   isolate = false,
   offset = ZERO,
+  interactive = true,
   onSelect,
 }: MemberMeshProps) {
   const drilledBores = useMemo(
@@ -148,7 +150,7 @@ export function MemberMesh({
     };
   }, [edgeGeometry]);
   const [hovered, setHovered] = useState(false);
-  useCursor(hovered);
+  useCursor(interactive && hovered);
   const rotation: [number, number, number] = [
     THREE.MathUtils.degToRad(instance.rotation[0]),
     THREE.MathUtils.degToRad(instance.rotation[1]),
@@ -174,20 +176,20 @@ export function MemberMesh({
       position={position}
       rotation={rotation}
       onPointerOver={
-        isolate
+        !interactive || isolate
           ? undefined
           : (event) => {
               event.stopPropagation();
               setHovered(true);
             }
       }
-      onPointerOut={isolate ? undefined : () => setHovered(false)}
+      onPointerOut={!interactive || isolate ? undefined : () => setHovered(false)}
       onClick={
-        isolate
+        !interactive || isolate
           ? undefined
           : (event) => {
               event.stopPropagation();
-              onSelect?.(instance.key);
+              onSelect?.(instance.key, { shift: event.shiftKey });
             }
       }
     >

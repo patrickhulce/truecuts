@@ -87,6 +87,18 @@ export function parseDimension(input: number | string): number {
   throw new DimensionError(`Cannot parse dimension "${input}"`, input);
 }
 
+/** Parse a possibly-negative inch offset: a leading sign plus any parseDimension form. */
+export function parseOffset(input: number | string): number {
+  if (typeof input === "number") return parseDimension(input);
+  const trimmed = normalizeMarks(input);
+  const sign = trimmed.startsWith("-") ? -1 : 1;
+  const body = trimmed.replace(/^[+-]\s*/, "");
+  if (!body) {
+    throw new DimensionError("Empty dimension", input);
+  }
+  return sign * parseDimension(body);
+}
+
 export type DimensionInput = number | string;
 
 export function parseAt(

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { DimensionError, formatInches, parseDimension } from "./units";
+import { DimensionError, formatInches, parseDimension, parseOffset } from "./units";
 
 describe("parseDimension", () => {
   it("passes numbers through as inches", () => {
@@ -31,6 +31,23 @@ describe("parseDimension", () => {
     expect(() => parseDimension("")).toThrow(DimensionError);
     expect(() => parseDimension("nope")).toThrow(DimensionError);
     expect(() => parseDimension(Number.NaN)).toThrow(DimensionError);
+  });
+});
+
+describe("parseOffset", () => {
+  it("parses signed inch offsets", () => {
+    expect(parseOffset("-3")).toBe(-3);
+    expect(parseOffset('-3/4"')).toBe(-0.75);
+    expect(parseOffset("-1'-6\"")).toBe(-18);
+    expect(parseOffset("+2")).toBe(2);
+    expect(parseOffset(0)).toBe(0);
+    expect(parseOffset(-3.5)).toBe(-3.5);
+  });
+
+  it("rejects a bare sign and garbage", () => {
+    expect(() => parseOffset("-")).toThrow(DimensionError);
+    expect(() => parseOffset("+")).toThrow(DimensionError);
+    expect(() => parseOffset("nope")).toThrow(DimensionError);
   });
 });
 

@@ -710,15 +710,14 @@ export function setMemberDimension(
   throw new EditError(YAML_CUTS);
 }
 
-/** Clone a member definition and place the copy in the same component. */
-export function duplicateMember(
-  text: string,
+/** Clone a member definition and place the copy in the same component. Returns the new id. */
+function placeMemberCopy(
+  doc: Document,
   memberId: string,
   componentId: string,
   position: Vec3,
   rotation: Vec3,
 ): string {
-  const doc = parseEditDocument(text);
   const { members } = identified(doc);
   const memberIndex = members.findIndex((member) => member.id === memberId);
   if (memberIndex < 0) throw new EditError(`Unknown member "${memberId}"`);
@@ -750,5 +749,136 @@ export function duplicateMember(
     ["components", cIndex, "members", placementIndex],
     placementNode(doc, created.id, position, rotation),
   );
+  return created.id;
+}
+
+/** Clone a member definition and place the copy in the same component. */
+export function duplicateMember(
+  text: string,
+  memberId: string,
+  componentId: string,
+  position: Vec3,
+  rotation: Vec3,
+): string {
+  const doc = parseEditDocument(text);
+  placeMemberCopy(doc, memberId, componentId, position, rotation);
+  return doc.toString(STRINGIFY);
+}
+
+export type DuplicateMember = {
+  memberId: string;
+  componentId: string;
+  /** 0-based occurrence of this member id in the component. */
+  occurrence: number;
+  position: Vec3;
+  rotation: Vec3;
+};
+
+function instanceRefKey(componentId: string, memberId: string, occurrence: number): string {
+  return `${componentId}/${memberId}#${occurrence}`;
+}
+
+type JointRef = {
+  componentId: string;
+  memberId: string;
+  occurrence: number;
+};
+
+function readJointMembers(
+  doc: Document,
+  membersPath: Array<string | number>,
+  impliedComponentId: string | null,
+): JointRef[] | null {
+  const count = seqLength(doc, membersPath);
+  if (count < 2) return null;
+  const refs: JointRef[] = [];
+  for (let index = 0; index < count; index += 1) {
+    const id = doc.getIn([...membersPath, index, "id"]);
+    if (typeof id !== "string") return null;
+    const componentField = doc.getIn([...membersPath, index, "component"]);
+    const componentId = impliedComponentId ?? (typeof componentField === "string" ? componentField : null);
+    if (!componentId) return null;
+    const rawIndex = doc.getIn([...membersPath, index, "index"]);
+    const occurrence =
+      typeof rawIndex === "number" && Number.isInteger(rawIndex) && rawIndex >= 0 ? rawIndex : 0;
+    refs.push({ componentId, memberId: id, occurrence });
+  }
+  return refs;
+}
+
+function retargetJoint(
+  doc: Document,
+  entryPath: Array<string | number>,
+  refs: JointRef[],
+  idMap: Map<string, string>,
+  isConnection: boolean,
+): void {
+  const membersPath = [...entryPath, "members"];
+  for (let index = 0; index < refs.length; index += 1) {
+    const nextId = idMap.get(instanceRefKey(refs[index].componentId, refs[index].memberId, refs[index].occurrence));
+    if (!nextId) continue;
+    doc.setIn([...membersPath, index, "id"], nextId);
+    const indexPath = [...membersPath, index, "index"];
+    if (doc.getIn(indexPath) !== undefined) doc.deleteIn(indexPath);
+  }
+  if (!isConnection) return;
+  const fastenersPath = [...entryPath, "fasteners"];
+  const fastenerCount = seqLength(doc, fastenersPath);
+  for (let index = 0; index < fastenerCount; index += 1) {
+    const bracketPath = [...fastenersPath, index, "variant", "bracket"];
+    const bracket = doc.getIn(bracketPath);
+    if (typeof bracket !== "string") continue;
+    const match = refs.find((ref) => ref.memberId === bracket);
+    const nextId = match
+      ? idMap.get(instanceRefKey(match.componentId, match.memberId, match.occurrence))
+      : undefined;
+    if (nextId) doc.setIn(bracketPath, nextId);
+  }
+}
+
+/** Append clones of joints whose every member is in `idMap`. */
+function copyInternalJoints(doc: Document, idMap: Map<string, string>): void {
+  const { components } = identified(doc);
+  const lists: Array<{ path: Array<string | number>; componentId: string | null; isConnection: boolean }> = [];
+  for (let index = 0; index < components.length; index += 1) {
+    lists.push({ path: ["components", index, "connections"], componentId: components[index].id, isConnection: true });
+    lists.push({ path: ["components", index, "fasteners"], componentId: components[index].id, isConnection: false });
+  }
+  lists.push({ path: ["connections"], componentId: null, isConnection: true });
+  lists.push({ path: ["fasteners"], componentId: null, isConnection: false });
+
+  for (const list of lists) {
+    const count = seqLength(doc, list.path);
+    for (let index = 0; index < count; index += 1) {
+      const refs = readJointMembers(doc, [...list.path, index, "members"], list.componentId);
+      if (!refs || !refs.every((ref) => idMap.has(instanceRefKey(ref.componentId, ref.memberId, ref.occurrence)))) {
+        continue;
+      }
+      const node = doc.getIn([...list.path, index]);
+      if (!isMap(node)) continue;
+      const copy = node.clone();
+      if (!isMap(copy)) continue;
+      copy.anchor = undefined;
+      const next = seqLength(doc, list.path);
+      doc.setIn([...list.path, next], copy);
+      retargetJoint(doc, [...list.path, next], refs, idMap, list.isConnection);
+    }
+  }
+}
+
+/**
+ * Clone each member and place it. Connections and explicit fasteners whose members
+ * are all in this set are cloned onto the new ids. A joint that also names a
+ * member outside the set stays with the originals.
+ */
+export function duplicateMembers(text: string, items: DuplicateMember[]): string {
+  if (items.length === 0) return text;
+  const doc = parseEditDocument(text);
+  const idMap = new Map<string, string>();
+  for (const item of items) {
+    const newId = placeMemberCopy(doc, item.memberId, item.componentId, item.position, item.rotation);
+    idMap.set(instanceRefKey(item.componentId, item.memberId, item.occurrence), newId);
+  }
+  copyInternalJoints(doc, idMap);
   return doc.toString(STRINGIFY);
 }

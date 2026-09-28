@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { parse } from "yaml";
 import { compileDocument } from "./compile";
 import { DEMO_YAML } from "./demo";
 import {
@@ -7,6 +8,7 @@ import {
   defaultConnectionFastener,
   deleteMember,
   duplicateMember,
+  duplicateMembers,
   EditError,
   parseCatalogDrag,
   promoteExplicitFasteners,
@@ -454,6 +456,171 @@ components:
       rotation: [0, 90, 0],
     });
     expect(result.document?.components[0].members[0].position).toEqual([1, 2, 3]);
+  });
+});
+
+const JOINED = `version: 1
+name: Joints
+members:
+  - label: A
+    stock: 2x4x8
+  - label: B
+    stock: 2x4x8
+  - label: C
+    stock: 2x4x8
+  - label: Shelf
+    stock: 2x4x8
+  - label: Bracket
+    stock: bracket-l-2x2
+components:
+  - label: Box
+    members:
+      - { id: a-1, position: [0, 0, 0] }
+      - { id: b-1, position: [4, 0, 0] }
+      - { id: c-1, position: [0, 4, 0] }
+      - { id: bracket-1, position: [1, 1, 1] }
+    connections:
+      - members:
+          - { id: a-1, index: 0 }
+          - { id: b-1 }
+        fasteners:
+          - { kind: screw, stock: screw-wood-8x2.5, variant: { kind: centered, separation: 4, justify: space-around } }
+      - members:
+          - { id: a-1 }
+          - { id: c-1 }
+        fasteners:
+          - { kind: none }
+      - members:
+          - { id: bracket-1 }
+          - { id: a-1 }
+          - { id: b-1 }
+        fasteners:
+          - { kind: screw, stock: screw-wood-8x1.25, variant: { kind: angle-bracket, bracket: bracket-1, edge: 0.25 } }
+  - label: Rack
+    members:
+      - { id: shelf-1, position: [0, 0, 0] }
+connections:
+  - members:
+      - { component: box-1, id: b-1 }
+      - { component: rack-1, id: shelf-1 }
+    fasteners:
+      - { kind: glue, stock: wood-glue }
+`;
+
+describe("duplicateMembers", () => {
+  function copy(ids: Array<{ memberId: string; componentId: string; occurrence?: number }>) {
+    return duplicateMembers(
+      JOINED,
+      ids.map((item) => ({
+        memberId: item.memberId,
+        componentId: item.componentId,
+        occurrence: item.occurrence ?? 0,
+        position: [10, 0, 0],
+        rotation: [0, 0, 0],
+      })),
+    );
+  }
+
+  it("clones a component connection onto the new ids and keeps the original", () => {
+    const next = copy([
+      { memberId: "a-1", componentId: "box-1" },
+      { memberId: "b-1", componentId: "box-1" },
+    ]);
+    const result = compileDocument(next);
+    expect(result.diagnostics.filter((item) => item.severity === "error")).toEqual([]);
+    const connections = result.document?.components[0].connections ?? [];
+    expect(connections).toHaveLength(4);
+    expect(connections[0].members.map((member) => member.id)).toEqual(["a-1", "b-1"]);
+    expect(connections[3].members.map((member) => member.id)).toEqual(["a-2", "b-2"]);
+    expect(connections[3].fasteners[0]).toMatchObject({
+      kind: "screw",
+      stock: "screw-wood-8x2.5",
+    });
+    const raw = parse(next) as {
+      components: Array<{ connections: Array<{ members: Array<{ id: string; index?: number }> }> }>;
+    };
+    expect(raw.components[0].connections[3].members[0]).toEqual({ id: "a-2" });
+  });
+
+  it("does not copy a connection when only one member is pasted", () => {
+    const next = copy([{ memberId: "a-1", componentId: "box-1" }]);
+    const result = compileDocument(next);
+    expect(result.diagnostics.filter((item) => item.severity === "error")).toEqual([]);
+    expect(result.document?.components[0].connections).toHaveLength(3);
+    expect(result.document?.connections).toHaveLength(1);
+  });
+
+  it("leaves a connection that reaches outside the selection", () => {
+    const next = copy([
+      { memberId: "a-1", componentId: "box-1" },
+      { memberId: "b-1", componentId: "box-1" },
+    ]);
+    const result = compileDocument(next);
+    const connections = result.document?.components[0].connections ?? [];
+    expect(connections.filter((connection) => connection.members.some((member) => member.id === "c-1"))).toHaveLength(1);
+    expect(connections.some((connection) => connection.members.some((member) => member.id === "c-2"))).toBe(false);
+  });
+
+  it("clones a document-level connection when every member was pasted", () => {
+    const partial = copy([{ memberId: "b-1", componentId: "box-1" }]);
+    expect(compileDocument(partial).document?.connections).toHaveLength(1);
+
+    const next = copy([
+      { memberId: "b-1", componentId: "box-1" },
+      { memberId: "shelf-1", componentId: "rack-1" },
+    ]);
+    const result = compileDocument(next);
+    expect(result.diagnostics.filter((item) => item.severity === "error")).toEqual([]);
+    expect(result.document?.connections).toEqual([
+      {
+        members: [
+          { component: "box-1", id: "b-1", index: 0 },
+          { component: "rack-1", id: "shelf-1", index: 0 },
+        ],
+        fasteners: [{ kind: "glue", stock: "wood-glue", variant: { kind: "patch" } }],
+      },
+      {
+        members: [
+          { component: "box-1", id: "b-2", index: 0 },
+          { component: "rack-1", id: "shelf-2", index: 0 },
+        ],
+        fasteners: [{ kind: "glue", stock: "wood-glue", variant: { kind: "patch" } }],
+      },
+    ]);
+  });
+
+  it("remaps an angle-bracket id", () => {
+    const next = copy([
+      { memberId: "bracket-1", componentId: "box-1" },
+      { memberId: "a-1", componentId: "box-1" },
+      { memberId: "b-1", componentId: "box-1" },
+    ]);
+    const result = compileDocument(next);
+    expect(result.diagnostics.filter((item) => item.severity === "error")).toEqual([]);
+    const copied = result.document?.components[0].connections.find((connection) =>
+      connection.members.some((member) => member.id === "bracket-2"),
+    );
+    expect(copied?.members.map((member) => member.id)).toEqual(["bracket-2", "a-2", "b-2"]);
+    expect(copied?.fasteners[0]).toMatchObject({
+      kind: "screw",
+      variant: { kind: "angle-bracket", bracket: "bracket-2", edge: 0.25 },
+    });
+  });
+
+  it("clones an explicit fastener with at and direction intact", () => {
+    const next = duplicateMembers(SCREW_PAIR, [
+      { memberId: "a-1", componentId: "box-1", occurrence: 0, position: [10, 0, 0], rotation: [0, 0, 0] },
+      { memberId: "b-1", componentId: "box-1", occurrence: 0, position: [18, 0, 0], rotation: [0, 0, 0] },
+    ]);
+    const result = compileDocument(next);
+    expect(result.diagnostics.filter((item) => item.severity === "error")).toEqual([]);
+    const fasteners = result.document?.components[0].fasteners ?? [];
+    expect(fasteners).toHaveLength(2);
+    expect(fasteners[0].members.map((member) => member.id)).toEqual(["a-1", "b-1"]);
+    expect(fasteners[1].members).toEqual([
+      { component: "box-1", id: "a-2", index: 0, at: [4, 0.75, 0.75], direction: [1, 0, 0] },
+      { component: "box-1", id: "b-2", index: 0, at: [0, 0.75, 0.75], direction: [-1, 0, 0] },
+    ]);
   });
 });
 

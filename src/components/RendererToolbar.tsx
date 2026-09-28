@@ -9,6 +9,8 @@ type RendererToolbarProps = {
   onRedo: () => void;
   explode: number;
   onExplode: (value: number) => void;
+  pan: boolean;
+  onPan: (value: boolean) => void;
   showContacts: boolean;
   onShowContacts: (value: boolean) => void;
   enabled: boolean;
@@ -24,6 +26,8 @@ export function RendererToolbar({
   onRedo,
   explode,
   onExplode,
+  pan,
+  onPan,
   showContacts,
   onShowContacts,
   enabled,
@@ -52,6 +56,9 @@ export function RendererToolbar({
         <RedoIcon />
       </ToolButton>
       <div className="my-0.5 h-px w-6 bg-[#3d2a18]" />
+      <ToolButton label="Pan (P)" pressed={pan} onClick={() => onPan(!pan)}>
+        <PanIcon />
+      </ToolButton>
       <div className="relative">
         <ToolButton
           label="Explode"
@@ -166,6 +173,21 @@ function RedoIcon() {
         strokeLinecap="round"
         strokeLinejoin="round"
         d="M15 14l5-5-5-5M20 9H9a5 5 0 0 0 0 10h3"
+      />
+    </svg>
+  );
+}
+
+function PanIcon() {
+  return (
+    <svg viewBox="0 0 24 24" className="h-4 w-4" aria-hidden="true">
+      <path
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.8"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        d="M12 2.5v19M2.5 12h19M12 2.5 8.5 6M12 2.5 15.5 6M12 21.5 8.5 18M12 21.5 15.5 18M2.5 12 6 8.5M2.5 12 6 15.5M21.5 12 18 8.5M21.5 12 18 15.5"
       />
     </svg>
   );

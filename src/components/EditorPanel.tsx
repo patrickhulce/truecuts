@@ -3,6 +3,7 @@
 import { useState, type ReactNode } from "react";
 import type { CompileResult } from "@/lib/compile";
 import { parseInstanceKey } from "@/lib/fasteners";
+import type { SelectionMode } from "@/lib/selection";
 import type { SceneModel } from "@/lib/scene";
 import { formatInches } from "@/lib/units";
 import { DiagnosticsPanel } from "./DiagnosticsPanel";
@@ -16,8 +17,9 @@ type EditorPanelProps = {
   onChangeText: (value: string) => void;
   onCommit: (value: string) => void;
   compiled: CompileResult;
-  selectedKey: string | null;
-  onSelect: (key: string | null) => void;
+  selectedKeys: string[];
+  selectionMode: SelectionMode;
+  onSelect: (key: string | null, options?: { shift?: boolean }) => void;
   onHover: (key: string | null) => void;
   activeConnectionKey: string | null;
   onActiveConnection: (key: string | null) => void;
@@ -42,7 +44,8 @@ export function EditorPanel({
   onChangeText,
   onCommit,
   compiled,
-  selectedKey,
+  selectedKeys,
+  selectionMode,
   onSelect,
   onHover,
   activeConnectionKey,
@@ -67,7 +70,8 @@ export function EditorPanel({
             document={compiled.document}
             text={text}
             onCommit={onCommit}
-            selectedKey={selectedKey}
+            selectedKeys={selectedKeys}
+            selectionMode={selectionMode}
             onSelect={onSelect}
             onHover={onHover}
             onActiveConnection={onActiveConnection}

@@ -77,3 +77,8 @@ export function unapplyPose(point: Vec3, position: Vec3, rotationDeg: Vec3): Vec
 export function localShiftForWorldX(componentRotation: Vec3, distance: number): Vec3 {
   return inverseRotateEulerXYZ([distance, 0, 0], componentRotation);
 }
+
+/** Placement position after moving its origin by a world-space delta. Rotation is unchanged. */
+export function translateByWorldDelta(position: Vec3, componentRotation: Vec3, worldDelta: Vec3): Vec3 {
+  return add(position, inverseRotateEulerXYZ(worldDelta, componentRotation));
+}

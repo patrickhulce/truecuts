@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { applyPose, localShiftForWorldX, rotateEulerXYZ, unapplyPose } from "./pose";
+import { add } from "./vec3";
+import { applyPose, localShiftForWorldX, rotateEulerXYZ, translateByWorldDelta, unapplyPose } from "./pose";
 import type { Vec3 } from "./types";
 
 describe("rotateEulerXYZ", () => {
@@ -14,6 +15,20 @@ describe("rotateEulerXYZ", () => {
 describe("localShiftForWorldX", () => {
   it("shifts along local X when the component is unrotated", () => {
     expect(localShiftForWorldX([0, 0, 0], 4.5)).toEqual([4.5, 0, 0]);
+  });
+});
+
+describe("translateByWorldDelta", () => {
+  it("moves the placement origin by the world delta", () => {
+    const position: Vec3 = [1, 2, 3];
+    const rotation: Vec3 = [10, 25, -15];
+    const delta: Vec3 = [4, -2, 1];
+    const world = applyPose(position, [0, 0, 0], rotation);
+    const expected = unapplyPose(add(world, delta), [0, 0, 0], rotation);
+    const next = translateByWorldDelta(position, rotation, delta);
+    expect(next[0]).toBeCloseTo(expected[0], 6);
+    expect(next[1]).toBeCloseTo(expected[1], 6);
+    expect(next[2]).toBeCloseTo(expected[2], 6);
   });
 });
 

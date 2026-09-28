@@ -1,15 +1,16 @@
 "use client";
 
 import dynamic from "next/dynamic";
-import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { Group, Panel, Separator, usePanelRef } from "react-resizable-panels";
 import { useDocument } from "@/hooks/useDocument";
 import { clearBuilds } from "@/lib/builds-storage";
 import { compileDocument } from "@/lib/compile";
-import { addMember, deleteMember, duplicateMember, setPlacementPose, type NewMemberInput } from "@/lib/edit";
+import { addMember, deleteMember, duplicateMembers, setPlacementPose, type NewMemberInput } from "@/lib/edit";
 import { parseInstanceKey } from "@/lib/fasteners";
-import type { Vec3 } from "@/lib/geometry";
+import { unionAabb, type Vec3 } from "@/lib/geometry";
 import { localShiftForWorldX } from "@/lib/geometry/pose";
+import { EMPTY_SELECTION, pruneSelection, selectAll, selectMember, type Selection } from "@/lib/selection";
 import {
   DEFAULT_PREFERENCES,
   PREFERENCES_KEY,
@@ -48,9 +49,36 @@ function preferencesSnapshot() {
   return window.localStorage.getItem(PREFERENCES_KEY) ?? "";
 }
 
+type ClipboardItem = {
+  memberId: string;
+  componentId: string;
+  /** 0-based occurrence of this member id in the component. */
+  occurrence: number;
+  position: Vec3;
+  rotation: Vec3;
+};
+
+type Clipboard = {
+  items: ClipboardItem[];
+  worldSpanX: number;
+};
+
+type PoseUpdate = {
+  componentId: string;
+  placementIndex: number;
+  position: Vec3;
+  rotation: Vec3;
+};
+
 export function Workspace() {
   const { text, setText, commit, compiled, reset, undo, redo, canUndo, canRedo } = useDocument();
-  const [selectedKey, setSelectedKey] = useState<string | null>(null);
+  const [storedSelection, setStoredSelection] = useState<Selection>(EMPTY_SELECTION);
+  const selection = useMemo(() => {
+    const scene = compiled.scene;
+    if (!scene) return storedSelection;
+    const live = new Set(scene.components.flatMap((component) => component.members.map((member) => member.key)));
+    return pruneSelection(storedSelection, live);
+  }, [compiled.scene, storedSelection]);
   const [hoveredKey, setHoveredKey] = useState<string | null>(null);
   const [activeConnectionKey, setActiveConnectionKey] = useState<string | null>(null);
   const [sidebarOpen, setSidebarOpen] = useState(true);
@@ -58,21 +86,15 @@ export function Workspace() {
   const sidebarRef = usePanelRef();
   const storedPreferences = useSyncExternalStore(subscribePreferences, preferencesSnapshot, () => "");
   const preferences = readPreferences(storedPreferences || null);
-  const selectedKeyRef = useRef(selectedKey);
+  const selectionRef = useRef(selection);
   const textRef = useRef(text);
   const compiledRef = useRef(compiled);
-  const clipboardRef = useRef<{
-    memberId: string;
-    componentId: string;
-    position: Vec3;
-    rotation: Vec3;
-    worldSpanX: number;
-  } | null>(null);
+  const clipboardRef = useRef<Clipboard | null>(null);
   useEffect(() => {
-    selectedKeyRef.current = selectedKey;
+    selectionRef.current = selection;
     textRef.current = text;
     compiledRef.current = compiled;
-  }, [compiled, selectedKey, text]);
+  }, [compiled, selection, text]);
 
   const setPreferences = useCallback((next: Preferences | ((current: Preferences) => Preferences)) => {
     const current = readPreferences(window.localStorage.getItem(PREFERENCES_KEY));
@@ -81,22 +103,40 @@ export function Workspace() {
     window.dispatchEvent(new Event(PREFERENCES_EVENT));
   }, []);
 
-  const handleSelect = useCallback((key: string | null) => {
+  const handleSelect = useCallback((key: string | null, options?: { shift?: boolean }) => {
     setHoveredKey(null);
-    if (selectedKeyRef.current !== key) setActiveConnectionKey(null);
-    setSelectedKey(key);
+    const current = selectionRef.current;
+    const next = key === null ? EMPTY_SELECTION : selectMember(current, key, Boolean(options?.shift));
+    const unchangedSingle =
+      next.mode === "single" &&
+      current.mode === "single" &&
+      next.keys.length === 1 &&
+      current.keys.length === 1 &&
+      next.keys[0] === current.keys[0];
+    if (!unchangedSingle) setActiveConnectionKey(null);
+    selectionRef.current = next;
+    setStoredSelection(next);
   }, []);
   const memberCount = compiled.document?.members.length ?? 0;
   const componentCount = compiled.document?.components.length ?? 0;
   const errorCount = compiled.diagnostics.filter((item) => item.severity === "error").length;
 
-  const handleDeleteMember = useCallback(
-    (memberId: string) => {
-      if (!compiled.document) return;
+  const handleDeleteMembers = useCallback(
+    (memberIds: string[]) => {
+      if (!compiled.document || memberIds.length === 0) return;
       try {
-        commit(deleteMember(text, memberId));
+        const seen = new Set<string>();
+        let next = text;
+        for (const memberId of memberIds) {
+          if (seen.has(memberId)) continue;
+          seen.add(memberId);
+          next = deleteMember(next, memberId);
+        }
+        commit(next);
         setHoveredKey(null);
-        setSelectedKey(null);
+        setActiveConnectionKey(null);
+        selectionRef.current = EMPTY_SELECTION;
+        setStoredSelection(EMPTY_SELECTION);
       } catch {
         // Leave the YAML alone if the AST cannot be updated.
       }
@@ -107,7 +147,7 @@ export function Workspace() {
   const handlePlaceMember = useCallback(
     (input: NewMemberInput, position: Vec3) => {
       let componentId: string | undefined;
-      const selected = selectedKeyRef.current;
+      const selected = selectionRef.current.keys.at(-1);
       if (selected && compiled.document) {
         try {
           const parsed = parseInstanceKey(selected);
@@ -141,11 +181,15 @@ export function Workspace() {
     [commit, compiled.document, handleSelect, text],
   );
 
-  const handleChangePose = useCallback(
-    (componentId: string, placementIndex: number, position: Vec3, rotation: Vec3) => {
-      if (!compiled.document) return;
+  const handleChangePoses = useCallback(
+    (updates: PoseUpdate[]) => {
+      if (!compiled.document || updates.length === 0) return;
       try {
-        commit(setPlacementPose(text, componentId, placementIndex, position, rotation));
+        let next = text;
+        for (const update of updates) {
+          next = setPlacementPose(next, update.componentId, update.placementIndex, update.position, update.rotation);
+        }
+        commit(next);
       } catch {
         // Leave the YAML alone if the AST cannot be updated.
       }
@@ -169,7 +213,8 @@ export function Workspace() {
     setPreferences(DEFAULT_PREFERENCES);
     reset();
     void clearBuilds().finally(() => setLibraryEpoch((epoch) => epoch + 1));
-    setSelectedKey(null);
+    selectionRef.current = EMPTY_SELECTION;
+    setStoredSelection(EMPTY_SELECTION);
     setHoveredKey(null);
     setActiveConnectionKey(null);
   }, [reset, setPreferences]);
@@ -192,22 +237,50 @@ export function Workspace() {
         return;
       }
       if (isTextField(event.target) || event.repeat) return;
+      if (key === "a" && !event.shiftKey && !event.altKey) {
+        event.preventDefault();
+        event.stopPropagation();
+        const keys =
+          compiledRef.current.scene?.components.flatMap((component) =>
+            component.members.map((member) => member.key),
+          ) ?? [];
+        const next = selectAll(keys);
+        selectionRef.current = next;
+        setStoredSelection(next);
+        setHoveredKey(null);
+        setActiveConnectionKey(null);
+        return;
+      }
       if (key === "c" && !event.shiftKey && !event.altKey) {
         const selection = window.getSelection();
         if (selection && !selection.isCollapsed && selection.toString().trim()) return;
-        const selected = selectedKeyRef.current;
+        const keys = selectionRef.current.keys;
         const scene = compiledRef.current.scene;
-        if (!selected || !scene) return;
-        const instance = scene.components.flatMap((component) => component.members).find((member) => member.key === selected);
-        if (!instance) return;
+        const document = compiledRef.current.document;
+        if (keys.length === 0 || !scene) return;
+        const instances = scene.components
+          .flatMap((component) => component.members)
+          .filter((member) => keys.includes(member.key));
+        const span = unionAabb(instances.map((instance) => instance.worldBounds));
+        if (instances.length === 0 || !span) return;
         event.preventDefault();
-        const { componentId } = parseInstanceKey(instance.key);
         clipboardRef.current = {
-          memberId: instance.memberId,
-          componentId,
-          position: [instance.position[0], instance.position[1], instance.position[2]],
-          rotation: [instance.rotation[0], instance.rotation[1], instance.rotation[2]],
-          worldSpanX: instance.worldBounds.max[0] - instance.worldBounds.min[0],
+          worldSpanX: span.max[0] - span.min[0],
+          items: instances.map((instance) => {
+            const { componentId, memberId, placementIndex } = parseInstanceKey(instance.key);
+            const placements = document?.components.find((entry) => entry.id === componentId)?.members ?? [];
+            let occurrence = 0;
+            for (let index = 0; index < placementIndex && index < placements.length; index += 1) {
+              if (placements[index].id === memberId) occurrence += 1;
+            }
+            return {
+              memberId,
+              componentId,
+              occurrence,
+              position: [instance.position[0], instance.position[1], instance.position[2]],
+              rotation: [instance.rotation[0], instance.rotation[1], instance.rotation[2]],
+            };
+          }),
         };
         return;
       }
@@ -215,24 +288,38 @@ export function Workspace() {
         const copied = clipboardRef.current;
         const scene = compiledRef.current.scene;
         const document = compiledRef.current.document;
-        if (!copied || !scene || !document) return;
-        const component = scene.components.find((item) => item.id === copied.componentId);
-        if (!component) return;
+        if (!copied || copied.items.length === 0 || !scene || !document) return;
         event.preventDefault();
-        const delta = localShiftForWorldX(component.rotation, copied.worldSpanX + 1);
-        const position: Vec3 = [
-          copied.position[0] + delta[0],
-          copied.position[1] + delta[1],
-          copied.position[2] + delta[2],
-        ];
         try {
           const before = new Set(document.members.map((member) => member.id));
-          const next = duplicateMember(textRef.current, copied.memberId, copied.componentId, position, copied.rotation);
+          const items = copied.items.flatMap((item) => {
+            const component = scene.components.find((entry) => entry.id === item.componentId);
+            if (!component) return [];
+            const delta = localShiftForWorldX(component.rotation, copied.worldSpanX + 1);
+            const position: Vec3 = [
+              item.position[0] + delta[0],
+              item.position[1] + delta[1],
+              item.position[2] + delta[2],
+            ];
+            return [{ ...item, position }];
+          });
+          if (items.length === 0) return;
+          const next = duplicateMembers(textRef.current, items);
+          if (next === textRef.current) return;
           commit(next);
-          const added = compileDocument(next).scene?.components
-            .flatMap((item) => item.members)
-            .find((member) => !before.has(member.memberId));
-          if (added) handleSelect(added.key);
+          const added =
+            compileDocument(next).scene?.components
+              .flatMap((item) => item.members)
+              .filter((member) => !before.has(member.memberId)) ?? [];
+          const pasted: Selection =
+            added.length > 1
+              ? { keys: added.map((member) => member.key), mode: "multi" }
+              : added.length === 1
+                ? { keys: [added[0].key], mode: "single" }
+                : EMPTY_SELECTION;
+          selectionRef.current = pasted;
+          setStoredSelection(pasted);
+          setActiveConnectionKey(null);
         } catch {
           // Leave the YAML alone if the member cannot be copied.
         }
@@ -283,7 +370,8 @@ export function Workspace() {
             onChangeText={setText}
             onCommit={commit}
             compiled={compiled}
-            selectedKey={selectedKey}
+            selectedKeys={selection.keys}
+            selectionMode={selection.mode}
             onSelect={handleSelect}
             onHover={setHoveredKey}
             activeConnectionKey={activeConnectionKey}
@@ -294,11 +382,12 @@ export function Workspace() {
         <Panel id="viewport" minSize="28%">
           <Viewport
             scene={compiled.scene}
-            selectedKey={selectedKey}
+            selectedKeys={selection.keys}
+            selectionMode={selection.mode}
             hoveredKey={hoveredKey}
             onSelect={handleSelect}
-            onDeleteMember={handleDeleteMember}
-            onChangePose={handleChangePose}
+            onDeleteMembers={handleDeleteMembers}
+            onChangePoses={handleChangePoses}
             activeConnection={
               compiled.scene?.connections.find((connection) => connection.key === activeConnectionKey) ?? null
             }
@@ -331,7 +420,8 @@ export function Workspace() {
             onCommit={commit}
             onLoadBuild={(yaml) => {
               commit(yaml);
-              setSelectedKey(null);
+              selectionRef.current = EMPTY_SELECTION;
+              setStoredSelection(EMPTY_SELECTION);
               setHoveredKey(null);
               setActiveConnectionKey(null);
             }}
@@ -352,6 +442,7 @@ function isTextField(target: EventTarget | null): boolean {
   if (!element) return false;
   if (element instanceof HTMLInputElement || element instanceof HTMLTextAreaElement) return true;
   if (element instanceof HTMLElement && element.isContentEditable) return true;
+  if (element.closest(".cm-editor")) return true;
   return element.closest("input, textarea, [contenteditable='true']") !== null;
 }
 

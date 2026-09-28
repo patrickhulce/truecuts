@@ -4,7 +4,7 @@ import { PivotControls } from "@react-three/drei";
 import { useEffect, useRef } from "react";
 import * as THREE from "three";
 import { snapPosition, snapRotation, snapSteps } from "@/lib/edit";
-import type { Vec3 } from "@/lib/geometry";
+import { boundarySnapDelta, posedAabb, type Aabb, type Vec3 } from "@/lib/geometry";
 
 const AXIS_COLORS: [string, string, string] = ["#b45309", "#ca8a04", "#92400e"];
 
@@ -39,30 +39,74 @@ function poseFromMatrix(matrix: THREE.Matrix4): PartPose {
   };
 }
 
-function snapDraft(mode: "Arrow" | "Rotator", start: PartPose, raw: PartPose, fine: boolean): PartPose {
+function draggedAxis(start: Vec3, raw: Vec3): 0 | 1 | 2 | null {
+  let axis: 0 | 1 | 2 | null = null;
+  let best = 1e-4;
+  for (let index = 0; index < 3; index++) {
+    const delta = Math.abs(raw[index] - start[index]);
+    if (delta > best) {
+      best = delta;
+      axis = index as 0 | 1 | 2;
+    }
+  }
+  return axis;
+}
+
+function snapDraft(
+  mode: "Arrow" | "Rotator",
+  start: PartPose,
+  raw: PartPose,
+  fine: boolean,
+  bounds: Aabb,
+  targets: Aabb[],
+  boundary: boolean,
+): PartPose {
   const steps = snapSteps(fine);
   if (mode === "Rotator") {
     return { position: start.position, rotation: snapRotation(raw.rotation, steps.deg) };
   }
-  return { position: snapPosition(raw.position, steps.inch), rotation: start.rotation };
+  const position = snapPosition(raw.position, steps.inch);
+  if (boundary) {
+    const axis = draggedAxis(start.position, raw.position);
+    if (axis !== null) {
+      const moving = posedAabb(bounds, position, start.rotation);
+      const delta = boundarySnapDelta(moving, targets, axis);
+      if (delta !== null) position[axis] += delta;
+    }
+  }
+  return { position, rotation: start.rotation };
 }
 
 type PartGizmoProps = {
   pose: PartPose;
   bounds: { min: Vec3; max: Vec3 };
+  snapTargets?: Aabb[];
   fineSnap?: boolean;
+  disableRotations?: boolean;
   onDragStart: () => void;
   onDraft: (position: Vec3, rotation: Vec3) => void;
   onCommit: (position: Vec3, rotation: Vec3) => void;
 };
 
-export function PartGizmo({ pose, bounds, fineSnap = false, onDragStart, onDraft, onCommit }: PartGizmoProps) {
+export function PartGizmo({
+  pose,
+  bounds,
+  snapTargets = [],
+  fineSnap = false,
+  disableRotations = false,
+  onDragStart,
+  onDraft,
+  onCommit,
+}: PartGizmoProps) {
   const modeRef = useRef<"Arrow" | "Rotator" | null>(null);
   const startRef = useRef(pose);
   const lastRef = useRef(pose);
   const rawRef = useRef<PartPose | null>(null);
   const fineRef = useRef(fineSnap);
   const fineSnapRef = useRef(fineSnap);
+  const boundaryRef = useRef(true);
+  const boundsRef = useRef(bounds);
+  const targetsRef = useRef(snapTargets);
   const onDraftRef = useRef(onDraft);
   const size: Vec3 = [
     Math.max(bounds.max[0] - bounds.min[0], 0.01),
@@ -77,6 +121,9 @@ export function PartGizmo({ pose, bounds, fineSnap = false, onDragStart, onDraft
   const pad = 0.15 * Math.max(size[0], size[1], size[2]);
   const matrix = matrixFromPose(pose);
 
+  boundsRef.current = bounds;
+  targetsRef.current = snapTargets;
+
   useEffect(() => {
     onDraftRef.current = onDraft;
   }, [onDraft]);
@@ -87,19 +134,34 @@ export function PartGizmo({ pose, bounds, fineSnap = false, onDragStart, onDraft
   }, [fineSnap]);
 
   useEffect(() => {
-    const applyFine = (modifier: boolean) => {
-      const fine = modifier || fineSnapRef.current;
-      if (fineRef.current === fine) return;
-      fineRef.current = fine;
+    const draftSnap = () => {
       if (!modeRef.current || !rawRef.current) return;
-      const snapped = snapDraft(modeRef.current, startRef.current, rawRef.current, fine);
+      const snapped = snapDraft(
+        modeRef.current,
+        startRef.current,
+        rawRef.current,
+        fineRef.current,
+        boundsRef.current,
+        targetsRef.current,
+        boundaryRef.current,
+      );
       lastRef.current = snapped;
       onDraftRef.current(snapped.position, snapped.rotation);
     };
-    const onKey = (event: KeyboardEvent) => {
-      applyFine(event.metaKey || event.ctrlKey);
+    const applyModifiers = (held: { meta: boolean; shift: boolean } | null) => {
+      const meta = held?.meta ?? false;
+      const shift = held?.shift ?? false;
+      const fine = meta || fineSnapRef.current;
+      const boundary = !(meta || shift);
+      if (fineRef.current === fine && boundaryRef.current === boundary) return;
+      fineRef.current = fine;
+      boundaryRef.current = boundary;
+      draftSnap();
     };
-    const onBlur = () => applyFine(false);
+    const onKey = (event: KeyboardEvent) => {
+      applyModifiers({ meta: event.metaKey || event.ctrlKey, shift: event.shiftKey });
+    };
+    const onBlur = () => applyModifiers(null);
     window.addEventListener("keydown", onKey);
     window.addEventListener("keyup", onKey);
     window.addEventListener("blur", onBlur);
@@ -118,6 +180,7 @@ export function PartGizmo({ pose, bounds, fineSnap = false, onDragStart, onDraft
       offset={[pad, pad, pad]}
       disableScaling
       disableSliders
+      disableRotations={disableRotations}
       depthTest={false}
       fixed
       scale={100}
@@ -139,7 +202,15 @@ export function PartGizmo({ pose, bounds, fineSnap = false, onDragStart, onDraft
             ? { position: startRef.current.position, rotation: next.rotation }
             : { position: next.position, rotation: startRef.current.rotation };
         rawRef.current = drafted;
-        const snapped = snapDraft(modeRef.current ?? "Arrow", startRef.current, drafted, fineRef.current);
+        const snapped = snapDraft(
+          modeRef.current ?? "Arrow",
+          startRef.current,
+          drafted,
+          fineRef.current,
+          boundsRef.current,
+          targetsRef.current,
+          boundaryRef.current,
+        );
         lastRef.current = snapped;
         onDraft(snapped.position, snapped.rotation);
       }}

@@ -63,6 +63,7 @@ type ContactOverlayProps = {
   focusedKey: string | null;
   onFocus: (key: string | null) => void;
   omitKeys?: string[];
+  interactive?: boolean;
 };
 
 export function ContactOverlay({
@@ -72,6 +73,7 @@ export function ContactOverlay({
   focusedKey,
   onFocus,
   omitKeys = [],
+  interactive = true,
 }: ContactOverlayProps) {
   const [hoveredKey, setHoveredKey] = useState<string | null>(null);
   const patches = useMemo(
@@ -121,16 +123,26 @@ export function ContactOverlay({
             key={mesh.key}
             geometry={mesh.geometry}
             renderOrder={4}
-            onPointerOver={(event) => {
-              event.stopPropagation();
-              setHoveredKey(mesh.key);
-            }}
-            onPointerOut={() => setHoveredKey((current) => (current === mesh.key ? null : current))}
-            onPointerDown={(event) => event.stopPropagation()}
-            onClick={(event) => {
-              event.stopPropagation();
-              onFocus(mesh.key === focusedKey ? null : mesh.key);
-            }}
+            onPointerOver={
+              interactive
+                ? (event) => {
+                    event.stopPropagation();
+                    setHoveredKey(mesh.key);
+                  }
+                : undefined
+            }
+            onPointerOut={
+              interactive ? () => setHoveredKey((current) => (current === mesh.key ? null : current)) : undefined
+            }
+            onPointerDown={interactive ? (event) => event.stopPropagation() : undefined}
+            onClick={
+              interactive
+                ? (event) => {
+                    event.stopPropagation();
+                    onFocus(mesh.key === focusedKey ? null : mesh.key);
+                  }
+                : undefined
+            }
           >
             <meshStandardMaterial
               color={focusedMesh ? "#22d3ee" : "#2dd4bf"}

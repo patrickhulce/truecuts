@@ -25,6 +25,7 @@ type PartsBrowserProps = {
   onSelect: (key: string | null, options?: { shift?: boolean }) => void;
   onHover: (key: string | null) => void;
   onActiveConnection: (key: string | null) => void;
+  onOpenComponent: (componentId: string) => void;
 };
 
 const AXIS_NAME = ["length (L)", "width (W)", "thickness (T)"] as const;
@@ -272,6 +273,7 @@ export function PartsBrowser({
   onSelect,
   onHover,
   onActiveConnection,
+  onOpenComponent,
 }: PartsBrowserProps) {
   useEffect(() => () => onHover(null), [onHover]);
 
@@ -307,6 +309,7 @@ export function PartsBrowser({
         }}
         onSelect={onSelect}
         onHover={onHover}
+        onOpenComponent={onOpenComponent}
       />
     );
   }
@@ -490,6 +493,7 @@ function PartDetail({
   onBack,
   onSelect,
   onHover,
+  onOpenComponent,
 }: {
   instance: SceneMemberInstance;
   definition?: ResolvedMember;
@@ -503,6 +507,7 @@ function PartDetail({
   onBack: () => void;
   onSelect: (key: string, options?: { shift?: boolean }) => void;
   onHover: (key: string | null) => void;
+  onOpenComponent: (componentId: string) => void;
 }) {
   const [activeKey, setActiveKey] = useState<string | null>(null);
   const textRef = useRef(text);
@@ -675,7 +680,7 @@ function PartDetail({
               onSave={(inches) => savePosition(2, inches)}
             />
           </div>
-          <ComponentOrigin scene={scene} instanceKey={instance.key} />
+          <ComponentOrigin scene={scene} instanceKey={instance.key} onOpen={onOpenComponent} />
           <p className="px-3 pt-1 text-[11px] text-[#8a7355]">
             X · Y · Z of the corner nearest the component origin. Y is the bottom. Click a value to edit.
           </p>
@@ -939,7 +944,15 @@ function EditableDimension({
   );
 }
 
-function ComponentOrigin({ scene, instanceKey }: { scene: SceneModel; instanceKey: string }) {
+function ComponentOrigin({
+  scene,
+  instanceKey,
+  onOpen,
+}: {
+  scene: SceneModel;
+  instanceKey: string;
+  onOpen: (componentId: string) => void;
+}) {
   const { componentId } = parseInstanceKey(instanceKey);
   const component = scene.components.find((item) => item.id === componentId);
   if (!component) return null;
@@ -948,7 +961,15 @@ function ComponentOrigin({ scene, instanceKey }: { scene: SceneModel; instanceKe
   const rotated = Math.abs(rx) > 1e-6 || Math.abs(ry) > 1e-6 || Math.abs(rz) > 1e-6;
   return (
     <p className="px-3 pt-1 text-[11px] text-[#8a7355]">
-      from {component.label} origin {formatInches(x)}, {formatInches(y)}, {formatInches(z)}
+      from{" "}
+      <button
+        type="button"
+        onClick={() => onOpen(component.id)}
+        className="cursor-pointer text-[#d6c3a3] underline decoration-[#8a7355] underline-offset-2 hover:text-[#f59e0b]"
+      >
+        {component.label}
+      </button>{" "}
+      origin {formatInches(x)}, {formatInches(y)}, {formatInches(z)}
       {rotated ? ` · rotated ${rx}°, ${ry}°, ${rz}°` : ""}
     </p>
   );

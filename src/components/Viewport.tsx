@@ -33,6 +33,7 @@ import {
   type SharedPatch,
   type Vec3,
 } from "@/lib/geometry";
+import { aabbCorners, projectedBoxHitsRect, type ScreenRect } from "@/lib/marquee";
 import type { SelectionMode } from "@/lib/selection";
 import type { ResolvedBore, ResolvedMember } from "@/lib/schema";
 import { computeExplodeOffsets, meshMember, type SceneConnection, type SceneFastener, type SceneModel, type SceneMemberInstance } from "@/lib/scene";
@@ -82,6 +83,7 @@ type ViewportProps = {
   selectionMode: SelectionMode;
   hoveredKey: string | null;
   onSelect: (key: string | null, options?: { shift?: boolean }) => void;
+  onMarqueeSelect: (keys: string[]) => void;
   onDeleteMembers?: (memberIds: string[]) => void;
   onChangePoses?: (updates: PoseUpdate[]) => void;
   onChangeComponentPose?: (update: ComponentPoseUpdate) => void;
@@ -99,6 +101,45 @@ type ViewportProps = {
 };
 
 const ZERO: Vec3 = [0, 0, 0];
+const MARQUEE_SLOP = 4;
+
+function projectToRoot(
+  point: Vec3,
+  camera: THREE.Camera,
+  canvas: DOMRect,
+  root: DOMRect,
+): { x: number; y: number } | null {
+  const vector = new THREE.Vector4(point[0], point[1], point[2], 1);
+  vector.applyMatrix4(camera.matrixWorldInverse);
+  vector.applyMatrix4(camera.projectionMatrix);
+  if (vector.w <= 1e-6) return null;
+  const ndcX = vector.x / vector.w;
+  const ndcY = vector.y / vector.w;
+  const clientX = (ndcX * 0.5 + 0.5) * canvas.width + canvas.left;
+  const clientY = (-ndcY * 0.5 + 0.5) * canvas.height + canvas.top;
+  return { x: clientX - root.left, y: clientY - root.top };
+}
+
+function membersInMarquee(
+  scene: SceneModel,
+  offsets: Map<string, Vec3>,
+  camera: THREE.Camera,
+  canvas: DOMRect,
+  root: DOMRect,
+  rect: ScreenRect,
+): string[] {
+  camera.updateMatrixWorld();
+  const keys: string[] = [];
+  for (const component of scene.components) {
+    for (const part of component.members) {
+      const corners = aabbCorners(part.worldBounds, offsets.get(part.key) ?? ZERO);
+      if (projectedBoxHitsRect(corners, (point) => projectToRoot(point, camera, canvas, root), rect)) {
+        keys.push(part.key);
+      }
+    }
+  }
+  return keys;
+}
 const FLOOR = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0);
 const GIMBAL_REST: [string, string, string] = ["#b45309", "#ca8a04", "#92400e"];
 const GIMBAL_DIM = "#5c3d1e";
@@ -265,6 +306,7 @@ export function Viewport({
   selectionMode,
   hoveredKey,
   onSelect,
+  onMarqueeSelect,
   onDeleteMembers,
   onChangePoses,
   onChangeComponentPose,
@@ -282,9 +324,22 @@ export function Viewport({
 }: ViewportProps) {
   const rootRef = useRef<HTMLDivElement>(null);
   const cameraRef = useRef<THREE.Camera | null>(null);
+  const draggingRef = useRef(false);
+  const marqueeDataRef = useRef({
+    scene: undefined as SceneModel | undefined,
+    worldOffsets: new Map<string, Vec3>(),
+    onMarqueeSelect,
+    enabled: false,
+  });
   const [dropOver, setDropOver] = useState(false);
   const [explode, setExplode] = useState(0);
-  const [dragging, setDragging] = useState(false);
+  const [dragging, setDraggingState] = useState(false);
+  const [marquee, setMarquee] = useState<ScreenRect | null>(null);
+  const [shiftHeld, setShiftHeld] = useState(false);
+  const setDragActive = (active: boolean) => {
+    draggingRef.current = active;
+    setDraggingState(active);
+  };
   const [draft, setDraft] = useState<DraftPose | null>(null);
   const [groupDraft, setGroupDraft] = useState<Vec3 | null>(null);
   const [componentDraft, setComponentDraft] = useState<ComponentPoseUpdate | null>(null);
@@ -305,7 +360,7 @@ export function Viewport({
       const key = event.key.toLowerCase();
       if (key !== "p" && key !== "r" && key !== "m") return;
       event.preventDefault();
-      setDragging(false);
+      setDragActive(false);
       setDraft(null);
       setGroupDraft(null);
       setComponentDraft(null);
@@ -328,6 +383,24 @@ export function Viewport({
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
+  }, []);
+
+  useEffect(() => {
+    const down = (event: globalThis.KeyboardEvent) => {
+      if (event.key === "Shift") setShiftHeld(true);
+    };
+    const up = (event: globalThis.KeyboardEvent) => {
+      if (event.key === "Shift") setShiftHeld(event.shiftKey);
+    };
+    const blur = () => setShiftHeld(false);
+    window.addEventListener("keydown", down);
+    window.addEventListener("keyup", up);
+    window.addEventListener("blur", blur);
+    return () => {
+      window.removeEventListener("keydown", down);
+      window.removeEventListener("keyup", up);
+      window.removeEventListener("blur", blur);
+    };
   }, []);
 
   useEffect(() => {
@@ -379,7 +452,7 @@ export function Viewport({
   };
 
   const clearResizeDrag = () => {
-    setDragging(false);
+    setDragActive(false);
     setResizePreview(null);
   };
 
@@ -430,7 +503,7 @@ export function Viewport({
     setDraft(null);
     setGroupDraft(null);
     setComponentDraft(null);
-    setDragging(false);
+    setDragActive(false);
     setResizePreview(null);
     setFocusedPatch(null);
     onSelect(key, options);
@@ -442,6 +515,93 @@ export function Viewport({
     }
     rootRef.current?.focus();
     if (pan && event.button === 0 && event.target instanceof HTMLCanvasElement) setGrabbing(true);
+    const data = marqueeDataRef.current;
+    if (!data.enabled || event.button !== 0 || !event.shiftKey) return;
+    if (!(event.target instanceof HTMLCanvasElement) || draggingRef.current) return;
+
+    const originX = event.clientX;
+    const originY = event.clientY;
+    const pointerId = event.pointerId;
+    let armed = false;
+    let rect: ScreenRect | null = null;
+
+    const toLocal = (clientX: number, clientY: number) => {
+      const bounds = rootRef.current?.getBoundingClientRect();
+      if (!bounds) return { x: clientX, y: clientY };
+      return { x: clientX - bounds.left, y: clientY - bounds.top };
+    };
+
+    const cleanup = () => {
+      window.removeEventListener("pointermove", move, true);
+      window.removeEventListener("pointerup", up, true);
+      window.removeEventListener("pointercancel", cancel, true);
+      setMarquee(null);
+    };
+
+    const move = (pointer: globalThis.PointerEvent) => {
+      if (pointer.pointerId !== pointerId) return;
+      if (!armed && draggingRef.current) {
+        cleanup();
+        return;
+      }
+      const dx = pointer.clientX - originX;
+      const dy = pointer.clientY - originY;
+      if (!armed && dx * dx + dy * dy < MARQUEE_SLOP * MARQUEE_SLOP) return;
+      armed = true;
+      const start = toLocal(originX, originY);
+      const end = toLocal(pointer.clientX, pointer.clientY);
+      rect = { x0: start.x, y0: start.y, x1: end.x, y1: end.y };
+      setMarquee(rect);
+    };
+
+    const finish = () => {
+      const hit = rect;
+      const root = rootRef.current;
+      const camera = cameraRef.current;
+      const canvas = root?.querySelector("canvas");
+      const live = marqueeDataRef.current;
+      cleanup();
+      if (!hit || !root || !camera || !(canvas instanceof HTMLCanvasElement) || !live.scene) return;
+      const keys = membersInMarquee(
+        live.scene,
+        live.worldOffsets,
+        camera,
+        canvas.getBoundingClientRect(),
+        root.getBoundingClientRect(),
+        hit,
+      );
+      setDraft(null);
+      setGroupDraft(null);
+      setComponentDraft(null);
+      setDragActive(false);
+      setResizePreview(null);
+      setFocusedPatch(null);
+      live.onMarqueeSelect(keys);
+    };
+
+    const up = (pointer: globalThis.PointerEvent) => {
+      if (pointer.pointerId !== pointerId) return;
+      if (!armed) {
+        cleanup();
+        return;
+      }
+      const swallow = (click: MouseEvent) => {
+        click.stopPropagation();
+        click.preventDefault();
+        window.removeEventListener("click", swallow, true);
+      };
+      window.addEventListener("click", swallow, true);
+      finish();
+    };
+
+    const cancel = (pointer: globalThis.PointerEvent) => {
+      if (pointer.pointerId !== pointerId) return;
+      cleanup();
+    };
+
+    window.addEventListener("pointermove", move, true);
+    window.addEventListener("pointerup", up, true);
+    window.addEventListener("pointercancel", cancel, true);
   };
 
   const handleKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
@@ -464,7 +624,7 @@ export function Viewport({
   };
 
   const commitDraft = (position: Vec3, rotation: Vec3) => {
-    setDragging(false);
+    setDragActive(false);
     if (selected && onChangePoses) {
       const { componentId, placementIndex } = parseInstanceKey(selected.key);
       onChangePoses([{ componentId, placementIndex, position, rotation }]);
@@ -473,7 +633,7 @@ export function Viewport({
   };
 
   const commitGroup = (delta: Vec3) => {
-    setDragging(false);
+    setDragActive(false);
     setGroupDraft(null);
     if (!scene || !onChangePoses) return;
     const updates: PoseUpdate[] = [];
@@ -620,6 +780,14 @@ export function Viewport({
     () => (scene && measure ? sceneMeasureTargets(scene, worldOffsets) : { corners: [], edges: [] }),
     [measure, scene, worldOffsets],
   );
+  useEffect(() => {
+    marqueeDataRef.current = {
+      scene,
+      worldOffsets,
+      onMarqueeSelect,
+      enabled: !pan && !resize && !measure,
+    };
+  }, [measure, onMarqueeSelect, pan, resize, scene, worldOffsets]);
 
   return (
     <div
@@ -755,7 +923,7 @@ export function Viewport({
                       position={selected.position}
                       rotation={selected.rotation}
                       snapTargets={snapTargets}
-                      onDragStart={() => setDragging(true)}
+                      onDragStart={() => setDragActive(true)}
                       onDraft={previewResize}
                       onCommit={commitResize}
                       onCancel={clearResizeDrag}
@@ -771,7 +939,7 @@ export function Viewport({
                     bounds={selected.bounds}
                     snapTargets={snapTargets}
                     fineSnap={fineSnap}
-                    onDragStart={() => setDragging(true)}
+                    onDragStart={() => setDragActive(true)}
                     onDraft={(position, rotation) => setDraft({ key: selected.key, position, rotation })}
                     onCommit={commitDraft}
                   />
@@ -788,7 +956,7 @@ export function Viewport({
             snapTargets={groupSnapTargets}
             fineSnap={fineSnap}
             disableRotations
-            onDragStart={() => setDragging(true)}
+            onDragStart={() => setDragActive(true)}
             onDraft={(position) => setGroupDraft(position)}
             onCommit={commitGroup}
           />
@@ -803,10 +971,10 @@ export function Viewport({
             bounds={rigidBounds}
             snapTargets={groupSnapTargets}
             fineSnap={fineSnap}
-            onDragStart={() => setDragging(true)}
+            onDragStart={() => setDragActive(true)}
             onDraft={(position, rotation) => setComponentDraft({ componentId: rigidComponent.id, position, rotation })}
             onCommit={(position, rotation) => {
-              setDragging(false);
+              setDragActive(false);
               setComponentDraft(null);
               onChangeComponentPose({ componentId: rigidComponent.id, position, rotation });
             }}
@@ -844,12 +1012,15 @@ export function Viewport({
             corners={measureTargets.corners}
             edges={measureTargets.edges}
             onActiveAxis={setActiveMeasuredAxis}
-            onDragActive={setDragging}
+            onDragActive={setDragActive}
           />
         ) : null}
         <OrbitControls
           makeDefault
           enabled={!dragging}
+          // Shift+left pans inside OrbitControls, so both stay off while a marquee can start.
+          enableRotate={!(shiftHeld && !pan && !resize && !measure)}
+          enablePan={!(shiftHeld && !pan && !resize && !measure)}
           target={[20, 0, 12]}
           screenSpacePanning={false}
           mouseButtons={{
@@ -873,6 +1044,17 @@ export function Viewport({
           />
         </GizmoHelper>
       </Canvas>
+      {marquee ? (
+        <div
+          className="pointer-events-none absolute z-20 border border-[#f59e0b] bg-[#f59e0b]/25"
+          style={{
+            left: Math.min(marquee.x0, marquee.x1),
+            top: Math.min(marquee.y0, marquee.y1),
+            width: Math.abs(marquee.x1 - marquee.x0),
+            height: Math.abs(marquee.y1 - marquee.y0),
+          }}
+        />
+      ) : null}
       <RendererToolbar
         canUndo={canUndo}
         canRedo={canRedo}
@@ -885,7 +1067,7 @@ export function Viewport({
           setPan(next);
           setResize(false);
           setMeasure(false);
-          setDragging(false);
+          setDragActive(false);
           setDraft(null);
           setGroupDraft(null);
           setComponentDraft(null);
@@ -896,7 +1078,7 @@ export function Viewport({
           setResize(next);
           setPan(false);
           setMeasure(false);
-          setDragging(false);
+          setDragActive(false);
           setDraft(null);
           setGroupDraft(null);
           setComponentDraft(null);
@@ -907,7 +1089,7 @@ export function Viewport({
           setMeasure(next);
           setPan(false);
           setResize(false);
-          setDragging(false);
+          setDragActive(false);
           setDraft(null);
           setGroupDraft(null);
           setComponentDraft(null);

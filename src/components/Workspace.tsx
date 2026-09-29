@@ -11,7 +11,7 @@ import { parseInstanceKey } from "@/lib/fasteners";
 import { groupOrigin, placementAfterReseat, placementInNewGroup, unionAabb, worldPlacementPose, type Vec3 } from "@/lib/geometry";
 import type { SceneComponent, SceneMemberInstance, SceneModel } from "@/lib/scene";
 import { localShiftForWorldX } from "@/lib/geometry/pose";
-import { EMPTY_SELECTION, pruneSelection, selectAll, selectMember, type Selection } from "@/lib/selection";
+import { EMPTY_SELECTION, pruneSelection, selectAdded, selectAll, selectKeys, selectMember, type Selection } from "@/lib/selection";
 import {
   DEFAULT_PREFERENCES,
   PREFERENCES_KEY,
@@ -121,6 +121,26 @@ export function Workspace() {
       current.keys.length === 1 &&
       next.keys[0] === current.keys[0];
     if (!unchangedSingle) setActiveConnectionKey(null);
+    selectionRef.current = next;
+    setStoredSelection(next);
+  }, []);
+
+  const handleSelectKeys = useCallback((keys: string[]) => {
+    setHoveredKey(null);
+    const current = selectionRef.current;
+    const next = selectKeys(current, keys);
+    if (next === current) return;
+    setActiveConnectionKey(null);
+    selectionRef.current = next;
+    setStoredSelection(next);
+  }, []);
+
+  const handleMarqueeSelect = useCallback((keys: string[]) => {
+    setHoveredKey(null);
+    const current = selectionRef.current;
+    const next = selectAdded(current, keys);
+    if (next === current) return;
+    setActiveConnectionKey(null);
     selectionRef.current = next;
     setStoredSelection(next);
   }, []);
@@ -431,6 +451,7 @@ export function Workspace() {
             selectedKeys={selection.keys}
             selectionMode={selection.mode}
             onSelect={handleSelect}
+            onSelectKeys={handleSelectKeys}
             onHover={setHoveredKey}
             activeConnectionKey={activeConnectionKey}
             onActiveConnection={setActiveConnectionKey}
@@ -444,6 +465,7 @@ export function Workspace() {
             selectionMode={selection.mode}
             hoveredKey={hoveredKey}
             onSelect={handleSelect}
+            onMarqueeSelect={handleMarqueeSelect}
             onDeleteMembers={handleDeleteMembers}
             onChangePoses={handleChangePoses}
             onChangeComponentPose={handleChangeComponentPose}

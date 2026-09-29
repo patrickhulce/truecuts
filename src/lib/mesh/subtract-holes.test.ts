@@ -3,7 +3,7 @@ import * as THREE from "three";
 import { placeBore } from "@/lib/geometry/faces";
 import { boxPolyhedron } from "@/lib/geometry/solids";
 import type { Vec3 } from "@/lib/geometry";
-import { facesToGeometry, subtractBores } from "./subtract-holes";
+import { drilledMemberGeometry, facesToGeometry, subtractBores } from "./subtract-holes";
 
 const SIZE: Vec3 = [10, 4, 2];
 
@@ -41,5 +41,38 @@ describe("subtractBores", () => {
     expect(hits[0].point.y).toBeCloseTo(2, 2);
     solid.dispose();
     cut!.dispose();
+  });
+
+  it("opens two holes in one subtraction", () => {
+    const holes = [3, 7].map((at) => placeBore({ face: "LxW@1", at: [at, 2], diameter: 1 }, SIZE));
+    const solid = facesToGeometry(boxPolyhedron(SIZE));
+    const cut = subtractBores(solid, holes);
+    expect(cut).not.toBeNull();
+    const mesh = new THREE.Mesh(cut!);
+    for (const at of [3, 7]) {
+      const ray = new THREE.Raycaster(new THREE.Vector3(at, 4, 2), new THREE.Vector3(0, -1, 0));
+      expect(ray.intersectObject(mesh)).toHaveLength(0);
+    }
+    const between = new THREE.Raycaster(new THREE.Vector3(5, 4, 1), new THREE.Vector3(0, -1, 0));
+    const hits = between.intersectObject(mesh);
+    expect(hits[0].point.y).toBeCloseTo(2, 2);
+    solid.dispose();
+    cut!.dispose();
+  });
+});
+
+describe("drilledMemberGeometry", () => {
+  it("returns a clone so disposing one mesh keeps the cached cut", () => {
+    const hole = placeBore({ face: "LxW@1", at: [5, 2], diameter: 1, depth: 0.5 }, SIZE);
+    const faces = boxPolyhedron(SIZE);
+    const first = drilledMemberGeometry(faces, [hole]);
+    const second = drilledMemberGeometry(faces, [hole]);
+    expect(first.cut).toBe(true);
+    expect(second.cut).toBe(true);
+    expect(first.geometry).not.toBe(second.geometry);
+    const count = second.geometry.getAttribute("position").count;
+    first.geometry.dispose();
+    expect(second.geometry.getAttribute("position").count).toBe(count);
+    second.geometry.dispose();
   });
 });

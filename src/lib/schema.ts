@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { getCatalogPart, getFastenerSubtype, resolveStockSize, type Vec3 } from "./catalog";
+import { getCatalogPart, getFastenerSubtype, resolveStockSize, stockGeometry, type Vec3 } from "./catalog";
 import { FACE_IDS, placeBore, type FaceId, type PlacedBore } from "./geometry/faces";
 import { assignIds, isValidId } from "./identity";
 import { parseAt, parseDimension, type DimensionInput } from "./units";
@@ -136,6 +136,10 @@ const ConnectionFastenerSchema = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("glue"), stock: z.string().min(1), variant: GlueVariantSchema.optional() }),
   z.object({ kind: z.literal("bolt"), stock: z.string().min(1), variant: BoltVariantSchema }),
   z.object({ kind: z.literal("connector"), stock: z.string().min(1) }),
+  z.object({ kind: z.literal("bracket"), stock: z.string().min(1) }),
+  z.object({ kind: z.literal("flat-bracket"), stock: z.string().min(1) }),
+  z.object({ kind: z.literal("saddle"), stock: z.string().min(1) }),
+  z.object({ kind: z.literal("hanger"), stock: z.string().min(1) }),
   z.object({ kind: z.literal("none") }),
 ]);
 
@@ -239,6 +243,10 @@ export type ResolvedConnectionFastener =
   | { kind: "glue"; stock: string; variant: ResolvedGlueVariant }
   | { kind: "bolt"; stock: string; variant: ResolvedBoltVariant }
   | { kind: "connector"; stock: string }
+  | { kind: "bracket"; stock: string }
+  | { kind: "flat-bracket"; stock: string }
+  | { kind: "saddle"; stock: string }
+  | { kind: "hanger"; stock: string }
   | { kind: "none" };
 
 export type ResolvedConnectionMember = {
@@ -525,6 +533,37 @@ function resolveExplicitFastener(
   return { stock: raw.stock, members };
 }
 
+const HARDWARE_GEOMETRY = {
+  bracket: "bracket-l",
+  "flat-bracket": "bracket-flat-l",
+  saddle: "saddle",
+  hanger: "joist-hanger",
+} as const;
+
+const HARDWARE_LABEL = {
+  bracket: "Angle bracket",
+  "flat-bracket": "Flat bracket",
+  saddle: "Saddle",
+  hanger: "Joist hanger",
+} as const;
+
+function resolveHardwareFastener(
+  kind: keyof typeof HARDWARE_GEOMETRY,
+  stock: string,
+  path: Array<string | number>,
+  issues: ValidationIssue[],
+): ResolvedConnectionFastener | undefined {
+  const catalog = getCatalogPart(stock);
+  if (!catalog || stockGeometry(catalog) !== HARDWARE_GEOMETRY[kind]) {
+    issues.push({
+      message: `${HARDWARE_LABEL[kind]} stock must use ${HARDWARE_GEOMETRY[kind]} geometry`,
+      path: [...path, "stock"],
+    });
+    return undefined;
+  }
+  return { kind, stock };
+}
+
 function resolveConnectionFastener(
   raw: RawConnectionFastener,
   path: Array<string | number>,
@@ -542,6 +581,14 @@ function resolveConnectionFastener(
       return undefined;
     }
     return { kind: "connector", stock: raw.stock };
+  }
+  if (
+    raw.kind === "bracket" ||
+    raw.kind === "flat-bracket" ||
+    raw.kind === "saddle" ||
+    raw.kind === "hanger"
+  ) {
+    return resolveHardwareFastener(raw.kind, raw.stock, path, issues);
   }
   const catalog = getCatalogPart(raw.stock);
   const subtype = getFastenerSubtype(raw.stock);

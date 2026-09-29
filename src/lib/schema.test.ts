@@ -463,6 +463,54 @@ describe("validateDocument", () => {
     expect(document?.components[0].connections[0].fasteners[1]).toEqual({ kind: "connector", stock: "connector-t" });
   });
 
+  it("accepts hardware recipes whose stock matches the geometry", () => {
+    const { document, issues } = validateDocument({
+      ...twoParts,
+      components: [
+        {
+          ...twoParts.components[0],
+          connections: [
+            {
+              members: [{ id: "a-1" }, { id: "b-1" }],
+              fasteners: [
+                { kind: "bracket", stock: "bracket-l" },
+                { kind: "flat-bracket", stock: "bracket-flat-l-2x1" },
+                { kind: "saddle", stock: "saddle" },
+                { kind: "hanger", stock: "joist-hanger-2x4" },
+              ],
+            },
+          ],
+        },
+      ],
+    });
+    expect(issues).toEqual([]);
+    expect(document?.components[0].connections[0].fasteners.map((fastener) => fastener.kind)).toEqual([
+      "bracket",
+      "flat-bracket",
+      "saddle",
+      "hanger",
+    ]);
+  });
+
+  it("rejects hardware recipes whose stock is the wrong geometry", () => {
+    const { document, issues } = validateDocument({
+      ...twoParts,
+      components: [
+        {
+          ...twoParts.components[0],
+          connections: [
+            {
+              members: [{ id: "a-1" }, { id: "b-1" }],
+              fasteners: [{ kind: "saddle", stock: "bracket-l" }],
+            },
+          ],
+        },
+      ],
+    });
+    expect(document).toBeUndefined();
+    expect(issues.some((issue) => issue.message.includes("saddle"))).toBe(true);
+  });
+
   it("rejects a connector recipe that is not connector-t", () => {
     const { document, issues } = validateDocument({
       ...twoParts,

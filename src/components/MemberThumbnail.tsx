@@ -1,37 +1,12 @@
 "use client";
 
-import { Canvas, useThree } from "@react-three/fiber";
-import { useEffect, useLayoutEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import * as THREE from "three";
 import type { CatalogPart } from "@/lib/catalog";
 import { catalogMemberInstance } from "@/lib/catalog-preview";
 import { facesToGeometry } from "@/lib/mesh/subtract-holes";
 import type { SceneMemberInstance } from "@/lib/scene";
 import { DEFAULT_PREFERENCES } from "@/lib/preferences";
-import { MemberMesh } from "./MemberMesh";
-
-function Fit({ instance }: { instance: SceneMemberInstance }) {
-  const get = useThree((state) => state.get);
-  const size = useThree((state) => state.size);
-  const { min, max } = instance.bounds;
-
-  useLayoutEffect(() => {
-    const camera = get().camera;
-    if (!(camera instanceof THREE.OrthographicCamera)) return;
-    if (size.width < 1 || size.height < 1) return;
-    const extent = Math.max(max[0] - min[0], max[1] - min[1], max[2] - min[2], 0.5);
-    const center = new THREE.Vector3((min[0] + max[0]) / 2, (min[1] + max[1]) / 2, (min[2] + max[2]) / 2);
-    camera.position.set(center.x + extent, center.y + extent * 0.85, center.z + extent);
-    camera.lookAt(center);
-    camera.near = 0.01;
-    camera.far = extent * 20;
-    camera.zoom = (Math.min(size.width, size.height) * 0.72) / extent;
-    camera.updateProjectionMatrix();
-    get().invalidate();
-  }, [get, max, min, size.height, size.width]);
-
-  return null;
-}
 
 export function MemberThumbnail({
   instance,
@@ -40,26 +15,32 @@ export function MemberThumbnail({
   instance: SceneMemberInstance;
   boreDiameter?: number;
 }) {
-  const isolated: SceneMemberInstance = {
-    ...instance,
-    position: [0, 0, 0],
-    rotation: [0, 0, 0],
-  };
+  const [url, setUrl] = useState<string | null>(null);
+  const { length, width, thickness } = instance.finished;
+  const key = `${instance.key}|${length},${width},${thickness}|${instance.color}|${boreDiameter}`;
+
+  useEffect(() => {
+    let cancelled = false;
+    void renderCatalogPreview(key, instance)
+      .then((next) => {
+        if (!cancelled) setUrl(next);
+      })
+      .catch(() => {
+        if (!cancelled) setUrl(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [instance, key]);
+
   return (
     <div className="pointer-events-none h-16 w-16 shrink-0 overflow-hidden rounded border border-[#3d2a18] bg-[#140e09]">
-      <Canvas
-        orthographic
-        frameloop="demand"
-        dpr={1}
-        gl={{ antialias: true, alpha: false, powerPreference: "low-power" }}
-        camera={{ position: [1, 1, 1], zoom: 8, near: 0.01, far: 1000 }}
-      >
-        <color attach="background" args={["#140e09"]} />
-        <ambientLight intensity={0.75} />
-        <directionalLight position={[4, 6, 3]} intensity={1.15} />
-        <MemberMesh instance={isolated} selected={false} isolate boreDiameter={boreDiameter} />
-        <Fit instance={isolated} />
-      </Canvas>
+      {url ? (
+        // eslint-disable-next-line @next/next/no-img-element -- generated WebGL snapshot, not a remote asset
+        <img alt="" src={url} className="h-full w-full" draggable={false} />
+      ) : (
+        <span className="block h-full w-full" style={{ background: instance.color }} />
+      )}
     </div>
   );
 }

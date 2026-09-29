@@ -104,6 +104,15 @@ export const STOCK_FAMILIES: StockFamily[] = [
     allowsCut: false,
   },
   {
+    id: "joist-hanger-2x4",
+    kind: "hardware",
+    title: "2×4 joist hanger",
+    summary: "Steel · face-mount",
+    variants: ["joist-hanger-2x4"],
+    defaultLabel: "Hanger",
+    allowsCut: false,
+  },
+  {
     id: "rod",
     kind: "hardware",
     title: "Round rod",

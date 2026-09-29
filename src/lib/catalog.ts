@@ -2,9 +2,18 @@ export type Vec3 = [number, number, number];
 
 export type CatalogKind = "lumber" | "sheet" | "hardware" | "fastener";
 
-export type FastenerSubtype = "screw" | "glue" | "bolt" | "nail" | "connector";
+export type FastenerSubtype =
+  | "screw"
+  | "glue"
+  | "bolt"
+  | "nail"
+  | "connector"
+  | "bracket"
+  | "bracket-flat"
+  | "saddle"
+  | "joist-hanger";
 
-export type StockGeometry = "box" | "bracket-l" | "bracket-flat-l" | "connector-t" | "saddle" | "rod";
+export type StockGeometry = "box" | "bracket-l" | "bracket-flat-l" | "connector-t" | "saddle" | "joist-hanger" | "rod";
 
 export type AxisName = "L" | "W" | "T";
 
@@ -349,7 +358,7 @@ export const CATALOG: CatalogPart[] = [
     size: [1.5, 1.5, 0.125],
     material: "steel",
     color: STEEL,
-    notes: "Placed as a part. Fasten with screws through each flange.",
+    notes: "Right-angle connection when both faces have room for the leg, or placed as a part.",
     renderable: true,
   },
   {
@@ -361,7 +370,7 @@ export const CATALOG: CatalogPart[] = [
     size: [2, 2, 0.125],
     material: "steel",
     color: STEEL,
-    notes: "Placed as a part. Fasten with screws through each flange.",
+    notes: "Right-angle connection when both faces have room for the leg, or placed as a part.",
     renderable: true,
   },
   {
@@ -373,7 +382,7 @@ export const CATALOG: CatalogPart[] = [
     size: [2, 1, 0.125],
     material: "steel",
     color: STEEL,
-    notes: "Single-plane L plate. Placed as a part. Fasten with screws through each leg.",
+    notes: "Coplanar corner connection, or placed as a part. Fasten with screws through each leg.",
     renderable: true,
   },
   {
@@ -385,7 +394,7 @@ export const CATALOG: CatalogPart[] = [
     size: [3, 1, 0.125],
     material: "steel",
     color: STEEL,
-    notes: "Single-plane L plate. Placed as a part. Fasten with screws through each leg.",
+    notes: "Coplanar corner connection, or placed as a part. Fasten with screws through each leg.",
     renderable: true,
   },
   {
@@ -402,7 +411,7 @@ export const CATALOG: CatalogPart[] = [
     },
     material: "steel",
     color: STEEL,
-    notes: "Parametric angle L. size is [leg, fold width]; gauge stays 1/8″.",
+    notes: "Parametric angle L for a right-angle connection, or placed as a part. size is [leg, fold width]; gauge stays 1/8″.",
     renderable: true,
   },
   {
@@ -439,7 +448,25 @@ export const CATALOG: CatalogPart[] = [
     features: { flange: { fixed: 2 } },
     material: "steel",
     color: STEEL,
-    notes: "U-saddle. size is [length along the timber, inside width]; gauge stays 1/4″ and the flanges stay 2″ tall.",
+    notes:
+      "U-saddle on a post-top connection, or placed as a part. size is [length along the timber, inside width]; gauge stays 1/4″ and the flanges stay 2″ tall.",
+    renderable: true,
+  },
+  {
+    id: "joist-hanger-2x4",
+    kind: "hardware",
+    label: "2×4 joist hanger",
+    subtype: "joist-hanger",
+    geometry: "joist-hanger",
+    size: [2, 1.5, 0.125],
+    features: {
+      height: { fixed: 3.125 },
+      face: { fixed: 1.5 },
+    },
+    material: "steel",
+    color: STEEL,
+    notes:
+      "Face-mount hanger for a 2×4 on edge butting a header, or placed as a part. The seat is 2″ along the joist, the clear opening is 1½″, the stirrup is 3⅛″, and each header flange is 1½″. Gauge stays ⅛″.",
     renderable: true,
   },
   ...[12, 16, 21].map((length) => metalRod(length)),

@@ -11,6 +11,10 @@ type RendererToolbarProps = {
   onExplode: (value: number) => void;
   pan: boolean;
   onPan: (value: boolean) => void;
+  resize: boolean;
+  onResize: (value: boolean) => void;
+  measure: boolean;
+  onMeasure: (value: boolean) => void;
   showContacts: boolean;
   onShowContacts: (value: boolean) => void;
   enabled: boolean;
@@ -28,6 +32,10 @@ export function RendererToolbar({
   onExplode,
   pan,
   onPan,
+  resize,
+  onResize,
+  measure,
+  onMeasure,
   showContacts,
   onShowContacts,
   enabled,
@@ -58,6 +66,12 @@ export function RendererToolbar({
       <div className="my-0.5 h-px w-6 bg-[#3d2a18]" />
       <ToolButton label="Pan (P)" pressed={pan} onClick={() => onPan(!pan)}>
         <PanIcon />
+      </ToolButton>
+      <ToolButton label="Resize (R)" pressed={resize} disabled={!enabled} onClick={() => onResize(!resize)}>
+        <ResizeIcon />
+      </ToolButton>
+      <ToolButton label="Measure (M)" pressed={measure} disabled={!enabled} onClick={() => onMeasure(!measure)}>
+        <RulerIcon />
       </ToolButton>
       <div className="relative">
         <ToolButton
@@ -188,6 +202,42 @@ function PanIcon() {
         strokeLinecap="round"
         strokeLinejoin="round"
         d="M12 2.5v19M2.5 12h19M12 2.5 8.5 6M12 2.5 15.5 6M12 21.5 8.5 18M12 21.5 15.5 18M2.5 12 6 8.5M2.5 12 6 15.5M21.5 12 18 8.5M21.5 12 18 15.5"
+      />
+    </svg>
+  );
+}
+
+function ResizeIcon() {
+  return (
+    <svg viewBox="0 0 24 24" className="h-4 w-4" aria-hidden="true">
+      <path
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.8"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"
+      />
+    </svg>
+  );
+}
+
+function RulerIcon() {
+  return (
+    <svg viewBox="0 0 24 24" className="h-4 w-4" aria-hidden="true">
+      <path
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.6"
+        strokeLinejoin="round"
+        d="M4 8.5h16v7H4z"
+      />
+      <path
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.4"
+        strokeLinecap="round"
+        d="M7 8.5v3.2M10 8.5v2M13 8.5v3.2M16 8.5v2M19 8.5v3.2"
       />
     </svg>
   );

@@ -7,6 +7,7 @@ import type { CatalogPart } from "@/lib/catalog";
 import { catalogMemberInstance } from "@/lib/catalog-preview";
 import { facesToGeometry } from "@/lib/mesh/subtract-holes";
 import type { SceneMemberInstance } from "@/lib/scene";
+import { DEFAULT_PREFERENCES } from "@/lib/preferences";
 import { MemberMesh } from "./MemberMesh";
 
 function Fit({ instance }: { instance: SceneMemberInstance }) {
@@ -32,7 +33,13 @@ function Fit({ instance }: { instance: SceneMemberInstance }) {
   return null;
 }
 
-export function MemberThumbnail({ instance }: { instance: SceneMemberInstance }) {
+export function MemberThumbnail({
+  instance,
+  boreDiameter = DEFAULT_PREFERENCES.boreDiameter,
+}: {
+  instance: SceneMemberInstance;
+  boreDiameter?: number;
+}) {
   const isolated: SceneMemberInstance = {
     ...instance,
     position: [0, 0, 0],
@@ -50,7 +57,7 @@ export function MemberThumbnail({ instance }: { instance: SceneMemberInstance })
         <color attach="background" args={["#140e09"]} />
         <ambientLight intensity={0.75} />
         <directionalLight position={[4, 6, 3]} intensity={1.15} />
-        <MemberMesh instance={isolated} selected={false} isolate />
+        <MemberMesh instance={isolated} selected={false} isolate boreDiameter={boreDiameter} />
         <Fit instance={isolated} />
       </Canvas>
     </div>

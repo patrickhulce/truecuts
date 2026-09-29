@@ -5,7 +5,8 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import * as THREE from "three";
 import { type Vec3 } from "@/lib/geometry";
 import { memberEdgeGeometry } from "@/lib/mesh/part-edges";
-import { facesToGeometry, subtractBores } from "@/lib/mesh/subtract-holes";
+import { drilledMemberGeometry } from "@/lib/mesh/subtract-holes";
+import { DEFAULT_PREFERENCES } from "@/lib/preferences";
 import type { ResolvedBore } from "@/lib/schema";
 import type { SceneMemberInstance } from "@/lib/scene";
 import { applyStripeShader, stripeCacheKey } from "./stripeMaterial";
@@ -95,6 +96,8 @@ type MemberMeshProps = {
   isolate?: boolean;
   offset?: Vec3;
   interactive?: boolean;
+  /** Inches. Bores smaller than this are omitted from the mesh, markers, and edges. */
+  boreDiameter?: number;
   onSelect?: (key: string, options?: { shift: boolean }) => void;
 };
 
@@ -107,20 +110,18 @@ export function MemberMesh({
   isolate = false,
   offset = ZERO,
   interactive = true,
+  boreDiameter = DEFAULT_PREFERENCES.boreDiameter,
   onSelect,
 }: MemberMeshProps) {
   const drilledBores = useMemo(
-    () => [...instance.bores, ...instance.derivedBores],
-    [instance.bores, instance.derivedBores],
+    () =>
+      [...instance.bores, ...instance.derivedBores].filter((bore) => bore.diameter >= boreDiameter),
+    [boreDiameter, instance.bores, instance.derivedBores],
   );
-  const drilled = useMemo(() => {
-    const solid = facesToGeometry(instance.faces);
-    if (drilledBores.length === 0) return { geometry: solid, cut: false };
-    const cut = subtractBores(solid, drilledBores);
-    if (!cut) return { geometry: solid, cut: false };
-    solid.dispose();
-    return { geometry: cut, cut: true };
-  }, [drilledBores, instance.faces]);
+  const drilled = useMemo(
+    () => drilledMemberGeometry(instance.faces, drilledBores),
+    [drilledBores, instance.faces],
+  );
   const edgeGeometry = useMemo(
     () => (drilled.cut ? memberEdgeGeometry(instance.faces, drilledBores) : null),
     [drilled.cut, drilledBores, instance.faces],

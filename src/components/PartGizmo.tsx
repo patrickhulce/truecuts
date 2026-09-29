@@ -3,8 +3,8 @@
 import { PivotControls } from "@react-three/drei";
 import { useEffect, useRef } from "react";
 import * as THREE from "three";
-import { snapPosition, snapRotation, snapSteps } from "@/lib/edit";
-import { boundarySnapDelta, posedAabb, type Aabb, type Vec3 } from "@/lib/geometry";
+import { snapRotation, snapSteps, snapValue } from "@/lib/edit";
+import { componentAxisForArrow, positionAlongAxis, type Aabb, type Vec3 } from "@/lib/geometry";
 
 const AXIS_COLORS: [string, string, string] = ["#b45309", "#ca8a04", "#92400e"];
 
@@ -60,21 +60,25 @@ function snapDraft(
   bounds: Aabb,
   targets: Aabb[],
   boundary: boolean,
+  axis: 0 | 1 | 2 | null,
 ): PartPose {
   const steps = snapSteps(fine);
   if (mode === "Rotator") {
     return { position: start.position, rotation: snapRotation(raw.rotation, steps.deg) };
   }
-  const position = snapPosition(raw.position, steps.inch);
-  if (boundary) {
-    const axis = draggedAxis(start.position, raw.position);
-    if (axis !== null) {
-      const moving = posedAabb(bounds, position, start.rotation);
-      const delta = boundarySnapDelta(moving, targets, axis);
-      if (delta !== null) position[axis] += delta;
-    }
-  }
-  return { position, rotation: start.rotation };
+  if (axis === null) return { position: start.position, rotation: start.rotation };
+  return {
+    position: positionAlongAxis(
+      start.position,
+      axis,
+      snapValue(raw.position[axis], steps.inch),
+      bounds,
+      start.rotation,
+      targets,
+      boundary,
+    ),
+    rotation: start.rotation,
+  };
 }
 
 type PartGizmoProps = {
@@ -99,6 +103,7 @@ export function PartGizmo({
   onCommit,
 }: PartGizmoProps) {
   const modeRef = useRef<"Arrow" | "Rotator" | null>(null);
+  const axisRef = useRef<0 | 1 | 2 | null>(null);
   const startRef = useRef(pose);
   const lastRef = useRef(pose);
   const rawRef = useRef<PartPose | null>(null);
@@ -121,8 +126,10 @@ export function PartGizmo({
   const pad = 0.15 * Math.max(size[0], size[1], size[2]);
   const matrix = matrixFromPose(pose);
 
-  boundsRef.current = bounds;
-  targetsRef.current = snapTargets;
+  useEffect(() => {
+    boundsRef.current = bounds;
+    targetsRef.current = snapTargets;
+  }, [bounds, snapTargets]);
 
   useEffect(() => {
     onDraftRef.current = onDraft;
@@ -144,6 +151,7 @@ export function PartGizmo({
         boundsRef.current,
         targetsRef.current,
         boundaryRef.current,
+        axisRef.current,
       );
       lastRef.current = snapped;
       onDraftRef.current(snapped.position, snapped.rotation);
@@ -189,6 +197,8 @@ export function PartGizmo({
       hoveredColor="#f59e0b"
       onDragStart={(info) => {
         modeRef.current = info.component === "Rotator" ? "Rotator" : "Arrow";
+        axisRef.current =
+          info.component === "Arrow" ? componentAxisForArrow(info.axis, pose.rotation) : null;
         startRef.current = pose;
         lastRef.current = pose;
         rawRef.current = pose;
@@ -202,6 +212,9 @@ export function PartGizmo({
             ? { position: startRef.current.position, rotation: next.rotation }
             : { position: next.position, rotation: startRef.current.rotation };
         rawRef.current = drafted;
+        if (modeRef.current !== "Rotator" && axisRef.current === null) {
+          axisRef.current = draggedAxis(startRef.current.position, next.position);
+        }
         const snapped = snapDraft(
           modeRef.current ?? "Arrow",
           startRef.current,
@@ -210,12 +223,14 @@ export function PartGizmo({
           boundsRef.current,
           targetsRef.current,
           boundaryRef.current,
+          axisRef.current,
         );
         lastRef.current = snapped;
         onDraft(snapped.position, snapped.rotation);
       }}
       onDragEnd={() => {
         modeRef.current = null;
+        axisRef.current = null;
         rawRef.current = null;
         onCommit(lastRef.current.position, lastRef.current.rotation);
       }}

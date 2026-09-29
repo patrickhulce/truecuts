@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
 import { fitsTConnector, getCatalogPart } from "@/lib/catalog";
 import { connectionKey, connectionNailReach, detailNeighborKeys, type SceneConnection } from "@/lib/connections";
+import { fittingHardware, hardwareKindLabel, isHardwareKind } from "@/lib/hardware-fastener";
 import { addConnection, promoteExplicitFasteners, setConnectionFastener, setMemberDimension, setPlacementPose } from "@/lib/edit";
 import { parseInstanceKey } from "@/lib/fasteners";
 import type { ResolvedBore, ResolvedConnectionFastener, ResolvedCut, ResolvedDocument, ResolvedMember } from "@/lib/schema";
@@ -160,12 +161,17 @@ function bracketMemberIds(connections: SceneConnection[], selectedKey: string): 
 }
 
 function connectionSummary(connection: SceneConnection): {
-  kind: "screw" | "nail" | "glue" | "bolt" | "bracket" | "connector" | "none";
+  kind: "screw" | "nail" | "glue" | "bolt" | "bracket" | "saddle" | "hanger" | "connector" | "none";
   label: string;
   detail: string;
 } {
   const recipes = connection.fasteners.filter((recipe) => recipe.kind !== "none");
   if (recipes.length === 0) return { kind: "none", label: "None", detail: "" };
+  const hardware = recipes.find((recipe) => isHardwareKind(recipe.kind));
+  if (hardware && isHardwareKind(hardware.kind)) {
+    const icon = hardware.kind === "saddle" ? "saddle" : hardware.kind === "hanger" ? "hanger" : "bracket";
+    return { kind: icon, label: hardwareKindLabel(hardware.kind), detail: "" };
+  }
   if (recipes.some((recipe) => recipe.kind === "connector")) {
     return { kind: "connector", label: "T-connector", detail: "" };
   }
@@ -188,7 +194,8 @@ function connectionSummary(connection: SceneConnection): {
   if (!primary || primary.kind === "glue") return { kind: "glue", label: label || "Glue", detail: "bead" };
   const catalog = getCatalogPart(primary.stock);
   const detail = catalog ? `${formatInches(catalog.size[0])} × ${formatInches(catalog.size[1])}` : primary.stock;
-  return { kind: primary.kind, label, detail };
+  const kind = primary.kind === "screw" || primary.kind === "nail" || primary.kind === "bolt" ? primary.kind : "screw";
+  return { kind, label, detail };
 }
 
 function iconKind(subtype: string): "screw" | "nail" | "glue" | "bolt" | "connector" {
@@ -214,6 +221,27 @@ function allowsTConnector(connection: SceneConnection, byKey: Map<string, SceneM
     const part = getCatalogPart(byKey.get(key)?.stockId ?? "");
     return part ? fitsTConnector(part) : false;
   });
+}
+
+function hardwareFor(connection: SceneConnection, scene: SceneModel, document: ResolvedDocument) {
+  const posed = [];
+  for (const key of connection.memberKeys) {
+    const component = scene.components.find((item) => item.members.some((member) => member.key === key));
+    const part = component?.members.find((member) => member.key === key);
+    const definition = document.members.find((member) => member.id === part?.memberId);
+    if (!component || !part || !definition) continue;
+    posed.push({
+      key,
+      faces: part.faces,
+      position: part.position,
+      rotation: part.rotation,
+      componentPosition: component.position,
+      componentRotation: component.rotation,
+      stockSize: definition.size,
+      stockId: part.stockId,
+    });
+  }
+  return fittingHardware(posed, scene.contacts);
 }
 
 function nailReachFor(connection: SceneConnection, scene: SceneModel): number | undefined {
@@ -686,14 +714,30 @@ function PartDetail({
                     connection.memberKeys.includes(neighbor.instance.key),
                 );
                 const explicit = neighbor.fasteners.filter((fastener) => !fastener.connectionKey);
+                const connectorOpen = pair.some((connection) => connection.key === activeKey);
+                function openConnector() {
+                  const first = pair[0];
+                  if (first) {
+                    chooseConnection(activeKey === first.key ? null : first.key);
+                    return;
+                  }
+                  if (explicit.length > 0) {
+                    promote(explicit);
+                    return;
+                  }
+                  attachNone(neighbor.instance.key);
+                }
                 return (
                   <li key={neighbor.instance.key} className="flex items-stretch gap-2 border-b border-[#3d2a18]/60 px-2 py-2">
                     <button
                       type="button"
-                      onClick={(event) => onSelect(neighbor.instance.key, { shift: event.shiftKey })}
+                      aria-pressed={connectorOpen}
+                      onClick={openConnector}
                       onMouseEnter={() => onHover(neighbor.instance.key)}
                       onMouseLeave={() => onHover(null)}
-                      className="flex min-w-0 flex-1 cursor-pointer items-center gap-3 rounded px-1 text-left hover:bg-[#2a1d12]"
+                      className={`flex min-w-0 flex-1 cursor-pointer items-center gap-3 rounded px-1 text-left hover:bg-[#2a1d12] ${
+                        connectorOpen ? "bg-[#2a1d12]" : ""
+                      }`}
                     >
                       <MemberThumbnail instance={neighbor.instance} />
                       <span className="min-w-0">
@@ -747,6 +791,20 @@ function PartDetail({
                           <span className="text-[10px] text-[#8a7355]">{formatFastenerLine(explicit[0])}</span>
                         </button>
                       ) : null}
+                      <button
+                        type="button"
+                        aria-label={`Select ${neighbor.instance.label}`}
+                        onClick={(event) => {
+                          event.preventDefault();
+                          event.stopPropagation();
+                          onSelect(neighbor.instance.key, { shift: event.shiftKey });
+                        }}
+                        onMouseEnter={() => onHover(neighbor.instance.key)}
+                        onMouseLeave={() => onHover(null)}
+                        className="grid h-8 w-8 shrink-0 cursor-pointer place-items-center self-center rounded border border-[#3d2a18] text-[#a89070] hover:border-[#6b4a2b] hover:bg-[#2a1d12] hover:text-[#f59e0b]"
+                      >
+                        <SelectIcon />
+                      </button>
                     </div>
                   </li>
                 );
@@ -760,6 +818,7 @@ function PartDetail({
           <ConnectionEditor
             connection={active}
             allowConnector={allowsTConnector(active, byKey)}
+            hardware={hardwareFor(active, scene, document)}
             nailReach={nailReachFor(active, scene)}
             onChange={writeFastener}
             onClose={() => chooseConnection(null)}
@@ -970,6 +1029,21 @@ function FastenerRow({
         {covered ? " · head covered" : ""}
       </div>
     </li>
+  );
+}
+
+function SelectIcon() {
+  return (
+    <svg viewBox="0 0 24 24" className="h-4 w-4" aria-hidden="true">
+      <path
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.8"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        d="M5 3.5 5.5 16l3.4-3.2 2.6 6.2 2.3-1-2.6-6.1H18.5z"
+      />
+    </svg>
   );
 }
 

@@ -2,7 +2,7 @@ import { isMap, isPair, isScalar, isSeq, parseDocument, type Document } from "ya
 import { getCatalogPart, getFastenerSubtype, resolveStockSize, stockGeometry, type AxisName } from "./catalog";
 import { freeAxes, sizeOverride } from "./catalog-families";
 import { assignIds, type Labeled } from "./identity";
-import type { Vec3 } from "./geometry";
+import { add, axisCoord, faceFrame, isFaceId, rotateEulerXYZ, type Vec3 } from "./geometry";
 import type { RawConnectionFastener } from "./schema";
 import { formatInches, parseDimension } from "./units";
 
@@ -57,6 +57,27 @@ function identified(doc: Document): {
   } catch (error) {
     throw new EditError(error instanceof Error ? error.message : String(error));
   }
+}
+
+/**
+ * Write derived ids onto members and components that omit them.
+ * Ids come from document order, so inserting or removing an entry renumbers
+ * later ones and leaves placements and connections pointing at ids that no
+ * longer exist.
+ */
+function pinAssignedIds(doc: Document): void {
+  const { members, components } = identified(doc);
+  members.forEach((member, index) => pinId(doc, ["members", index], member.id));
+  components.forEach((component, index) => pinId(doc, ["components", index], component.id));
+}
+
+function pinId(doc: Document, path: Array<string | number>, id: string): void {
+  const current = doc.getIn([...path, "id"]);
+  if (typeof current === "string" && current.length > 0) return;
+  const node = doc.getIn(path, true);
+  if (!isMap(node)) return;
+  if (node.has("id")) node.delete("id");
+  node.items.unshift(doc.createPair("id", id));
 }
 
 function seqLength(doc: Document, path: Array<string | number>): number {
@@ -263,6 +284,7 @@ export function addMember(text: string, input: NewMemberInput): string {
   }
 
   const doc = parseEditDocument(text);
+  pinAssignedIds(doc);
   ensureSeq(doc, ["members"]);
   const memberIndex = seqLength(doc, ["members"]);
   doc.setIn(["members", memberIndex], memberNode(doc, { ...input, label }));
@@ -314,6 +336,7 @@ export function addMember(text: string, input: NewMemberInput): string {
  */
 export function deleteMember(text: string, memberId: string): string {
   const doc = parseEditDocument(text);
+  pinAssignedIds(doc);
   const { members } = identified(doc);
   const memberIndex = members.findIndex((member) => member.id === memberId);
   if (memberIndex < 0) {
@@ -364,6 +387,15 @@ export function setPlacementPose(
   const base = ["components", cIndex, "members", placementIndex] as Array<string | number>;
   setVec3(doc, [...base, "position"], position, 4);
   setVec3(doc, [...base, "rotation"], rotation, 1);
+  return doc.toString(STRINGIFY);
+}
+
+/** Write a component's world position (inches) and XYZ euler rotation (degrees). */
+export function setComponentPose(text: string, componentId: string, position: Vec3, rotation: Vec3): string {
+  const doc = parseEditDocument(text);
+  const cIndex = componentIndex(doc, componentId);
+  setVec3(doc, ["components", cIndex, "position"], position, 4);
+  setVec3(doc, ["components", cIndex, "rotation"], rotation, 1);
   return doc.toString(STRINGIFY);
 }
 
@@ -632,7 +664,9 @@ const YAML_CUTS = "Edit cuts in YAML to change this dimension.";
 /**
  * Set one finished dimension (0 = L, 1 = W, 2 = T).
  * Uncut parameterized stock writes a size override. Uncut fixed lumber or sheet
- * goods, and a member with a single square cut on this axis, write that crosscut.
+ * goods write a square crosscut. When cuts exist, every cut on this axis must be
+ * square: a start cut anchors the near end while the end cut moves, is added, or
+ * is removed at full stock. Cuts on other axes are left alone.
  */
 export function setMemberDimension(
   text: string,
@@ -694,20 +728,394 @@ export function setMemberDimension(
     return doc.toString(STRINGIFY);
   }
 
-  const only = raw.cuts.length === 1 ? raw.cuts[0] : undefined;
-  if (only && isSquareCut(only) && only.axis === axis && cuttable) {
-    if (inches > stockSize[axis] + 1e-6) throw new EditError(longer);
-    if (inches >= stockSize[axis] - 1e-6) {
-      writeMemberCuts(doc, memberIndex, []);
-      return doc.toString(STRINGIFY);
+  // Cuts exist. Cuts on other axes are left alone; every cut on this axis must
+  // be square so the finished dimension stays unambiguous.
+  if (!cuttable || free.some((spec) => axisIndex(spec.axis) === axis)) {
+    throw new EditError(YAML_CUTS);
+  }
+  const limit = stockSize[axis];
+  if (inches > limit + 1e-6) throw new EditError(longer);
+  const stored = raw.cuts;
+
+  type Located = { cut: StoredCut & { at: number }; index: number };
+  let start: Located | undefined;
+  let end: Located | undefined;
+  for (const [index, cut] of stored.entries()) {
+    if (cut.axis !== axis) continue;
+    if (!isSquareCut(cut)) throw new EditError(YAML_CUTS);
+    if ((cut.side ?? "end") === "start") {
+      if (start) throw new EditError(YAML_CUTS);
+      start = { cut, index };
+    } else {
+      if (end) throw new EditError(YAML_CUTS);
+      end = { cut, index };
     }
-    const at = (only.side ?? "end") === "start" ? stockSize[axis] - inches : inches;
-    if (!(at > 1e-6) || at >= stockSize[axis] - 1e-6) throw new EditError(YAML_CUTS);
-    doc.setIn(["members", memberIndex, "cuts", 0, "at"], roundInches(at));
+  }
+
+  const anchor = start ? start.cut.at : 0;
+  const finished = (end ? end.cut.at : limit) - anchor;
+  if (nearly(inches, finished)) return text;
+
+  const cutsPath = ["members", memberIndex, "cuts"] as Array<string | number>;
+  const without = (drop: Located): MemberCutInput[] =>
+    stored.filter((_, index) => index !== drop.index).map(cutInput);
+  const moveTo = (target: Located, at: number): string => {
+    const rounded = roundInches(at);
+    if (!(rounded > 1e-6) || rounded >= limit - 1e-6) throw new EditError(YAML_CUTS);
+    doc.setIn([...cutsPath, target.index, "at"], rounded);
+    return doc.toString(STRINGIFY);
+  };
+
+  // No cut on this axis yet: add an end cut, keeping the cuts on other axes.
+  if (!start && !end) {
+    writeMemberCuts(doc, memberIndex, [...stored.map(cutInput), { axis, angle: 90, at: roundInches(inches) }]);
     return doc.toString(STRINGIFY);
   }
 
+  // A start cut anchors the near end, so the end cut moves to make the dimension.
+  if (start && end) {
+    const at = anchor + inches;
+    if (at > limit + 1e-6) {
+      throw new EditError(`${axisName} cannot be longer than the remaining stock (${formatInches(limit - anchor)}).`);
+    }
+    if (nearly(at, limit)) {
+      writeMemberCuts(doc, memberIndex, without(end));
+      return doc.toString(STRINGIFY);
+    }
+    return moveTo(end, at);
+  }
+
+  if (end) {
+    if (inches >= limit - 1e-6) {
+      writeMemberCuts(doc, memberIndex, without(end));
+      return doc.toString(STRINGIFY);
+    }
+    return moveTo(end, inches);
+  }
+
+  if (start) {
+    if (inches >= limit - 1e-6) {
+      writeMemberCuts(doc, memberIndex, without(start));
+      return doc.toString(STRINGIFY);
+    }
+    return moveTo(start, limit - inches);
+  }
+
   throw new EditError(YAML_CUTS);
+}
+
+const AXIS_LABEL = ["Length", "Width", "Thickness"] as const;
+
+function cutInput(cut: MemberCutInput): MemberCutInput {
+  const at = Array.isArray(cut.at) ? ([cut.at[0], cut.at[1]] as [number, number]) : cut.at;
+  const next: MemberCutInput = { axis: cut.axis, angle: cut.angle, at };
+  if (cut.side) next.side = cut.side;
+  if (cut.around !== undefined) next.around = cut.around;
+  return next;
+}
+
+function sameAt(a: number | [number, number], b: number | [number, number]): boolean {
+  if (typeof a === "number" || typeof b === "number") {
+    return typeof a === "number" && typeof b === "number" && nearly(a, b);
+  }
+  return nearly(a[0], b[0]) && nearly(a[1], b[1]);
+}
+
+function sameCutList(a: readonly MemberCutInput[], b: readonly MemberCutInput[]): boolean {
+  if (a.length !== b.length) return false;
+  return a.every((cut, index) => {
+    const other = b[index];
+    if (!other) return false;
+    return (
+      cut.axis === other.axis &&
+      nearly(cut.angle, other.angle) &&
+      sameAt(cut.at, other.at) &&
+      (cut.side ?? "end") === (other.side ?? "end") &&
+      cut.around === other.around
+    );
+  });
+}
+
+function sameSize(a: number[] | undefined, b: number[] | undefined): boolean {
+  if (!a && !b) return true;
+  if (!a || !b || a.length !== b.length) return false;
+  return a.every((value, index) => nearly(value, b[index] ?? NaN));
+}
+
+export type MemberResize =
+  | { kind: "size"; size: number[] | undefined }
+  | { kind: "cuts"; cuts: MemberCutInput[]; shift: number };
+
+const STOCK_EPS = 1e-6;
+
+/**
+ * Spend leftover stock on the opposite cut so `inches` can sit outside `[0, limit]`.
+ * `shift` is inches along `axis` added to each placement, keeping the other face put.
+ * `null` when this drag is inside the stock, or the other end has no leftover length.
+ */
+function absorbStockOverflow(
+  cuts: readonly MemberCutInput[],
+  axis: 0 | 1 | 2,
+  limit: number,
+  inches: number,
+  side: "start" | "end" | undefined,
+): { cuts: MemberCutInput[]; shift: number } | null {
+  const square = cuts.filter((cut): cut is MemberCutInput & { at: number } => cut.axis === axis && isSquareCut(cut));
+  const end = square.find((cut) => (cut.side ?? "end") !== "start");
+  const start = square.find((cut) => cut.side === "start");
+  const target = side === "start" ? start : side === "end" ? end : (end ?? start);
+  const face: "start" | "end" =
+    side ?? (target ? ((target.side ?? "end") === "start" ? "start" : "end") : "end");
+  const lo = start ? start.at : 0;
+  const hi = end ? end.at : limit;
+  const leaving =
+    (face === "start" && inches < -STOCK_EPS) || (face === "end" && inches > limit + STOCK_EPS);
+  if (!leaving) return null;
+
+  let newLo = face === "start" ? inches : lo;
+  let newHi = face === "end" ? inches : hi;
+  let shift = 0;
+  if (face === "start") {
+    const overflow = -inches;
+    if (overflow > limit - hi + STOCK_EPS) return null;
+    newLo = 0;
+    newHi = hi + overflow;
+    shift = inches;
+  } else {
+    const overflow = inches - limit;
+    if (overflow > lo + STOCK_EPS) return null;
+    newHi = limit;
+    newLo = lo - overflow;
+    shift = overflow;
+  }
+
+  const wantStart = newLo > STOCK_EPS;
+  const wantEnd = newHi < limit - STOCK_EPS;
+  const next: MemberCutInput[] = [];
+  let wroteStart = false;
+  let wroteEnd = false;
+  for (const cut of cuts) {
+    if (start && cut === start) {
+      if (wantStart) {
+        const kept = cutInput(cut);
+        kept.at = roundInches(newLo);
+        kept.side = "start";
+        next.push(kept);
+        wroteStart = true;
+      }
+      continue;
+    }
+    if (end && cut === end) {
+      if (wantEnd) {
+        const kept = cutInput(cut);
+        kept.at = roundInches(newHi);
+        next.push(kept);
+        wroteEnd = true;
+      }
+      continue;
+    }
+    next.push(cutInput(cut));
+  }
+  if (wantStart && !wroteStart) {
+    next.push({ axis, angle: 90, at: roundInches(newLo), side: "start" });
+  }
+  if (wantEnd && !wroteEnd) {
+    next.push({ axis, angle: 90, at: roundInches(newHi) });
+  }
+  return { cuts: next, shift };
+}
+
+/**
+ * Next size override or cut list for a resize drag.
+ * `inches` is the face coordinate in the drag-start frame (0 at the stock origin),
+ * or the new free-axis length. `side` picks which face moves: "end" is the far face,
+ * "start" the near one. Omitted keeps the existing far face, or the near face when
+ * only that one is cut. `shift` slides the placement when the dragged face leaves
+ * the stock and the opposite cut grows to match.
+ */
+export function draftMemberResize(
+  part: NonNullable<ReturnType<typeof getCatalogPart>>,
+  stockSize: Vec3,
+  cuts: readonly MemberCutInput[],
+  axis: 0 | 1 | 2,
+  inches: number,
+  side?: "start" | "end",
+): MemberResize {
+  if (!Number.isFinite(inches)) throw new EditError("Dimension must be a finite length.");
+  const label = AXIS_LABEL[axis];
+  const limit = stockSize[axis];
+  const free = freeAxes(part);
+  const freeSpec = free.find((spec) => axisIndex(spec.axis) === axis);
+  const onAxis = cuts.filter((cut) => cut.axis === axis);
+  if (onAxis.some((cut) => !isSquareCut(cut))) throw new EditError(YAML_CUTS);
+
+  if (cuts.length === 0 && freeSpec) {
+    const span = side === "start" ? limit - inches : inches;
+    if (span < freeSpec.min - 1e-6 || span > freeSpec.max + 1e-6) {
+      throw new EditError(
+        `${label} must be between ${formatInches(freeSpec.min)} and ${formatInches(freeSpec.max)}.`,
+      );
+    }
+    const values: Partial<Record<AxisName, number>> = {};
+    for (const spec of free) {
+      const index = axisIndex(spec.axis);
+      values[spec.axis] = index === axis ? span : stockSize[index];
+    }
+    try {
+      resolveStockSize(
+        part,
+        free.map((spec) => values[spec.axis] ?? spec.default),
+      );
+    } catch (error) {
+      throw new EditError(error instanceof Error ? error.message : String(error));
+    }
+    return { kind: "size", size: sizeOverride(part, values) };
+  }
+
+  if (!canCrosscut(part)) {
+    throw new EditError(freeSpec ? `${label} cannot be cut on this stock.` : `${label} is fixed on this stock.`);
+  }
+  const absorbed = absorbStockOverflow(cuts, axis, limit, inches, side);
+  if (absorbed) return { kind: "cuts", cuts: absorbed.cuts, shift: absorbed.shift };
+  if (inches > limit + STOCK_EPS || inches < -STOCK_EPS) {
+    throw new EditError(`${label} cannot extend past the stock (${formatInches(inches < 0 ? 0 : limit)}).`);
+  }
+
+  const square = onAxis.filter(isSquareCut);
+  const end = square.find((cut) => (cut.side ?? "end") !== "start");
+  const start = square.find((cut) => cut.side === "start");
+  const target = side === "start" ? start : side === "end" ? end : (end ?? start);
+  const face: "start" | "end" =
+    side ?? (target ? ((target.side ?? "end") === "start" ? "start" : "end") : "end");
+
+  const without = (drop: MemberCutInput): MemberCutInput[] => {
+    let skipped = false;
+    const next: MemberCutInput[] = [];
+    for (const cut of cuts) {
+      if (!skipped && cut === drop) {
+        skipped = true;
+        continue;
+      }
+      next.push(cutInput(cut));
+    }
+    return next;
+  };
+
+  const gone = `That cut would remove the whole ${label.toLowerCase()}.`;
+  const atRest = face === "start" ? inches <= 1e-6 : inches >= limit - 1e-6;
+  const removesWhole = face === "start" ? inches >= limit - 1e-6 : !(inches > 1e-6);
+  const crosses =
+    face === "start" ? Boolean(end && inches >= end.at - 1e-6) : Boolean(start && inches <= start.at + 1e-6);
+
+  if (!target) {
+    if (atRest) return { kind: "cuts", cuts: cuts.map(cutInput), shift: 0 };
+    if (removesWhole || crosses) throw new EditError(gone);
+    const added: MemberCutInput = { axis, angle: 90, at: roundInches(inches) };
+    if (face === "start") added.side = "start";
+    return { kind: "cuts", cuts: [...cuts.map(cutInput), added], shift: 0 };
+  }
+
+  if (atRest) return { kind: "cuts", cuts: without(target), shift: 0 };
+  if (removesWhole || crosses) throw new EditError(gone);
+
+  return {
+    kind: "cuts",
+    shift: 0,
+    cuts: cuts.map((cut) => {
+      if (cut !== target) return cutInput(cut);
+      const next = cutInput(cut);
+      next.at = roundInches(inches);
+      return next;
+    }),
+  };
+}
+
+/** Move the square cut on `axis`, or add one. Parameterized stock with no cuts changes size. */
+export function resizeMemberCut(
+  text: string,
+  memberId: string,
+  axis: 0 | 1 | 2,
+  inches: number,
+  side?: "start" | "end",
+): string {
+  const doc = parseEditDocument(text);
+  const { members } = identified(doc);
+  const memberIndex = members.findIndex((member) => member.id === memberId);
+  if (memberIndex < 0) throw new EditError(`Unknown member "${memberId}"`);
+
+  const raw = memberRecord(doc, memberIndex);
+  const part = getCatalogPart(raw.stock);
+  if (!part) throw new EditError(`Unknown stock "${raw.stock}"`);
+  if (raw.cuts === null) throw new EditError(YAML_CUTS);
+
+  let stockSize: Vec3;
+  try {
+    stockSize = resolveStockSize(part, raw.size).size;
+  } catch (error) {
+    throw new EditError(error instanceof Error ? error.message : String(error));
+  }
+
+  const drafted = draftMemberResize(part, stockSize, raw.cuts, axis, inches, side);
+  if (drafted.kind === "size") {
+    if (sameSize(raw.size, drafted.size)) return text;
+    writeMemberSize(doc, memberIndex, drafted.size);
+    return doc.toString(STRINGIFY);
+  }
+  const cutsSame = sameCutList(raw.cuts, drafted.cuts);
+  if (cutsSame && nearly(drafted.shift, 0)) return text;
+  if (!cutsSame) writeMemberCuts(doc, memberIndex, drafted.cuts);
+  if (!nearly(drafted.shift, 0)) {
+    shiftMemberPlacements(doc, memberId, axis, drafted.shift);
+    shiftMemberBores(doc, memberIndex, axis, drafted.shift);
+  }
+  return doc.toString(STRINGIFY);
+}
+
+function readVec3(value: unknown): Vec3 | null {
+  if (!Array.isArray(value) || value.length !== 3) return null;
+  return [asInches(value[0], "Vector"), asInches(value[1], "Vector"), asInches(value[2], "Vector")];
+}
+
+function placementPose(doc: Document, path: Array<string | number>): { position: Vec3; rotation: Vec3 } {
+  const node = doc.getIn(path);
+  const value = isMap(node) ? node.toJS(doc) : {};
+  const record = (value ?? {}) as { position?: unknown; rotation?: unknown };
+  return {
+    position: readVec3(record.position) ?? [0, 0, 0],
+    rotation: readVec3(record.rotation) ?? [0, 0, 0],
+  };
+}
+
+/** Slide every placement of `memberId` by `shift` inches along the member's `axis`. */
+function shiftMemberPlacements(doc: Document, memberId: string, axis: 0 | 1 | 2, shift: number): void {
+  const local: Vec3 = [0, 0, 0];
+  local[axisCoord(axis)] = shift;
+  const componentCount = seqLength(doc, ["components"]);
+  for (let cIndex = 0; cIndex < componentCount; cIndex++) {
+    const membersPath = ["components", cIndex, "members"] as Array<string | number>;
+    const count = seqLength(doc, membersPath);
+    for (let pIndex = 0; pIndex < count; pIndex++) {
+      const base = [...membersPath, pIndex];
+      if (doc.getIn([...base, "id"]) !== memberId) continue;
+      const pose = placementPose(doc, base);
+      setVec3(doc, [...base, "position"], add(pose.position, rotateEulerXYZ(local, pose.rotation)), 4);
+    }
+  }
+}
+
+/** Keep bore centers with the face that did not move. `shift` is the placement slide along `axis`. */
+function shiftMemberBores(doc: Document, memberIndex: number, axis: 0 | 1 | 2, shift: number): void {
+  const path = ["members", memberIndex, "bores"] as Array<string | number>;
+  const count = seqLength(doc, path);
+  for (let index = 0; index < count; index++) {
+    const face = doc.getIn([...path, index, "face"]);
+    if (typeof face !== "string" || !isFaceId(face)) continue;
+    const axes = faceFrame(face, [0, 0, 0]).axes;
+    const atIndex = axes[0] === axis ? 0 : axes[1] === axis ? 1 : -1;
+    if (atIndex < 0) continue;
+    const atPath = [...path, index, "at", atIndex];
+    doc.setIn(atPath, roundInches(asInches(doc.getIn(atPath), "Bore at") - shift));
+  }
 }
 
 /** Clone a member definition and place the copy in the same component. Returns the new id. */
@@ -718,6 +1126,7 @@ function placeMemberCopy(
   position: Vec3,
   rotation: Vec3,
 ): string {
+  pinAssignedIds(doc);
   const { members } = identified(doc);
   const memberIndex = members.findIndex((member) => member.id === memberId);
   if (memberIndex < 0) throw new EditError(`Unknown member "${memberId}"`);
@@ -881,4 +1290,330 @@ export function duplicateMembers(text: string, items: DuplicateMember[]): string
   }
   copyInternalJoints(doc, idMap);
   return doc.toString(STRINGIFY);
+}
+
+export type GroupPlacement = {
+  componentId: string;
+  /** Index in that component's members array. */
+  placementIndex: number;
+  position: Vec3;
+  rotation: Vec3;
+};
+
+export type GroupMembersResult = {
+  text: string;
+  componentId: string;
+};
+
+type PlacementSlot = {
+  componentId: string;
+  placementIndex: number;
+  memberId: string;
+  occurrence: number;
+  moved: GroupPlacement | null;
+};
+
+type MemberDest = {
+  componentId: string;
+  occurrence: number;
+};
+
+function placementSlotKey(componentId: string, placementIndex: number): string {
+  return `${componentId}#${placementIndex}`;
+}
+
+function writeMemberRef(
+  doc: Document,
+  memberPath: Array<string | number>,
+  dest: MemberDest,
+  place: "component" | "document",
+): void {
+  const componentPath = [...memberPath, "component"];
+  if (place === "component") {
+    if (doc.getIn(componentPath) !== undefined) doc.deleteIn(componentPath);
+  } else if (doc.getIn(componentPath) !== dest.componentId) {
+    doc.setIn(componentPath, dest.componentId);
+  }
+  const indexPath = [...memberPath, "index"];
+  const current = doc.getIn(indexPath);
+  if (dest.occurrence === 0) {
+    if (current !== undefined) doc.deleteIn(indexPath);
+  } else if (current !== dest.occurrence) {
+    doc.setIn(indexPath, dest.occurrence);
+  }
+}
+
+function groupComponentNode(
+  doc: Document,
+  id: string,
+  origin: Vec3,
+  placements: Array<{ memberId: string; position: Vec3; rotation: Vec3 }>,
+) {
+  const node = doc.createNode({
+    id,
+    label: "Group",
+    position: roundVec(origin, 4),
+    rotation: [0, 0, 0],
+    members: placements.map((placement) => ({
+      id: placement.memberId,
+      position: roundVec(placement.position, 4),
+      rotation: roundVec(placement.rotation, 1),
+    })),
+  });
+  flowSequences(node, new Set(["position", "rotation"]));
+  if (isMap(node)) {
+    const membersPair = node.items.find((item) => isScalar(item.key) && item.key.value === "members");
+    if (membersPair && isSeq(membersPair.value)) {
+      for (const placement of membersPair.value.items) {
+        if (isMap(placement)) placement.flow = true;
+      }
+    }
+  }
+  return node;
+}
+
+/**
+ * Move placements into one component whose origin is `origin`.
+ * When `reseatComponentId` is set, that component keeps its rotation and only its origin moves.
+ * Otherwise the placements are removed from their sources and appended to a new Group
+ * with no rotation. Joints whose members are all in the set move onto that group.
+ * A joint that also names a member left behind becomes document-level.
+ */
+export function groupMembers(
+  text: string,
+  items: GroupPlacement[],
+  origin: Vec3,
+  reseatComponentId?: string,
+): GroupMembersResult {
+  if (items.length === 0) throw new EditError("Select at least one member to group");
+  const doc = parseEditDocument(text);
+  pinAssignedIds(doc);
+  const { members, components } = identified(doc);
+  const componentIndexById = new Map(components.map((component, index) => [component.id, index]));
+
+  const seenItems = new Set<string>();
+  for (const item of items) {
+    const key = placementSlotKey(item.componentId, item.placementIndex);
+    if (seenItems.has(key)) {
+      throw new EditError(`Placement ${item.placementIndex} in "${item.componentId}" is listed twice`);
+    }
+    seenItems.add(key);
+  }
+
+  const slotsByComponent = new Map<string, PlacementSlot[]>();
+  const slotByKey = new Map<string, PlacementSlot>();
+  for (const component of components) {
+    const cIndex = componentIndexById.get(component.id);
+    if (cIndex === undefined) continue;
+    const count = seqLength(doc, ["components", cIndex, "members"]);
+    const seen = new Map<string, number>();
+    const slots: PlacementSlot[] = [];
+    for (let placementIndex = 0; placementIndex < count; placementIndex += 1) {
+      const memberId = doc.getIn(["components", cIndex, "members", placementIndex, "id"]);
+      if (typeof memberId !== "string" || memberId.length === 0) {
+        throw new EditError(`Placement ${placementIndex} in "${component.id}" is missing an id`);
+      }
+      const occurrence = seen.get(memberId) ?? 0;
+      seen.set(memberId, occurrence + 1);
+      const slot: PlacementSlot = {
+        componentId: component.id,
+        placementIndex,
+        memberId,
+        occurrence,
+        moved: null,
+      };
+      slots.push(slot);
+      slotByKey.set(placementSlotKey(component.id, placementIndex), slot);
+    }
+    slotsByComponent.set(component.id, slots);
+  }
+
+  for (const item of items) {
+    const slot = slotByKey.get(placementSlotKey(item.componentId, item.placementIndex));
+    if (!slot) {
+      throw new EditError(
+        `Placement index ${item.placementIndex} is out of range in component "${item.componentId}"`,
+      );
+    }
+    slot.moved = item;
+  }
+
+  if (reseatComponentId) {
+    if (!componentIndexById.has(reseatComponentId)) {
+      throw new EditError(`Unknown component "${reseatComponentId}"`);
+    }
+    for (const item of items) {
+      if (item.componentId !== reseatComponentId) {
+        throw new EditError(`Placement in "${item.componentId}" is not part of "${reseatComponentId}"`);
+      }
+    }
+    const cIndex = componentIndexById.get(reseatComponentId)!;
+    setVec3(doc, ["components", cIndex, "position"], origin, 4);
+    for (const item of items) {
+      setVec3(doc, ["components", cIndex, "members", item.placementIndex, "position"], item.position, 4);
+    }
+    return { text: doc.toString(STRINGIFY), componentId: reseatComponentId };
+  }
+
+  const movedNew = new Map<string, number>();
+  const nextMoved = new Map<string, number>();
+  for (const item of items) {
+    const slot = slotByKey.get(placementSlotKey(item.componentId, item.placementIndex))!;
+    const key = instanceRefKey(slot.componentId, slot.memberId, slot.occurrence);
+    const occurrence = nextMoved.get(slot.memberId) ?? 0;
+    nextMoved.set(slot.memberId, occurrence + 1);
+    movedNew.set(key, occurrence);
+  }
+
+  const stayedNew = new Map<string, number>();
+  for (const slots of slotsByComponent.values()) {
+    const next = new Map<string, number>();
+    for (const slot of slots) {
+      if (slot.moved) continue;
+      const occurrence = next.get(slot.memberId) ?? 0;
+      next.set(slot.memberId, occurrence + 1);
+      stayedNew.set(instanceRefKey(slot.componentId, slot.memberId, slot.occurrence), occurrence);
+    }
+  }
+
+  const removedComponentIds = new Set<string>();
+  for (const [componentId, slots] of slotsByComponent) {
+    if (slots.length > 0 && slots.every((slot) => slot.moved)) removedComponentIds.add(componentId);
+  }
+
+  let newComponentId = "";
+  try {
+    const preview = assignIds([
+      ...members.map((member) => ({ label: member.label, id: member.id })),
+      ...components
+        .filter((component) => !removedComponentIds.has(component.id))
+        .map((component) => ({ label: component.label, id: component.id })),
+      { label: "Group" },
+    ]);
+    newComponentId = preview[preview.length - 1]?.id ?? "";
+  } catch (error) {
+    throw new EditError(error instanceof Error ? error.message : String(error));
+  }
+  if (!newComponentId) throw new EditError("Could not assign a component id");
+
+  const destOf = (ref: JointRef): MemberDest => {
+    const key = instanceRefKey(ref.componentId, ref.memberId, ref.occurrence);
+    if (movedNew.has(key)) return { componentId: newComponentId, occurrence: movedNew.get(key)! };
+    return { componentId: ref.componentId, occurrence: stayedNew.get(key) ?? ref.occurrence };
+  };
+
+  type LocatedJoint = {
+    listPath: Array<string | number>;
+    index: number;
+    impliedComponentId: string | null;
+    refs: JointRef[];
+  };
+  const ontoGroup: LocatedJoint[] = [];
+  const ontoDocument: LocatedJoint[] = [];
+  const updateInPlace: LocatedJoint[] = [];
+
+  const lists: Array<{ path: Array<string | number>; impliedComponentId: string | null }> = [];
+  for (let index = 0; index < components.length; index += 1) {
+    lists.push({ path: ["components", index, "connections"], impliedComponentId: components[index].id });
+    lists.push({ path: ["components", index, "fasteners"], impliedComponentId: components[index].id });
+  }
+  lists.push({ path: ["connections"], impliedComponentId: null });
+  lists.push({ path: ["fasteners"], impliedComponentId: null });
+
+  for (const list of lists) {
+    const count = seqLength(doc, list.path);
+    for (let index = 0; index < count; index += 1) {
+      const refs = readJointMembers(doc, [...list.path, index, "members"], list.impliedComponentId);
+      if (!refs) continue;
+      const keys = refs.map((ref) => instanceRefKey(ref.componentId, ref.memberId, ref.occurrence));
+      if (!keys.every((key) => movedNew.has(key) || stayedNew.has(key))) continue;
+      const located: LocatedJoint = {
+        listPath: list.path,
+        index,
+        impliedComponentId: list.impliedComponentId,
+        refs,
+      };
+      if (keys.every((key) => movedNew.has(key))) ontoGroup.push(located);
+      else if (keys.some((key) => movedNew.has(key)) && list.impliedComponentId) ontoDocument.push(located);
+      else updateInPlace.push(located);
+    }
+  }
+
+  for (const joint of updateInPlace) {
+    const place = joint.impliedComponentId ? "component" : "document";
+    for (let index = 0; index < joint.refs.length; index += 1) {
+      writeMemberRef(doc, [...joint.listPath, joint.index, "members", index], destOf(joint.refs[index]), place);
+    }
+  }
+
+  const clones = [...ontoGroup, ...ontoDocument].flatMap((joint) => {
+    const node = doc.getIn([...joint.listPath, joint.index]);
+    if (!isMap(node)) return [];
+    const copy = node.clone();
+    if (!isMap(copy)) return [];
+    copy.anchor = undefined;
+    return [{ joint, copy }];
+  });
+
+  const removeAt = new Map<string, { path: Array<string | number>; indices: number[] }>();
+  for (const joint of [...ontoGroup, ...ontoDocument]) {
+    const key = JSON.stringify(joint.listPath);
+    const entry = removeAt.get(key);
+    if (entry) entry.indices.push(joint.index);
+    else removeAt.set(key, { path: joint.listPath, indices: [joint.index] });
+  }
+  for (const entry of removeAt.values()) {
+    entry.indices.sort((left, right) => right - left);
+    for (const index of entry.indices) doc.deleteIn([...entry.path, index]);
+  }
+
+  for (const [componentId, slots] of slotsByComponent) {
+    const cIndex = componentIndexById.get(componentId);
+    if (cIndex === undefined) continue;
+    const indices = slots
+      .filter((slot) => slot.moved)
+      .map((slot) => slot.placementIndex)
+      .sort((left, right) => right - left);
+    for (const placementIndex of indices) {
+      doc.deleteIn(["components", cIndex, "members", placementIndex]);
+    }
+  }
+
+  for (let cIndex = components.length - 1; cIndex >= 0; cIndex -= 1) {
+    if (removedComponentIds.has(components[cIndex].id)) doc.deleteIn(["components", cIndex]);
+  }
+
+  ensureSeq(doc, ["components"]);
+  const createdIndex = seqLength(doc, ["components"]);
+  const placements = items.map((item) => {
+    const slot = slotByKey.get(placementSlotKey(item.componentId, item.placementIndex))!;
+    return { memberId: slot.memberId, position: item.position, rotation: item.rotation };
+  });
+  doc.setIn(["components", createdIndex], groupComponentNode(doc, newComponentId, origin, placements));
+
+  const appendJoint = (
+    entry: { joint: LocatedJoint; copy: ReturnType<Document["createNode"]> },
+    listPath: Array<string | number>,
+    place: "component" | "document",
+  ) => {
+    if (!isMap(entry.copy)) return;
+    ensureSeq(doc, listPath);
+    const index = seqLength(doc, listPath);
+    doc.setIn([...listPath, index], entry.copy);
+    for (let member = 0; member < entry.joint.refs.length; member += 1) {
+      writeMemberRef(doc, [...listPath, index, "members", member], destOf(entry.joint.refs[member]), place);
+    }
+  };
+
+  for (const entry of clones) {
+    if (ontoGroup.includes(entry.joint)) {
+      const listName = entry.joint.listPath[entry.joint.listPath.length - 1] === "fasteners" ? "fasteners" : "connections";
+      appendJoint(entry, ["components", createdIndex, listName], "component");
+    } else {
+      const listName = entry.joint.listPath[entry.joint.listPath.length - 1] === "fasteners" ? "fasteners" : "connections";
+      appendJoint(entry, [listName], "document");
+    }
+  }
+
+  return { text: doc.toString(STRINGIFY), componentId: newComponentId };
 }

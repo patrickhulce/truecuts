@@ -2,7 +2,15 @@
 
 import { useEffect, useMemo, useRef } from "react";
 import * as THREE from "three";
-import { tConnectorPolyhedron, type Vec3 } from "@/lib/geometry";
+import {
+  flatLBracketPolyhedron,
+  joistHangerPolyhedron,
+  lBracketPolyhedron,
+  saddlePolyhedron,
+  tConnectorPolyhedron,
+  type Polyhedron,
+  type Vec3,
+} from "@/lib/geometry";
 import { facesToGeometry } from "@/lib/mesh/subtract-holes";
 import type { SceneFastener } from "@/lib/scene";
 import { applyScrewStripeShader, screwStripeCacheKey } from "./stripeMaterial";
@@ -122,6 +130,65 @@ function ConnectorMesh({
       </mesh>
     </group>
   );
+}
+
+function HardwareMesh({
+  fastener,
+  faces,
+  highlighted,
+  offset,
+}: {
+  fastener: SceneFastener;
+  faces: Polyhedron;
+  highlighted: boolean;
+  offset: Vec3;
+}) {
+  const geometry = useMemo(() => facesToGeometry(faces), [faces]);
+  const live = useRef(geometry);
+  // eslint-disable-next-line react-hooks/refs -- dispose guard must see this render's geometry before effects
+  live.current = geometry;
+  useEffect(() => {
+    const current = geometry;
+    return () => {
+      queueMicrotask(() => {
+        if (live.current !== current) current.dispose();
+      });
+    };
+  }, [geometry]);
+  const anchor = fastener.anchor ?? [0, 0, 0];
+  const quaternion = useMemo(
+    () => frameQuaternion(fastener.across ?? [1, 0, 0], fastener.direction),
+    [fastener.across, fastener.direction],
+  );
+  return (
+    <group position={add(fastener.origin, offset)} quaternion={quaternion}>
+      <mesh geometry={geometry} position={[-anchor[0], -anchor[1], -anchor[2]]} castShadow>
+        <Steel color={fastener.color} highlighted={highlighted} />
+      </mesh>
+    </group>
+  );
+}
+
+function SeatedHardwareMesh({
+  fastener,
+  highlighted,
+  offset,
+}: {
+  fastener: SceneFastener;
+  highlighted: boolean;
+  offset: Vec3;
+}) {
+  const [length, width, thickness] = fastener.size;
+  const riser = fastener.riser ?? 0;
+  const face = fastener.face ?? 1.5;
+  const faces = useMemo(() => {
+    const size: Vec3 = [length, width, thickness];
+    if (fastener.subtype === "bracket") return lBracketPolyhedron(size);
+    if (fastener.subtype === "bracket-flat") return flatLBracketPolyhedron(size);
+    if (fastener.subtype === "saddle") return saddlePolyhedron(size, riser);
+    return joistHangerPolyhedron(size, riser, face);
+  }, [fastener.subtype, length, width, thickness, riser, face]);
+  return <HardwareMesh fastener={fastener} faces={faces} highlighted={highlighted} offset={offset} />;
 }
 
 function ScrewMesh({
@@ -259,6 +326,14 @@ export function FastenerMesh({
   }
   if (fastener.subtype === "connector") {
     return <ConnectorMesh fastener={fastener} highlighted={highlighted} offset={offset} />;
+  }
+  if (
+    fastener.subtype === "bracket" ||
+    fastener.subtype === "bracket-flat" ||
+    fastener.subtype === "saddle" ||
+    fastener.subtype === "joist-hanger"
+  ) {
+    return <SeatedHardwareMesh fastener={fastener} highlighted={highlighted} offset={offset} />;
   }
   return <ScrewMesh fastener={fastener} highlighted={highlighted} offset={offset} />;
 }

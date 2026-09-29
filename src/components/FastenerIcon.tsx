@@ -1,5 +1,5 @@
 type FastenerIconProps = {
-  kind: "screw" | "nail" | "glue" | "bolt" | "bracket" | "connector" | "none";
+  kind: "screw" | "nail" | "glue" | "bolt" | "bracket" | "saddle" | "hanger" | "connector" | "none";
 };
 
 export function FastenerIcon({ kind }: FastenerIconProps) {
@@ -40,6 +40,20 @@ export function FastenerIcon({ kind }: FastenerIconProps) {
       <svg viewBox="0 0 24 24" className="h-7 w-7" aria-hidden="true">
         <rect x="6" y="3" width="12" height="2.4" rx="0.4" fill="currentColor" />
         <path fill="currentColor" d="M11 5.4h2V20.2l-1 1.4-1-1.4z" />
+      </svg>
+    );
+  }
+  if (kind === "saddle") {
+    return (
+      <svg viewBox="0 0 24 24" className="h-7 w-7" aria-hidden="true">
+        <path fill="currentColor" d="M3 8h18v3H6v9H3V8zm15 3h3v9h-3v-9z" />
+      </svg>
+    );
+  }
+  if (kind === "hanger") {
+    return (
+      <svg viewBox="0 0 24 24" className="h-7 w-7" aria-hidden="true">
+        <path fill="currentColor" d="M2 4h5v16H4V7H2V4zm15 0h5v3h-2v13h-3V4zM7 14h10v3H7v-3z" />
       </svg>
     );
   }

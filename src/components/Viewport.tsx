@@ -4,35 +4,74 @@ import { GizmoHelper, GizmoViewport, Grid, OrbitControls } from "@react-three/dr
 import { Canvas } from "@react-three/fiber";
 import { useEffect, useMemo, useRef, useState, type DragEvent as ReactDragEvent, type KeyboardEvent, type PointerEvent } from "react";
 import * as THREE from "three";
+import { getCatalogPart, resolveStockSize, stockGeometry } from "@/lib/catalog";
+import { freeAxes } from "@/lib/catalog-families";
 import { connectionContactPairs } from "@/lib/connections";
-import { CATALOG_DRAG_MIME, parseCatalogDrag, SNAP_INCH, snapValue, type NewMemberInput } from "@/lib/edit";
+import {
+  CATALOG_DRAG_MIME,
+  draftMemberResize,
+  parseCatalogDrag,
+  SNAP_INCH,
+  snapValue,
+  type NewMemberInput,
+} from "@/lib/edit";
 import { parseInstanceKey } from "@/lib/fasteners";
 import {
   aabbInFrame,
+  add,
+  axisCoord,
+  boundingBox,
   nearInstanceKeys,
   patchesFor,
   patchNeighbor,
+  posedAabb,
+  rotateEulerXYZ,
   translateByWorldDelta,
   unionAabb,
   type Aabb,
+  type Polyhedron,
   type SharedPatch,
   type Vec3,
 } from "@/lib/geometry";
 import type { SelectionMode } from "@/lib/selection";
-import type { ResolvedBore } from "@/lib/schema";
-import { computeExplodeOffsets, type SceneConnection, type SceneFastener, type SceneModel, type SceneMemberInstance } from "@/lib/scene";
+import type { ResolvedBore, ResolvedMember } from "@/lib/schema";
+import { computeExplodeOffsets, meshMember, type SceneConnection, type SceneFastener, type SceneModel, type SceneMemberInstance } from "@/lib/scene";
+import { extractSceneDimensions, sceneMeasureTargets } from "@/lib/measure";
 import { formatInches } from "@/lib/units";
 import { ConnectionFaceOverlay, ContactOverlay } from "./ContactOverlay";
 import { FastenerMesh } from "./FastenerMesh";
 import { PartGizmo, type PartPose } from "./PartGizmo";
+import { MeasurementOverlay } from "./MeasurementOverlay";
 import { MemberMesh } from "./MemberMesh";
+import { RenderAlertOverlay, useRenderAlert } from "./RenderAlert";
 import { RendererToolbar } from "./RendererToolbar";
+import { ResizeGizmo } from "./ResizeGizmo";
 
 type DraftPose = PartPose & { key: string };
+
+type ResizePreview = {
+  key: string;
+  faces: Polyhedron;
+  bounds: { min: Vec3; max: Vec3 };
+  position: Vec3;
+};
+
+type ResizeUpdate = {
+  memberId: string;
+  axis: 0 | 1 | 2;
+  side: "start" | "end";
+  inches: number;
+};
 
 type PoseUpdate = {
   componentId: string;
   placementIndex: number;
+  position: Vec3;
+  rotation: Vec3;
+};
+
+type ComponentPoseUpdate = {
+  componentId: string;
   position: Vec3;
   rotation: Vec3;
 };
@@ -45,6 +84,7 @@ type ViewportProps = {
   onSelect: (key: string | null, options?: { shift?: boolean }) => void;
   onDeleteMembers?: (memberIds: string[]) => void;
   onChangePoses?: (updates: PoseUpdate[]) => void;
+  onChangeComponentPose?: (update: ComponentPoseUpdate) => void;
   activeConnection?: SceneConnection | null;
   canUndo: boolean;
   canRedo: boolean;
@@ -54,10 +94,20 @@ type ViewportProps = {
   onShowContacts: (value: boolean) => void;
   fineSnap?: boolean;
   onPlaceMember?: (input: NewMemberInput, position: Vec3) => void;
+  members?: ResolvedMember[];
+  onResizeMember?: (update: ResizeUpdate) => string | null;
 };
 
 const ZERO: Vec3 = [0, 0, 0];
 const FLOOR = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0);
+const GIMBAL_REST: [string, string, string] = ["#b45309", "#ca8a04", "#92400e"];
+const GIMBAL_DIM = "#5c3d1e";
+const GIMBAL_HOT = "#fbbf24";
+
+function gimbalAxisColors(axis: 0 | 1 | 2 | null): [string, string, string] {
+  if (axis === null) return GIMBAL_REST;
+  return [axis === 0 ? GIMBAL_HOT : GIMBAL_DIM, axis === 1 ? GIMBAL_HOT : GIMBAL_DIM, axis === 2 ? GIMBAL_HOT : GIMBAL_DIM];
+}
 
 function hasCatalogDrag(data: DataTransfer): boolean {
   return Array.from(data.types).includes(CATALOG_DRAG_MIME);
@@ -217,6 +267,7 @@ export function Viewport({
   onSelect,
   onDeleteMembers,
   onChangePoses,
+  onChangeComponentPose,
   activeConnection = null,
   canUndo,
   canRedo,
@@ -226,6 +277,8 @@ export function Viewport({
   onShowContacts,
   fineSnap = false,
   onPlaceMember,
+  members = [],
+  onResizeMember,
 }: ViewportProps) {
   const rootRef = useRef<HTMLDivElement>(null);
   const cameraRef = useRef<THREE.Camera | null>(null);
@@ -234,20 +287,44 @@ export function Viewport({
   const [dragging, setDragging] = useState(false);
   const [draft, setDraft] = useState<DraftPose | null>(null);
   const [groupDraft, setGroupDraft] = useState<Vec3 | null>(null);
+  const [componentDraft, setComponentDraft] = useState<ComponentPoseUpdate | null>(null);
   const [focusedPatch, setFocusedPatch] = useState<string | null>(null);
   const [pan, setPan] = useState(false);
+  const [resize, setResize] = useState(false);
+  const [measure, setMeasure] = useState(false);
+  const [activeMeasuredAxis, setActiveMeasuredAxis] = useState<0 | 1 | 2 | null>(null);
+  const [resizePreview, setResizePreview] = useState<ResizePreview | null>(null);
   const [grabbing, setGrabbing] = useState(false);
+  const { alert, show } = useRenderAlert();
+  const memberById = useMemo(() => new Map(members.map((member) => [member.id, member])), [members]);
 
   useEffect(() => {
     const onKeyDown = (event: globalThis.KeyboardEvent) => {
       if (event.metaKey || event.ctrlKey || event.altKey || event.repeat) return;
-      if (event.key.toLowerCase() !== "p") return;
       if (isTextField(event.target)) return;
+      const key = event.key.toLowerCase();
+      if (key !== "p" && key !== "r" && key !== "m") return;
       event.preventDefault();
-      setPan((current) => !current);
       setDragging(false);
       setDraft(null);
       setGroupDraft(null);
+      setComponentDraft(null);
+      setResizePreview(null);
+      if (key === "p") {
+        setPan((current) => !current);
+        setResize(false);
+        setMeasure(false);
+        return;
+      }
+      if (key === "m") {
+        setMeasure((current) => !current);
+        setPan(false);
+        setResize(false);
+        return;
+      }
+      setResize((current) => !current);
+      setPan(false);
+      setMeasure(false);
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
@@ -277,13 +354,70 @@ export function Viewport({
   const activeDraft = draft?.key === soleKey ? draft : null;
 
   const posed = (part: SceneMemberInstance, componentRotation: Vec3): SceneMemberInstance => {
+    let next = part;
+    if (resizePreview?.key === part.key) {
+      const { bounds } = resizePreview;
+      next = {
+        ...part,
+        position: resizePreview.position,
+        faces: resizePreview.faces,
+        bounds,
+        finished: {
+          length: bounds.max[0] - bounds.min[0],
+          width: bounds.max[2] - bounds.min[2],
+          thickness: bounds.max[1] - bounds.min[1],
+        },
+      };
+    }
     if (activeDraft?.key === part.key) {
-      return { ...part, position: activeDraft.position, rotation: activeDraft.rotation };
+      return { ...next, position: activeDraft.position, rotation: activeDraft.rotation };
     }
     if (groupDraft && selectedSet.has(part.key)) {
-      return { ...part, position: translateByWorldDelta(part.position, componentRotation, groupDraft) };
+      return { ...next, position: translateByWorldDelta(part.position, componentRotation, groupDraft) };
     }
-    return part;
+    return next;
+  };
+
+  const clearResizeDrag = () => {
+    setDragging(false);
+    setResizePreview(null);
+  };
+
+  const previewResize = (axis: 0 | 1 | 2, side: "start" | "end", inches: number): boolean => {
+    if (!selected) return false;
+    const definition = memberById.get(selected.memberId);
+    const stock = definition ? getCatalogPart(definition.stock) : undefined;
+    if (!definition || !stock) return false;
+    try {
+      const drafted = draftMemberResize(stock, definition.size, definition.cuts, axis, inches, side);
+      const size = drafted.kind === "size" ? resolveStockSize(stock, drafted.size).size : definition.size;
+      const cuts = (drafted.kind === "cuts" ? drafted.cuts : definition.cuts).map((cut) => ({
+        ...cut,
+        side: cut.side ?? ("end" as const),
+      }));
+      const faces = meshMember({ ...definition, size, cuts }, stock);
+      const shift = drafted.kind === "cuts" ? drafted.shift : 0;
+      const along: Vec3 = [0, 0, 0];
+      along[axisCoord(axis)] = shift;
+      setResizePreview({
+        key: selected.key,
+        faces,
+        bounds: boundingBox(faces),
+        position: add(selected.position, rotateEulerXYZ(along, selected.rotation)),
+      });
+      return true;
+    } catch (cause) {
+      clearResizeDrag();
+      show("error", cause instanceof Error ? cause.message : "Could not resize the member");
+      return false;
+    }
+  };
+
+  const commitResize = (axis: 0 | 1 | 2, side: "start" | "end", inches: number) => {
+    clearResizeDrag();
+    if (!selected || !onResizeMember) return;
+    const message = onResizeMember({ memberId: selected.memberId, axis, side, inches });
+    if (message) show("error", message);
   };
 
   const gizmoPose: PartPose | undefined = selected
@@ -295,7 +429,9 @@ export function Viewport({
   const selectPart = (key: string | null, options?: { shift?: boolean }) => {
     setDraft(null);
     setGroupDraft(null);
+    setComponentDraft(null);
     setDragging(false);
+    setResizePreview(null);
     setFocusedPatch(null);
     onSelect(key, options);
   };
@@ -443,6 +579,24 @@ export function Viewport({
     return unionAabb(boxes);
   }, [scene, selectedKeys.length, selectedSet]);
 
+  const rigidComponent = useMemo(() => {
+    if (!scene || selectedKeys.length < 2) return null;
+    let found: (typeof scene.components)[number] | null = null;
+    for (const component of scene.components) {
+      if (component.members.length === 0) continue;
+      const hits = component.members.filter((part) => selectedSet.has(part.key));
+      if (hits.length === 0) continue;
+      if (found || hits.length !== component.members.length || hits.length !== selectedSet.size) return null;
+      found = component;
+    }
+    return found;
+  }, [scene, selectedKeys.length, selectedSet]);
+
+  const rigidBounds = useMemo(() => {
+    if (!rigidComponent) return null;
+    return unionAabb(rigidComponent.members.map((part) => posedAabb(part.bounds, part.position, part.rotation)));
+  }, [rigidComponent]);
+
   const groupSnapTargets = useMemo(() => {
     if (!scene || selectedKeys.length < 2) return [];
     const targets: Aabb[] = [];
@@ -457,6 +611,14 @@ export function Viewport({
   const worldOffsets = useMemo(
     () => (scene ? computeExplodeOffsets(scene, explode) : new Map<string, Vec3>()),
     [scene, explode],
+  );
+  const measuredDimensions = useMemo(
+    () => (scene && measure ? extractSceneDimensions(scene, worldOffsets) : []),
+    [measure, scene, worldOffsets],
+  );
+  const measureTargets = useMemo(
+    () => (scene && measure ? sceneMeasureTargets(scene, worldOffsets) : { corners: [], edges: [] }),
+    [measure, scene, worldOffsets],
   );
 
   return (
@@ -498,7 +660,7 @@ export function Viewport({
         shadows
         camera={{ position: [90, 55, 90], fov: 35, near: 0.1, far: 4000 }}
         onPointerMissed={() => {
-          if (!pan) selectPart(null);
+          if (!pan && !measure) selectPart(null);
         }}
         gl={{ antialias: true }}
         onCreated={({ gl, camera }) => {
@@ -538,12 +700,36 @@ export function Viewport({
           sectionColor="#6b4a2b"
         />
         {scene?.components.map((component) => {
-          const qInv = quaternionInverse(component.rotation);
+          const drafted = componentDraft?.componentId === component.id ? componentDraft : null;
+          const componentPosition = drafted?.position ?? component.position;
+          const componentRotation = drafted?.rotation ?? component.rotation;
+          const qInv = quaternionInverse(componentRotation);
           const showGizmo = Boolean(
-            selected && gizmoPose && onChangePoses && parseInstanceKey(selected.key).componentId === component.id,
+            selected &&
+              gizmoPose &&
+              onChangePoses &&
+              !resize &&
+              !measure &&
+              parseInstanceKey(selected.key).componentId === component.id,
+          );
+          const resizeDefinition = selected ? memberById.get(selected.memberId) : undefined;
+          const resizeStock = resizeDefinition ? getCatalogPart(resizeDefinition.stock) : undefined;
+          const resizeGeometry = resizeStock ? stockGeometry(resizeStock) : undefined;
+          const resizeCuttable = resizeGeometry === "box" || resizeGeometry === "rod";
+          const resizeFreeAxes = (resizeStock ? freeAxes(resizeStock) : []).flatMap((spec) =>
+            spec.axis === "L" ? [0 as const] : spec.axis === "W" ? [1 as const] : [2 as const],
+          );
+          const showResize = Boolean(
+            resize &&
+              !pan &&
+              !measure &&
+              selected &&
+              gizmoPose &&
+              resizeDefinition &&
+              parseInstanceKey(selected.key).componentId === component.id,
           );
           return (
-            <group key={component.id} position={component.position} rotation={deg(component.rotation)}>
+            <group key={component.id} position={componentPosition} rotation={deg(componentRotation)}>
               {component.members.map((part) => (
                 <MemberMesh
                   key={part.key}
@@ -553,10 +739,30 @@ export function Viewport({
                   muted={part.key === singleKey && activeConnection !== null}
                   dimmed={hasSelection && !selectedSet.has(part.key) && part.key !== hoveredKey}
                   offset={toLocalOffset(worldOffsets.get(part.key) ?? ZERO, qInv)}
-                  interactive={!pan}
+                  interactive={!pan && !measure}
                   onSelect={selectPart}
                 />
               ))}
+              {showResize && resizeDefinition && selected ? (
+                <group position={toLocalOffset(worldOffsets.get(selected.key) ?? ZERO, qInv)}>
+                  <group position={selected.position} rotation={deg(selected.rotation)}>
+                    <ResizeGizmo
+                      key={selected.key}
+                      bounds={selected.bounds}
+                      cuttable={resizeCuttable}
+                      freeAxes={resizeFreeAxes}
+                      fineSnap={fineSnap}
+                      position={selected.position}
+                      rotation={selected.rotation}
+                      snapTargets={snapTargets}
+                      onDragStart={() => setDragging(true)}
+                      onDraft={previewResize}
+                      onCommit={commitResize}
+                      onCancel={clearResizeDrag}
+                    />
+                  </group>
+                </group>
+              ) : null}
               {showGizmo && !pan && selected && gizmoPose ? (
                 <group position={toLocalOffset(worldOffsets.get(selected.key) ?? ZERO, qInv)}>
                   <PartGizmo
@@ -574,7 +780,7 @@ export function Viewport({
             </group>
           );
         })}
-        {groupBounds && onChangePoses && !pan ? (
+        {groupBounds && (!rigidComponent || !onChangeComponentPose) && onChangePoses && !pan && !resize && !measure ? (
           <PartGizmo
             key={`${selectedKeys.join("|")}:${groupBounds.min.join(",")}:${groupBounds.max.join(",")}`}
             pose={{ position: groupDraft ?? ZERO, rotation: ZERO }}
@@ -585,6 +791,25 @@ export function Viewport({
             onDragStart={() => setDragging(true)}
             onDraft={(position) => setGroupDraft(position)}
             onCommit={commitGroup}
+          />
+        ) : null}
+        {rigidComponent && rigidBounds && onChangeComponentPose && !pan && !resize && !measure ? (
+          <PartGizmo
+            key={`${rigidComponent.id}:${rigidComponent.position.join(",")}:${rigidComponent.rotation.join(",")}`}
+            pose={{
+              position: componentDraft?.componentId === rigidComponent.id ? componentDraft.position : rigidComponent.position,
+              rotation: componentDraft?.componentId === rigidComponent.id ? componentDraft.rotation : rigidComponent.rotation,
+            }}
+            bounds={rigidBounds}
+            snapTargets={groupSnapTargets}
+            fineSnap={fineSnap}
+            onDragStart={() => setDragging(true)}
+            onDraft={(position, rotation) => setComponentDraft({ componentId: rigidComponent.id, position, rotation })}
+            onCommit={(position, rotation) => {
+              setDragging(false);
+              setComponentDraft(null);
+              onChangeComponentPose({ componentId: rigidComponent.id, position, rotation });
+            }}
           />
         ) : null}
         {scene?.fasteners.map((fastener) => (
@@ -610,7 +835,16 @@ export function Viewport({
             focusedKey={focusedPatch}
             onFocus={setFocusedPatch}
             omitKeys={editedPatchKeys}
-            interactive={!pan}
+            interactive={!pan && !measure}
+          />
+        ) : null}
+        {measure && scene ? (
+          <MeasurementOverlay
+            dimensions={measuredDimensions}
+            corners={measureTargets.corners}
+            edges={measureTargets.edges}
+            onActiveAxis={setActiveMeasuredAxis}
+            onDragActive={setDragging}
           />
         ) : null}
         <OrbitControls
@@ -632,7 +866,11 @@ export function Viewport({
           maxPolarAngle={Math.PI / 2 + (20 * Math.PI) / 180}
         />
         <GizmoHelper alignment="bottom-right" margin={[64, 64]}>
-          <GizmoViewport axisColors={["#b45309", "#ca8a04", "#92400e"]} labelColor="#d6c3a3" />
+          <GizmoViewport
+            axisColors={gimbalAxisColors(measure ? activeMeasuredAxis : null)}
+            axisHeadScale={measure && activeMeasuredAxis !== null ? 1.15 : 1}
+            labelColor="#d6c3a3"
+          />
         </GizmoHelper>
       </Canvas>
       <RendererToolbar
@@ -645,9 +883,35 @@ export function Viewport({
         pan={pan}
         onPan={(next) => {
           setPan(next);
+          setResize(false);
+          setMeasure(false);
           setDragging(false);
           setDraft(null);
           setGroupDraft(null);
+          setComponentDraft(null);
+          setResizePreview(null);
+        }}
+        resize={resize}
+        onResize={(next) => {
+          setResize(next);
+          setPan(false);
+          setMeasure(false);
+          setDragging(false);
+          setDraft(null);
+          setGroupDraft(null);
+          setComponentDraft(null);
+          setResizePreview(null);
+        }}
+        measure={measure}
+        onMeasure={(next) => {
+          setMeasure(next);
+          setPan(false);
+          setResize(false);
+          setDragging(false);
+          setDraft(null);
+          setGroupDraft(null);
+          setComponentDraft(null);
+          setResizePreview(null);
         }}
         showContacts={showContacts}
         onShowContacts={onShowContacts}
@@ -658,8 +922,14 @@ export function Viewport({
           instances={scene.components.flatMap((component) => component.members).filter((part) => selectedSet.has(part.key))}
         />
       ) : selected ? (
-        <SelectionCard instance={selected} attachedFasteners={attachedFasteners} patches={selectedPatches} neighbors={neighborLabels} />
+        <SelectionCard
+          instance={resizePreview?.key === selected.key ? posed(selected, ZERO) : selected}
+          attachedFasteners={attachedFasteners}
+          patches={selectedPatches}
+          neighbors={neighborLabels}
+        />
       ) : null}
+      <RenderAlertOverlay alert={alert} />
       {!scene ? (
         <div className="pointer-events-none absolute inset-0 flex items-center justify-center text-sm text-[#a89070]">
           Fix the YAML to see the build.

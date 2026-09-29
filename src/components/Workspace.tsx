@@ -6,9 +6,10 @@ import { Group, Panel, Separator, usePanelRef } from "react-resizable-panels";
 import { useDocument } from "@/hooks/useDocument";
 import { clearBuilds } from "@/lib/builds-storage";
 import { compileDocument } from "@/lib/compile";
-import { addMember, deleteMember, duplicateMembers, setPlacementPose, type NewMemberInput } from "@/lib/edit";
+import { addMember, deleteMember, duplicateMembers, groupMembers, resizeMemberCut, setComponentPose, setPlacementPose, type NewMemberInput } from "@/lib/edit";
 import { parseInstanceKey } from "@/lib/fasteners";
-import { unionAabb, type Vec3 } from "@/lib/geometry";
+import { groupOrigin, placementAfterReseat, placementInNewGroup, unionAabb, worldPlacementPose, type Vec3 } from "@/lib/geometry";
+import type { SceneComponent, SceneMemberInstance, SceneModel } from "@/lib/scene";
 import { localShiftForWorldX } from "@/lib/geometry/pose";
 import { EMPTY_SELECTION, pruneSelection, selectAll, selectMember, type Selection } from "@/lib/selection";
 import {
@@ -66,6 +67,12 @@ type Clipboard = {
 type PoseUpdate = {
   componentId: string;
   placementIndex: number;
+  position: Vec3;
+  rotation: Vec3;
+};
+
+type ComponentPoseUpdate = {
+  componentId: string;
   position: Vec3;
   rotation: Vec3;
 };
@@ -181,6 +188,16 @@ export function Workspace() {
     [commit, compiled.document, handleSelect, text],
   );
 
+  const handleResizeMember = useCallback((update: { memberId: string; axis: 0 | 1 | 2; side: "start" | "end"; inches: number }): string | null => {
+    try {
+      const next = resizeMemberCut(textRef.current, update.memberId, update.axis, update.inches, update.side);
+      if (next !== textRef.current) commit(next);
+      return null;
+    } catch (cause) {
+      return cause instanceof Error ? cause.message : "Could not resize the member";
+    }
+  }, [commit]);
+
   const handleChangePoses = useCallback(
     (updates: PoseUpdate[]) => {
       if (!compiled.document || updates.length === 0) return;
@@ -190,6 +207,19 @@ export function Workspace() {
           next = setPlacementPose(next, update.componentId, update.placementIndex, update.position, update.rotation);
         }
         commit(next);
+      } catch {
+        // Leave the YAML alone if the AST cannot be updated.
+      }
+    },
+    [commit, compiled.document, text],
+  );
+
+  const handleChangeComponentPose = useCallback(
+    (update: ComponentPoseUpdate) => {
+      if (!compiled.document) return;
+      try {
+        const next = setComponentPose(text, update.componentId, update.position, update.rotation);
+        if (next !== text) commit(next);
       } catch {
         // Leave the YAML alone if the AST cannot be updated.
       }
@@ -323,6 +353,34 @@ export function Workspace() {
         } catch {
           // Leave the YAML alone if the member cannot be copied.
         }
+        return;
+      }
+      if (key === "g" && !event.shiftKey && !event.altKey) {
+        event.preventDefault();
+        event.stopPropagation();
+        const keys = selectionRef.current.keys;
+        const scene = compiledRef.current.scene;
+        if (keys.length === 0 || !scene) return;
+        try {
+          const grouped = groupFromSelection(textRef.current, scene, keys);
+          if (!grouped || grouped.text === textRef.current) return;
+          commit(grouped.text);
+          const members =
+            compileDocument(grouped.text).scene?.components.find((component) => component.id === grouped.componentId)
+              ?.members ?? [];
+          const next: Selection =
+            members.length > 1
+              ? { keys: members.map((member) => member.key), mode: "multi" }
+              : members.length === 1
+                ? { keys: [members[0].key], mode: "single" }
+                : EMPTY_SELECTION;
+          selectionRef.current = next;
+          setStoredSelection(next);
+          setHoveredKey(null);
+          setActiveConnectionKey(null);
+        } catch {
+          // Leave the YAML alone if the group cannot be written.
+        }
       }
     };
     window.addEventListener("keydown", onKeyDown, true);
@@ -388,6 +446,7 @@ export function Workspace() {
             onSelect={handleSelect}
             onDeleteMembers={handleDeleteMembers}
             onChangePoses={handleChangePoses}
+            onChangeComponentPose={handleChangeComponentPose}
             activeConnection={
               compiled.scene?.connections.find((connection) => connection.key === activeConnectionKey) ?? null
             }
@@ -399,6 +458,8 @@ export function Workspace() {
             onShowContacts={(showContacts) => setPreferences((current) => ({ ...current, showContacts }))}
             fineSnap={preferences.fineSnap}
             onPlaceMember={handlePlaceMember}
+            members={compiled.document?.members}
+            onResizeMember={handleResizeMember}
           />
         </Panel>
         <Separator className="w-1.5 bg-[#3d2a18] hover:bg-[#d97706]" />
@@ -435,6 +496,43 @@ export function Workspace() {
       </Group>
     </div>
   );
+}
+
+function groupFromSelection(text: string, scene: SceneModel, keys: string[]) {
+  const selected = new Set(keys);
+  const byKey = new Map<string, { part: SceneMemberInstance; component: SceneComponent }>();
+  for (const component of scene.components) {
+    for (const part of component.members) byKey.set(part.key, { part, component });
+  }
+  const ordered = keys.flatMap((key) => {
+    const hit = byKey.get(key);
+    return hit ? [hit] : [];
+  });
+  if (ordered.length === 0) return null;
+  const origin = groupOrigin(ordered.map(({ part }) => part.worldBounds));
+  if (!origin) return null;
+  const sole = new Set(ordered.map(({ component }) => component.id)).size === 1 ? ordered[0].component : null;
+  const entire = Boolean(
+    sole && sole.members.length === ordered.length && sole.members.every((member) => selected.has(member.key)),
+  );
+  const items = ordered.map(({ part, component }) => {
+    const world = worldPlacementPose(
+      { position: part.position, rotation: part.rotation },
+      { position: component.position, rotation: component.rotation },
+    );
+    const { componentId, placementIndex } = parseInstanceKey(part.key);
+    if (entire) {
+      return {
+        componentId,
+        placementIndex,
+        position: placementAfterReseat(world.position, origin, component.rotation),
+        rotation: part.rotation,
+      };
+    }
+    const local = placementInNewGroup(world, origin);
+    return { componentId, placementIndex, position: local.position, rotation: local.rotation };
+  });
+  return groupMembers(text, items, origin, entire && sole ? sole.id : undefined);
 }
 
 function isTextField(target: EventTarget | null): boolean {

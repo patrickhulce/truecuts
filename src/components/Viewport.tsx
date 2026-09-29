@@ -95,6 +95,8 @@ type ViewportProps = {
   showContacts: boolean;
   onShowContacts: (value: boolean) => void;
   fineSnap?: boolean;
+  /** Inches. Bores smaller than this are omitted from the mesh. */
+  boreDiameter: number;
   onPlaceMember?: (input: NewMemberInput, position: Vec3) => void;
   members?: ResolvedMember[];
   onResizeMember?: (update: ResizeUpdate) => string | null;
@@ -318,6 +320,7 @@ export function Viewport({
   showContacts,
   onShowContacts,
   fineSnap = false,
+  boreDiameter,
   onPlaceMember,
   members = [],
   onResizeMember,
@@ -826,6 +829,7 @@ export function Viewport({
     >
       <Canvas
         shadows
+        frameloop="demand"
         camera={{ position: [90, 55, 90], fov: 35, near: 0.1, far: 4000 }}
         onPointerMissed={() => {
           if (!pan && !measure) selectPart(null);
@@ -908,6 +912,7 @@ export function Viewport({
                   dimmed={hasSelection && !selectedSet.has(part.key) && part.key !== hoveredKey}
                   offset={toLocalOffset(worldOffsets.get(part.key) ?? ZERO, qInv)}
                   interactive={!pan && !measure}
+                  boreDiameter={boreDiameter}
                   onSelect={selectPart}
                 />
               ))}

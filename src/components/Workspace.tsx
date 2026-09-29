@@ -455,6 +455,7 @@ export function Workspace() {
             onHover={setHoveredKey}
             activeConnectionKey={activeConnectionKey}
             onActiveConnection={setActiveConnectionKey}
+            boreDiameter={preferences.boreDiameter}
           />
         </Panel>
         <Separator className="w-1.5 bg-[#3d2a18] hover:bg-[#d97706]" />
@@ -479,6 +480,7 @@ export function Workspace() {
             showContacts={preferences.showContacts}
             onShowContacts={(showContacts) => setPreferences((current) => ({ ...current, showContacts }))}
             fineSnap={preferences.fineSnap}
+            boreDiameter={preferences.boreDiameter}
             onPlaceMember={handlePlaceMember}
             members={compiled.document?.members}
             onResizeMember={handleResizeMember}

@@ -25,6 +25,7 @@ type EditorPanelProps = {
   onHover: (key: string | null) => void;
   activeConnectionKey: string | null;
   onActiveConnection: (key: string | null) => void;
+  boreDiameter: number;
 };
 
 function debugBoreLines(scene: SceneModel | undefined, connectionKey: string | null): string[] | null {
@@ -53,6 +54,7 @@ export function EditorPanel({
   onHover,
   activeConnectionKey,
   onActiveConnection,
+  boreDiameter,
 }: EditorPanelProps) {
   const [tab, setTab] = useState<Tab>("parts");
   const [openComponentId, setOpenComponentId] = useState<string | null>(null);
@@ -90,6 +92,7 @@ export function EditorPanel({
             onHover={onHover}
             onActiveConnection={onActiveConnection}
             onOpenComponent={openComponent}
+            boreDiameter={boreDiameter}
           />
         ) : tab === "components" ? (
           <ComponentsBrowser

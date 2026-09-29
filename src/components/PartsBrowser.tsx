@@ -26,6 +26,7 @@ type PartsBrowserProps = {
   onHover: (key: string | null) => void;
   onActiveConnection: (key: string | null) => void;
   onOpenComponent: (componentId: string) => void;
+  boreDiameter: number;
 };
 
 const AXIS_NAME = ["length (L)", "width (W)", "thickness (T)"] as const;
@@ -274,6 +275,7 @@ export function PartsBrowser({
   onHover,
   onActiveConnection,
   onOpenComponent,
+  boreDiameter,
 }: PartsBrowserProps) {
   useEffect(() => () => onHover(null), [onHover]);
 
@@ -310,6 +312,7 @@ export function PartsBrowser({
         onSelect={onSelect}
         onHover={onHover}
         onOpenComponent={onOpenComponent}
+        boreDiameter={boreDiameter}
       />
     );
   }
@@ -494,6 +497,7 @@ function PartDetail({
   onSelect,
   onHover,
   onOpenComponent,
+  boreDiameter,
 }: {
   instance: SceneMemberInstance;
   definition?: ResolvedMember;
@@ -508,6 +512,7 @@ function PartDetail({
   onSelect: (key: string, options?: { shift?: boolean }) => void;
   onHover: (key: string | null) => void;
   onOpenComponent: (componentId: string) => void;
+  boreDiameter: number;
 }) {
   const [activeKey, setActiveKey] = useState<string | null>(null);
   const textRef = useRef(text);
@@ -744,7 +749,7 @@ function PartDetail({
                         connectorOpen ? "bg-[#2a1d12]" : ""
                       }`}
                     >
-                      <MemberThumbnail instance={neighbor.instance} />
+                      <MemberThumbnail instance={neighbor.instance} boreDiameter={boreDiameter} />
                       <span className="min-w-0">
                         <span className="block truncate text-base text-[#d6c3a3]">{neighbor.instance.label}</span>
                         <span className="block truncate text-xs text-[#8a7355]">{neighbor.instance.memberId}</span>

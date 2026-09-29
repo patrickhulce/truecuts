@@ -91,7 +91,7 @@ function ResizeDot({
 }) {
   const ref = useRef<THREE.Mesh>(null);
   const world = useRef(new THREE.Vector3());
-  const { camera, size } = useThree();
+  const { camera, size, invalidate } = useThree();
   const coord = axisCoord(handle.axis);
   useCursor(hot || active, cursorFor(coord), "auto");
   useFrame(() => {
@@ -99,7 +99,9 @@ function ResizeDot({
     if (!mesh) return;
     mesh.getWorldPosition(world.current);
     const next = dotScale(camera, world.current, size.height);
+    if (Math.abs(mesh.scale.x - next) < 1e-4) return;
     mesh.scale.setScalar(next);
+    invalidate();
   });
   return (
     <mesh

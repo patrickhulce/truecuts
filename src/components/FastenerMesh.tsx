@@ -81,11 +81,11 @@ function NailMesh({
   const shankH = Math.max(fastener.length - headH, 0.05);
   return (
     <group position={add(fastener.origin, offset)} quaternion={quaternion}>
-      <mesh position={[0, headH / 2, 0]} castShadow>
+      <mesh position={[0, headH / 2, 0]}>
         <cylinderGeometry args={[headR, headR, headH, 16]} />
         <Steel color={fastener.color} highlighted={highlighted && !fastener.headCovered} striped={fastener.headCovered} />
       </mesh>
-      <mesh position={[0, headH + shankH / 2, 0]} castShadow>
+      <mesh position={[0, headH + shankH / 2, 0]}>
         <cylinderGeometry args={[shankR, shankR, shankH, 10]} />
         <Steel color={fastener.color} highlighted={highlighted && !fastener.headCovered} striped={fastener.headCovered} />
       </mesh>
@@ -125,7 +125,7 @@ function ConnectorMesh({
   );
   return (
     <group position={add(fastener.origin, offset)} quaternion={quaternion}>
-      <mesh geometry={geometry} position={[-length / 2, -(fastener.bedInset ?? 0), -width / 2]} castShadow>
+      <mesh geometry={geometry} position={[-length / 2, -(fastener.bedInset ?? 0), -width / 2]}>
         <Steel color={fastener.color} highlighted={highlighted} />
       </mesh>
     </group>
@@ -162,7 +162,7 @@ function HardwareMesh({
   );
   return (
     <group position={add(fastener.origin, offset)} quaternion={quaternion}>
-      <mesh geometry={geometry} position={[-anchor[0], -anchor[1], -anchor[2]]} castShadow>
+      <mesh geometry={geometry} position={[-anchor[0], -anchor[1], -anchor[2]]}>
         <Steel color={fastener.color} highlighted={highlighted} />
       </mesh>
     </group>
@@ -207,11 +207,11 @@ function ScrewMesh({
   const shankH = Math.max(fastener.length - headH, 0.1);
   return (
     <group position={add(fastener.origin, offset)} quaternion={quaternion}>
-      <mesh position={[0, headH / 2, 0]} castShadow>
+      <mesh position={[0, headH / 2, 0]}>
         <cylinderGeometry args={[headR, headR * 0.82, headH, 16]} />
         <Steel color={fastener.color} highlighted={highlighted && !fastener.headCovered} striped={fastener.headCovered} />
       </mesh>
-      <mesh position={[0, headH + shankH / 2, 0]} castShadow>
+      <mesh position={[0, headH + shankH / 2, 0]}>
         <cylinderGeometry args={[shankR * 0.45, shankR, shankH, 12]} />
         <Steel color={fastener.color} highlighted={highlighted && !fastener.headCovered} striped={fastener.headCovered} />
       </mesh>
@@ -241,23 +241,23 @@ function BoltMesh({
   const shankH = Math.max(fastener.length, 0.1);
   return (
     <group position={add(fastener.origin, offset)} quaternion={quaternion}>
-      <mesh position={[0, -(washerH + headH / 2), 0]} castShadow>
+      <mesh position={[0, -(washerH + headH / 2), 0]}>
         <cylinderGeometry args={[headR, headR, headH, 6]} />
         <Steel color={fastener.color} highlighted={highlighted} />
       </mesh>
-      <mesh position={[0, -washerH / 2, 0]} castShadow>
+      <mesh position={[0, -washerH / 2, 0]}>
         <cylinderGeometry args={[washerR, washerR, washerH, 24]} />
         <Steel color={fastener.color} highlighted={highlighted} />
       </mesh>
-      <mesh position={[0, shankH / 2, 0]} castShadow>
+      <mesh position={[0, shankH / 2, 0]}>
         <cylinderGeometry args={[shankR, shankR, shankH, 12]} />
         <Steel color={fastener.color} highlighted={highlighted} />
       </mesh>
-      <mesh position={[0, span + washerH / 2, 0]} castShadow>
+      <mesh position={[0, span + washerH / 2, 0]}>
         <cylinderGeometry args={[washerR, washerR, washerH, 24]} />
         <Steel color={fastener.color} highlighted={highlighted} />
       </mesh>
-      <mesh position={[0, span + washerH + nutH / 2, 0]} castShadow>
+      <mesh position={[0, span + washerH + nutH / 2, 0]}>
         <cylinderGeometry args={[headR, headR, nutH, 6]} />
         <Steel color={fastener.color} highlighted={highlighted} />
       </mesh>

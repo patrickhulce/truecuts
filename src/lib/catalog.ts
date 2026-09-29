@@ -469,7 +469,7 @@ export const CATALOG: CatalogPart[] = [
       "Face-mount hanger for a 2×4 on edge butting a header, or placed as a part. The seat is 2″ along the joist, the clear opening is 1½″, the stirrup is 3⅛″, and each header flange is 1½″. Gauge stays ⅛″.",
     renderable: true,
   },
-  ...[12, 16, 21].map((length) => metalRod(length)),
+  ...[12, 16, 21, 24, 30, 36, 48].map((length) => metalRod(length)),
   ...[2, 3, 4].map((length) => hexBolt(0.25, length)),
   ...[3, 4, 6].map((length) => hexBolt(0.375, length)),
   ...[4, 6, 8].map((length) => hexBolt(0.5, length)),

@@ -375,6 +375,10 @@ Parameterized stock (`bracket-l`, `connector-t`, `saddle`) stores a spec per axi
 | `rod-1x12` | hardware | 12 × 1 × 1 | black round bar, 1″ diameter |
 | `rod-1x16` | hardware | 16 × 1 × 1 | black round bar, 1″ diameter |
 | `rod-1x21` | hardware | 21 × 1 × 1 | black round bar, 1″ diameter |
+| `rod-1x24` | hardware | 24 × 1 × 1 | black round bar, 1″ diameter |
+| `rod-1x30` | hardware | 30 × 1 × 1 | black round bar, 1″ diameter |
+| `rod-1x36` | hardware | 36 × 1 × 1 | black round bar, 1″ diameter |
+| `rod-1x48` | hardware | 48 × 1 × 1 | black round bar, 1″ diameter |
 | `bolt-hex-1/4x2` | fastener | ¼″ × 2″ hex bolt | head, washers, nut |
 | `bolt-hex-1/4x3` | fastener | ¼″ × 3″ hex bolt | head, washers, nut |
 | `bolt-hex-1/4x4` | fastener | ¼″ × 4″ hex bolt | head, washers, nut |
@@ -399,7 +403,7 @@ Saddle (`saddle`) part axes: origin at the outside corner of the seat. The seat 
 
 Joist hanger (`joist-hanger-2x4`): a face-mount hanger for a 2×4 set on edge. Origin at the outer corner of the near header flange. The seat is L long and T thick. The clear opening is W. Each side is gauge T and rises the catalog `height` (3⅛″) along +Y. At the header end each side bends out into a flange of catalog width `face` (1½″) and gauge T. Planar cuts are not allowed.
 
-Round rod (`rod-1x12`, `rod-1x16`, `rod-1x21`): a 16-side prism along L. The circle of diameter min(W, T) is inscribed in the W×T square, so a 1″ rod’s bounding box stays L×1×1. It takes the same planar cuts as lumber.
+Round rod (`rod-1x12`, `rod-1x16`, `rod-1x21`, `rod-1x24`, `rod-1x30`, `rod-1x36`, `rod-1x48`): a 16-side prism along L. The circle of diameter min(W, T) is inscribed in the W×T square, so a 1″ rod’s bounding box stays L×1×1. It takes the same planar cuts as lumber.
 
 ## Procedural components
 

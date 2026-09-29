@@ -14,6 +14,7 @@ import {
   cutToPlane,
   findContacts,
   flatLBracketPolyhedron,
+  joistHangerPolyhedron,
   lBracketPolyhedron,
   normalize,
   polyhedronVolume,
@@ -177,6 +178,7 @@ const GEOMETRY_LABEL: Record<Exclude<StockGeometry, "box" | "rod">, string> = {
   "bracket-flat-l": "Flat L-bracket",
   "connector-t": "T-connector",
   saddle: "Saddle",
+  "joist-hanger": "Joist hanger",
 };
 
 function featureHeight(member: ResolvedMember, name: string, label: string): number {
@@ -201,6 +203,12 @@ function hardwarePolyhedron(member: ResolvedMember, geometry: Exclude<StockGeome
       return tConnectorPolyhedron(member.size, featureHeight(member, "riser", label));
     case "saddle":
       return saddlePolyhedron(member.size, featureHeight(member, "flange", label));
+    case "joist-hanger":
+      return joistHangerPolyhedron(
+        member.size,
+        featureHeight(member, "height", label),
+        featureHeight(member, "face", label),
+      );
   }
 }
 

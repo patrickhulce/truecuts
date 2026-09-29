@@ -561,3 +561,210 @@ components:
     expect(connector?.size[1]).toBeCloseTo(5.5, 4);
   });
 });
+
+describe("hardware seated on a fitting joint", () => {
+  it("seats a saddle on a post top and an angle bracket where the beam runs past", () => {
+    const result = compileDocument(`version: 1
+name: Cap
+members:
+  - label: Post
+    stock: 6x6x8
+    cuts:
+      - { axis: 0, angle: 90, at: 12 }
+  - label: Beam
+    stock: 6x6x8
+    cuts:
+      - { axis: 0, angle: 90, at: 12 }
+components:
+  - label: Frame
+    members:
+      - { id: post-1, position: [0, 0, 0], rotation: [0, 0, 90] }
+      - { id: beam-1, position: [-5.5, 12, 0] }
+    connections:
+      - members:
+          - { id: post-1 }
+          - { id: beam-1 }
+        fasteners:
+          - { kind: saddle, stock: saddle }
+`);
+    expect(result.diagnostics.filter((item) => item.severity === "error")).toEqual([]);
+    const saddle = result.scene?.fasteners.find((fastener) => fastener.subtype === "saddle");
+    expect(saddle?.size[0]).toBeCloseTo(5.5, 1);
+    expect(saddle?.size[1]).toBeCloseTo(5.5, 1);
+    expect(saddle?.size[2]).toBeCloseTo(0.25, 2);
+    expect(saddle?.riser).toBe(2);
+    expect(Math.abs(saddle?.direction[1] ?? 0)).toBeGreaterThan(0.9);
+    expect(saddle?.origin[1]).toBeCloseTo(12, 1);
+    expect(result.scene?.components[0].members.every((member) => member.fastened)).toBe(true);
+
+    const braced = compileDocument(`version: 1
+name: Brace
+members:
+  - label: Post
+    stock: 6x6x8
+    cuts:
+      - { axis: 0, angle: 90, at: 12 }
+  - label: Beam
+    stock: 6x6x8
+    cuts:
+      - { axis: 0, angle: 90, at: 12 }
+components:
+  - label: Frame
+    members:
+      - { id: post-1, position: [0, 0, 0], rotation: [0, 0, 90] }
+      - { id: beam-1, position: [-5.5, 12, 0] }
+    connections:
+      - members:
+          - { id: post-1 }
+          - { id: beam-1 }
+        fasteners:
+          - { kind: bracket, stock: bracket-l }
+`);
+    expect(braced.diagnostics.filter((item) => item.severity === "error")).toEqual([]);
+    const bracket = braced.scene?.fasteners.find((fastener) => fastener.subtype === "bracket");
+    expect(bracket?.size[2]).toBeCloseTo(0.125, 3);
+    expect(bracket?.size[0]).toBeGreaterThanOrEqual(1.5);
+    expect(bracket?.size[1]).toBeGreaterThan(1.5);
+    expect(braced.scene?.components[0].members.every((member) => member.fastened)).toBe(true);
+  });
+
+  it("seats an angle bracket in the inside corner of a leg and apron", () => {
+    const result = compileDocument(`version: 1
+name: Bench
+members:
+  - label: Leg
+    stock: 2x4x8
+    cuts:
+      - { axis: 0, angle: 90, at: 30 }
+  - label: Apron
+    stock: 2x4x8
+    cuts:
+      - { axis: 0, angle: 90, at: 33 }
+components:
+  - label: Frame
+    members:
+      - { id: leg-1, position: [0, 0, 0], rotation: [90, 90, 0] }
+      - { id: apron-1, position: [3.5, 30, 0.5], rotation: [90, 0, 0] }
+    connections:
+      - members:
+          - { id: apron-1 }
+          - { id: leg-1 }
+        fasteners:
+          - { kind: bracket, stock: bracket-l-1.5x1.5 }
+          - { kind: hanger, stock: joist-hanger-2x4 }
+`);
+    expect(result.diagnostics.filter((item) => item.severity === "error")).toEqual([]);
+    const bracket = result.scene?.fasteners.find((fastener) => fastener.subtype === "bracket");
+    expect(bracket?.size[0]).toBeCloseTo(1.5, 2);
+    expect(bracket?.size[1]).toBeCloseTo(1.5, 2);
+    expect(result.scene?.fasteners.some((fastener) => fastener.subtype === "joist-hanger")).toBe(false);
+    expect(result.diagnostics.some((item) => item.severity === "warning" && item.message.includes("Joist hanger"))).toBe(true);
+    expect(result.scene?.components[0].members.every((member) => member.fastened)).toBe(true);
+  });
+
+  it("seats a joist hanger on a 2×4 set on edge", () => {
+    const result = compileDocument(`version: 1
+name: Joist
+members:
+  - label: Header
+    stock: 2x6x8
+    cuts:
+      - { axis: 0, angle: 90, at: 12 }
+  - label: Joist
+    stock: 2x4x8
+    cuts:
+      - { axis: 0, angle: 90, at: 24 }
+components:
+  - label: Floor
+    members:
+      - { id: header-1, position: [0, 0, 0], rotation: [0, 0, 90] }
+      - { id: joist-1, position: [0, 0, 1.5], rotation: [-90, 0, 0] }
+    connections:
+      - members:
+          - { id: header-1 }
+          - { id: joist-1 }
+        fasteners:
+          - { kind: hanger, stock: joist-hanger-2x4 }
+`);
+    expect(result.diagnostics.filter((item) => item.severity === "error")).toEqual([]);
+    const hanger = result.scene?.fasteners.find((fastener) => fastener.subtype === "joist-hanger");
+    expect(hanger?.face).toBeCloseTo(1.5, 2);
+    expect(hanger?.riser).toBeCloseTo(3.125, 3);
+    expect(hanger?.size[1]).toBeCloseTo(1.5, 2);
+    expect(Math.abs(hanger?.direction[1] ?? 0)).toBeGreaterThan(0.9);
+    expect(Math.abs(hanger?.across?.[0] ?? 0)).toBeGreaterThan(0.9);
+    expect(result.scene?.components[0].members.every((member) => member.fastened)).toBe(true);
+  });
+
+  it("seats a flat bracket where two boards meet in an L", () => {
+    const result = compileDocument(`version: 1
+name: Corner
+members:
+  - label: Rail
+    stock: 2x4x8
+    cuts:
+      - { axis: 0, angle: 90, at: 24 }
+  - label: Stile
+    stock: 2x4x8
+    cuts:
+      - { axis: 0, angle: 90, at: 24 }
+components:
+  - label: Frame
+    members:
+      - { id: rail-1, position: [0, 0, 0] }
+      - { id: stile-1, position: [3.5, 0, 3.5], rotation: [0, -90, 0] }
+    connections:
+      - members:
+          - { id: rail-1 }
+          - { id: stile-1 }
+        fasteners:
+          - { kind: flat-bracket, stock: bracket-flat-l-2x1 }
+`);
+    expect(result.diagnostics.filter((item) => item.severity === "error")).toEqual([]);
+    const plate = result.scene?.fasteners.find((fastener) => fastener.subtype === "bracket-flat");
+    expect(plate?.size[0]).toBeCloseTo(2, 2);
+    expect(plate?.size[1]).toBeCloseTo(1, 2);
+    expect(Math.abs(plate?.direction[1] ?? 0)).toBeGreaterThan(0.9);
+    expect(result.scene?.components[0].members.every((member) => member.fastened)).toBe(true);
+  });
+
+  it("warns instead of seating hardware on a joint it does not fit", () => {
+    const result = compileDocument(`version: 1
+name: Stack
+members:
+  - label: A
+    stock: 6x6x8
+    cuts:
+      - { axis: 0, angle: 90, at: 12 }
+  - label: B
+    stock: 6x6x8
+    cuts:
+      - { axis: 0, angle: 90, at: 12 }
+components:
+  - label: Frame
+    members:
+      - { id: a-1, position: [0, 0, 0] }
+      - { id: b-1, position: [0, 5.5, 0] }
+    connections:
+      - members:
+          - { id: a-1 }
+          - { id: b-1 }
+        fasteners:
+          - { kind: saddle, stock: saddle }
+          - { kind: hanger, stock: joist-hanger-2x4 }
+          - { kind: bracket, stock: bracket-l }
+          - { kind: flat-bracket, stock: bracket-flat-l-2x1 }
+`);
+    expect(result.diagnostics.filter((item) => item.severity === "error")).toEqual([]);
+    expect(result.scene?.fasteners.filter((fastener) => fastener.subtype === "saddle")).toEqual([]);
+    expect(result.scene?.fasteners.filter((fastener) => fastener.subtype === "joist-hanger")).toEqual([]);
+    expect(result.scene?.fasteners.filter((fastener) => fastener.subtype === "bracket")).toEqual([]);
+    expect(result.scene?.fasteners.filter((fastener) => fastener.subtype === "bracket-flat")).toEqual([]);
+    const warnings = result.diagnostics.filter((item) => item.severity === "warning").map((item) => item.message);
+    expect(warnings.some((message) => message.includes("Saddle"))).toBe(true);
+    expect(warnings.some((message) => message.includes("Joist hanger"))).toBe(true);
+    expect(warnings.some((message) => message.includes("Angle bracket"))).toBe(true);
+    expect(warnings.some((message) => message.includes("Flat bracket"))).toBe(true);
+    expect(warnings.some((message) => message.includes("no contact"))).toBe(false);
+  });
+});

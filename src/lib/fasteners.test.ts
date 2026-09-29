@@ -172,6 +172,35 @@ members:
     expect(result.diagnostics.some((item) => item.message.includes("cannot take planar cuts"))).toBe(true);
   });
 
+  it("meshes a 2×4 joist hanger", () => {
+    const result = compileDocument(`
+version: 1
+name: Hanger
+members:
+  - { label: Hanger, stock: joist-hanger-2x4 }
+components:
+  - label: Box
+    members:
+      - { id: hanger-1, position: [0, 0, 0] }
+`);
+    expect(result.diagnostics.filter((item) => item.severity === "error")).toEqual([]);
+    expect(result.scene?.components[0].members[0]).toMatchObject({
+      stockId: "joist-hanger-2x4",
+      finished: { length: 2, width: 4.75, thickness: 3.125 },
+    });
+  });
+
+  it("rejects cuts on a joist hanger", () => {
+    const result = compileDocument(`
+version: 1
+name: Bad
+members:
+  - { label: Hanger, stock: joist-hanger-2x4, cuts: [{ axis: 0, angle: 90, at: 1 }] }
+`);
+    expect(result.scene).toBeUndefined();
+    expect(result.diagnostics.some((item) => item.message.includes("cannot take planar cuts"))).toBe(true);
+  });
+
   it("rejects cuts on a flat L-bracket", () => {
     const result = compileDocument(`
 version: 1

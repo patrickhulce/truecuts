@@ -30,6 +30,10 @@ export type SceneFastener = {
    * flange continues through the beam.
    */
   bedInset?: number;
+  /** Polyhedron-local point that sits on `origin` for seated hardware. */
+  anchor?: Vec3;
+  /** Header flange width of a face-mount joist hanger. */
+  face?: number;
   members: SceneFastenerMember[];
   /** Set when this instance was expanded from a connection recipe. */
   connectionKey?: string;

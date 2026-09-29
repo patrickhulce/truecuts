@@ -1,5 +1,13 @@
-import { fitsTConnector, getCatalogPart, getFastenerSubtype, listCatalog, type CatalogPart } from "./catalog";
+import {
+  fitsTConnector,
+  getCatalogPart,
+  getFastenerSubtype,
+  listCatalog,
+  type CatalogPart,
+  type FastenerSubtype,
+} from "./catalog";
 import { parseInstanceKey, type FastenerIssue, type SceneFastener } from "./fasteners";
+import { hardwareMiss, seatHardware } from "./hardware-fastener";
 import {
   add,
   centroid3,
@@ -642,6 +650,58 @@ function expandFastener(
     touched.add(a);
     touched.add(b);
   };
+
+  if (
+    recipe.kind === "bracket" ||
+    recipe.kind === "flat-bracket" ||
+    recipe.kind === "saddle" ||
+    recipe.kind === "hanger"
+  ) {
+    const seated = seatHardware(recipe.kind, catalog, members, contacts);
+    if (!seated) {
+      const miss = hardwareMiss(recipe.kind, catalog.id, members, contacts, [...path, "fasteners", recipeIndex]);
+      if (miss) {
+        issues.push(miss);
+        for (const member of members) touched.add(member.key);
+      }
+      return { fasteners, edges, bores, touched };
+    }
+    const subtype: FastenerSubtype =
+      recipe.kind === "bracket"
+        ? "bracket"
+        : recipe.kind === "flat-bracket"
+          ? "bracket-flat"
+          : recipe.kind === "saddle"
+            ? "saddle"
+            : "joist-hanger";
+    fasteners.push({
+      key: `${keyPrefix}/fastener#${recipeIndex}/${recipe.kind}#0`,
+      connectionKey: keyPrefix,
+      stockId: catalog.id,
+      stockLabel: catalog.label,
+      subtype,
+      color: catalog.color,
+      origin: seated.origin,
+      direction: seated.direction,
+      across: seated.across,
+      length: seated.size[0],
+      diameter: seated.size[2],
+      size: seated.size,
+      anchor: seated.anchor,
+      ...(seated.riser !== undefined ? { riser: seated.riser } : {}),
+      ...(seated.face !== undefined ? { face: seated.face } : {}),
+      members: seated.members.map((instanceKey) => {
+        const solid = members.find((member) => member.key === instanceKey)!;
+        return {
+          instanceKey,
+          point: seated.origin,
+          direction: normalize(dirToLocal(solid, seated.direction)),
+        };
+      }),
+    });
+    link(seated.members[0], seated.members[1]);
+    return { fasteners, edges, bores, touched };
+  }
 
   if (recipe.kind === "glue") {
     for (let i = 0; i < members.length; i++) {

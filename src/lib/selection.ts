@@ -16,6 +16,35 @@ export function selectMember(current: Selection, key: string, shift: boolean): S
   return { keys, mode: "multi" };
 }
 
+/** Append members that are not already selected. An empty or redundant list returns the same selection. */
+export function selectAdded(current: Selection, keys: readonly string[]): Selection {
+  if (keys.length === 0) return current;
+  const seen = new Set(current.keys);
+  const next = [...current.keys];
+  for (const key of keys) {
+    if (seen.has(key)) continue;
+    seen.add(key);
+    next.push(key);
+  }
+  if (next.length === current.keys.length) return current;
+  if (next.length === 1) return { keys: next, mode: "single" };
+  return { keys: next, mode: "multi" };
+}
+
+/** Replace the selection with these members. An empty list leaves the selection unchanged. */
+export function selectKeys(current: Selection, keys: readonly string[]): Selection {
+  if (keys.length === 0) return current;
+  const mode = keys.length === 1 ? "single" : "multi";
+  if (
+    current.mode === mode &&
+    current.keys.length === keys.length &&
+    current.keys.every((key, index) => key === keys[index])
+  ) {
+    return current;
+  }
+  return { keys: [...keys], mode };
+}
+
 /** Every member. A single member stays in single mode so the detail pane still applies. */
 export function selectAll(keys: readonly string[]): Selection {
   if (keys.length === 0) return EMPTY_SELECTION;

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { EMPTY_SELECTION, pruneSelection, selectAll, selectMember, type Selection } from "./selection";
+import { EMPTY_SELECTION, pruneSelection, selectAdded, selectAll, selectKeys, selectMember, type Selection } from "./selection";
 
 const multi = (keys: string[]): Selection => ({ keys, mode: "multi" });
 
@@ -14,6 +14,48 @@ describe("selectMember", () => {
 
   it("removes a member that is shift-clicked again", () => {
     expect(selectMember(multi(["a", "b"]), "a", true)).toEqual(multi(["b"]));
+  });
+});
+
+describe("selectAdded", () => {
+  it("appends members that are not already selected", () => {
+    expect(selectAdded({ keys: ["a"], mode: "single" }, ["b", "c"])).toEqual(multi(["a", "b", "c"]));
+  });
+
+  it("keeps the current selection when every hit is already selected", () => {
+    const current = multi(["a", "b"]);
+    expect(selectAdded(current, ["b", "a"])).toBe(current);
+  });
+
+  it("returns the same selection for an empty hit list", () => {
+    const current = { keys: ["a"], mode: "single" as const };
+    expect(selectAdded(current, [])).toBe(current);
+    expect(selectAdded(EMPTY_SELECTION, [])).toBe(EMPTY_SELECTION);
+  });
+
+  it("stays in single mode when the only member is new", () => {
+    expect(selectAdded(EMPTY_SELECTION, ["a"])).toEqual({ keys: ["a"], mode: "single" });
+  });
+});
+
+describe("selectKeys", () => {
+  it("returns the same selection for an empty list", () => {
+    const current = multi(["a", "b"]);
+    expect(selectKeys(current, [])).toBe(current);
+    expect(selectKeys(EMPTY_SELECTION, [])).toBe(EMPTY_SELECTION);
+  });
+
+  it("uses single mode for one member", () => {
+    expect(selectKeys(multi(["a", "b"]), ["c"])).toEqual({ keys: ["c"], mode: "single" });
+  });
+
+  it("uses multi mode for several members", () => {
+    expect(selectKeys({ keys: ["a"], mode: "single" }, ["b", "c"])).toEqual(multi(["b", "c"]));
+  });
+
+  it("returns the same selection when those members are already selected", () => {
+    const current = multi(["a", "b"]);
+    expect(selectKeys(current, ["a", "b"])).toBe(current);
   });
 });
 

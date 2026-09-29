@@ -1,5 +1,6 @@
-import { applyPose, unapplyPose } from "./pose";
+import { applyPose, componentAxisForArrow, composeEulerXYZ, rotateEulerXYZ, unapplyPose } from "./pose";
 import type { Vec3 } from "./types";
+import { sub } from "./vec3";
 
 export type Aabb = { min: Vec3; max: Vec3 };
 
@@ -79,6 +80,39 @@ export function positionForOriginCorner(
   return next;
 }
 
+export type PlacementPose = {
+  position: Vec3;
+  rotation: Vec3;
+};
+
+/** Placement pose in world space: component rotation, then the placement rotation. */
+export function worldPlacementPose(placement: PlacementPose, component: PlacementPose): PlacementPose {
+  return {
+    position: applyPose(placement.position, component.position, component.rotation),
+    rotation: composeEulerXYZ(component.rotation, placement.rotation),
+  };
+}
+
+/** Origin corner of the union of world-space boxes. `null` when there are none. */
+export function groupOrigin(boxes: readonly Aabb[]): Vec3 | null {
+  const span = unionAabb(boxes);
+  if (!span) return null;
+  return originCorner(span, [0, 0, 0], [0, 0, 0]);
+}
+
+/** Local pose in a new unrotated component whose origin is `origin`. */
+export function placementInNewGroup(world: PlacementPose, origin: Vec3): PlacementPose {
+  return {
+    position: sub(world.position, origin),
+    rotation: world.rotation,
+  };
+}
+
+/** Local position after moving the component origin to `origin`, keeping its rotation. */
+export function placementAfterReseat(worldPivot: Vec3, origin: Vec3, componentRotation: Vec3): Vec3 {
+  return unapplyPose(worldPivot, origin, componentRotation);
+}
+
 /** Smallest box containing every input. `null` when there are none. */
 export function unionAabb(boxes: readonly Aabb[]): Aabb | null {
   if (boxes.length === 0) return null;
@@ -116,26 +150,44 @@ function overlaps(a: Aabb, b: Aabb, axis: 0 | 1 | 2): boolean {
   return a.max[axis] >= b.min[axis] - DISTINCT_EPS && b.max[axis] >= a.min[axis] - DISTINCT_EPS;
 }
 
+/** The moved box touches `other` on the outside along `axis`. Interiors do not overlap. */
+function seatsOutside(moving: Aabb, other: Aabb, axis: 0 | 1 | 2, delta: number): boolean {
+  const min = moving.min[axis] + delta;
+  const max = moving.max[axis] + delta;
+  const low = other.min[axis];
+  const high = other.max[axis];
+  const touchesLow = Math.abs(max - low) < DISTINCT_EPS;
+  const touchesHigh = Math.abs(min - high) < DISTINCT_EPS;
+  if (!touchesLow && !touchesHigh) return false;
+  return !(min < high - DISTINCT_EPS && low < max - DISTINCT_EPS);
+}
+
 /**
  * Shift along `axis` that lands `moving` on exactly one nearby boundary.
+ * Only an outside seat counts. A shift that leaves the part inside the neighbor is ignored.
  * `0` counts toward ambiguity (a flush face) but is not returned.
  * `null` when there is no shift, or more than one distinct shift within reach.
+ * `face` limits the seat to that side of `moving`. Omit it to consider both.
  */
 export function boundarySnapDelta(
   moving: Aabb,
   others: Aabb[],
   axis: 0 | 1 | 2,
   reach = NEAR_REACH,
+  face?: "min" | "max",
 ): number | null {
   const deltas: number[] = [];
-  const faces = [moving.min[axis], moving.max[axis]];
+  const faces =
+    face === "min" ? [moving.min[axis]] : face === "max" ? [moving.max[axis]] : [moving.min[axis], moving.max[axis]];
   for (const other of others) {
     const beside = ([0, 1, 2] as const).every((index) => index === axis || overlaps(moving, other, index));
     if (!beside) continue;
     for (const face of faces) {
       for (const target of [other.min[axis], other.max[axis]]) {
         const delta = target - face;
-        if (Math.abs(delta) <= reach) deltas.push(delta);
+        if (Math.abs(delta) > reach) continue;
+        if (!seatsOutside(moving, other, axis, delta)) continue;
+        deltas.push(delta);
       }
     }
   }
@@ -147,4 +199,62 @@ export function boundarySnapDelta(
   const only = distinct[0];
   if (Math.abs(only) < DISTINCT_EPS) return null;
   return only;
+}
+
+/**
+ * Move only `axis` to `value`, then optionally seat that same axis on a nearby boundary.
+ * Every other axis stays at `start`.
+ */
+export function positionAlongAxis(
+  start: Vec3,
+  axis: 0 | 1 | 2,
+  value: number,
+  bounds: Aabb,
+  rotation: Vec3,
+  targets: Aabb[],
+  boundary: boolean,
+): Vec3 {
+  const position: Vec3 = [start[0], start[1], start[2]];
+  position[axis] = value;
+  if (!boundary) return position;
+  const delta = boundarySnapDelta(posedAabb(bounds, position, rotation), targets, axis);
+  if (delta !== null) position[axis] += delta;
+  return position;
+}
+
+/**
+ * Boundary seat for a resize face, matching an axis drag.
+ * `inches` is the dragged face in the member frame; the caller grid-snaps it first.
+ * A seat may leave the inch grid. `coord` is the local XYZ axis of that face (0 = X, 1 = Y, 2 = Z).
+ */
+export function snapResizeFace(
+  bounds: Aabb,
+  position: Vec3,
+  rotation: Vec3,
+  coord: 0 | 1 | 2,
+  side: "start" | "end",
+  inches: number,
+  targets: Aabb[],
+  boundary: boolean,
+): number {
+  if (!boundary) return inches;
+  const next: Aabb = {
+    min: [bounds.min[0], bounds.min[1], bounds.min[2]],
+    max: [bounds.max[0], bounds.max[1], bounds.max[2]],
+  };
+  if (side === "start") next.min[coord] = inches;
+  else next.max[coord] = inches;
+  if (next.min[coord] > next.max[coord] + DISTINCT_EPS) return inches;
+
+  const local: Vec3 = [0, 0, 0];
+  local[coord] = 1;
+  const direction = rotateEulerXYZ(local, rotation);
+  const axis = componentAxisForArrow(coord, rotation);
+  const component = direction[axis];
+  if (Math.abs(component) < DISTINCT_EPS) return inches;
+  const positive = component > 0;
+  const boxFace: "min" | "max" = (side === "end") === positive ? "max" : "min";
+  const delta = boundarySnapDelta(posedAabb(next, position, rotation), targets, axis, NEAR_REACH, boxFace);
+  if (delta === null) return inches;
+  return inches + delta / component;
 }

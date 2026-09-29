@@ -6,6 +6,7 @@ import {
   lBracketPolyhedron,
   polyhedronVolume,
   rodPolyhedron,
+  joistHangerPolyhedron,
   saddlePolyhedron,
   tConnectorPolyhedron,
 } from "./solids";
@@ -96,6 +97,26 @@ describe("saddlePolyhedron", () => {
     const thicker = boundingBox(saddlePolyhedron([4, 3.5, 0.5], 2));
     expect(thicker.max[1]).toBeCloseTo(2, 6);
     expect(thicker.max[2]).toBeCloseTo(3.5 + 2 * 0.5, 6);
+  });
+});
+
+describe("joistHangerPolyhedron", () => {
+  it("cups a 2×4 and bends a header flange out from each side", () => {
+    const depth = 2;
+    const opening = 1.5;
+    const gauge = 0.125;
+    const height = 3.125;
+    const face = 1.5;
+    const poly = joistHangerPolyhedron([depth, opening, gauge], height, face);
+    const box = boundingBox(poly);
+    expect(box.min).toEqual([0, 0, 0]);
+    expect(box.max[0]).toBeCloseTo(depth, 6);
+    expect(box.max[1]).toBeCloseTo(height, 6);
+    expect(box.max[2]).toBeCloseTo(opening + 2 * gauge + 2 * face, 6);
+    const seat = depth * (opening + 2 * gauge) * gauge;
+    const walls = 2 * depth * gauge * height;
+    const flanges = 2 * gauge * face * height;
+    expect(polyhedronVolume(poly)).toBeCloseTo(seat + walls + flanges, 4);
   });
 });
 

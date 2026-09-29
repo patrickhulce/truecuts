@@ -113,6 +113,26 @@ export function saddlePolyhedron(size: Vec3, flange: number): Polyhedron {
   ];
 }
 
+/**
+ * Face-mount joist hanger. The stirrup is a U: the seat is L long and T thick,
+ * the clear opening is W, and each side is gauge T and rises `height` along +Y.
+ * At the header end (`WxT@0`) each side bends out into a flange of width `face`
+ * and gauge T. Origin at the outer corner of the near header flange.
+ * `height` and `face` are not copied from W.
+ */
+export function joistHangerPolyhedron(size: Vec3, height: number, face: number): Polyhedron {
+  const [depth, opening, gauge] = size;
+  const nearWallZ = face;
+  const farWallZ = face + gauge + opening;
+  return [
+    ...boxPolyhedronAt([0, 0, nearWallZ], [depth, opening + 2 * gauge, gauge]),
+    ...boxPolyhedronAt([0, 0, nearWallZ], [depth, gauge, height]),
+    ...boxPolyhedronAt([0, 0, farWallZ], [depth, gauge, height]),
+    ...boxPolyhedronAt([0, 0, 0], [gauge, face, height]),
+    ...boxPolyhedronAt([0, 0, farWallZ + gauge], [gauge, face, height]),
+  ];
+}
+
 export function boundingBox(poly: Polyhedron): { min: Vec3; max: Vec3 } {
   const min: Vec3 = [Infinity, Infinity, Infinity];
   const max: Vec3 = [-Infinity, -Infinity, -Infinity];

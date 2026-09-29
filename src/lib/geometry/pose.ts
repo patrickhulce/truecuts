@@ -38,6 +38,28 @@ export function applyPose(point: Vec3, position: Vec3, rotationDeg: Vec3): Vec3 
   return add(rotateEulerXYZ(point, rotationDeg), position);
 }
 
+function eulerDegrees(radians: number): number {
+  const degrees = (radians * 180) / Math.PI;
+  return Object.is(degrees, -0) ? 0 : degrees;
+}
+
+/**
+ * Euler XYZ rotation that applies `inner` and then `outer`.
+ * `rotateEulerXYZ(v, composeEulerXYZ(outer, inner))` matches
+ * `rotateEulerXYZ(rotateEulerXYZ(v, inner), outer)`.
+ */
+export function composeEulerXYZ(outer: Vec3, inner: Vec3): Vec3 {
+  const x = rotateEulerXYZ(rotateEulerXYZ([1, 0, 0], inner), outer);
+  const y = rotateEulerXYZ(rotateEulerXYZ([0, 1, 0], inner), outer);
+  const z = rotateEulerXYZ(rotateEulerXYZ([0, 0, 1], inner), outer);
+  const clamped = Math.min(1, Math.max(-1, z[0]));
+  const ry = Math.asin(clamped);
+  const gimbal = Math.abs(z[0]) >= 0.9999999;
+  const rx = gimbal ? Math.atan2(y[2], y[1]) : Math.atan2(-z[1], z[2]);
+  const rz = gimbal ? 0 : Math.atan2(-y[0], x[0]);
+  return [eulerDegrees(rx), eulerDegrees(ry), eulerDegrees(rz)];
+}
+
 /** Inverse of `rotateEulerXYZ` (undo Rx, then Ry, then Rz). */
 export function inverseRotateEulerXYZ(v: Vec3, rotationDeg: Vec3): Vec3 {
   const rx = degToRad(rotationDeg[0]);
@@ -81,4 +103,28 @@ export function localShiftForWorldX(componentRotation: Vec3, distance: number): 
 /** Placement position after moving its origin by a world-space delta. Rotation is unchanged. */
 export function translateByWorldDelta(position: Vec3, componentRotation: Vec3, worldDelta: Vec3): Vec3 {
   return add(position, inverseRotateEulerXYZ(worldDelta, componentRotation));
+}
+
+const LOCAL_AXES: readonly Vec3[] = [
+  [1, 0, 0],
+  [0, 1, 0],
+  [0, 0, 1],
+];
+
+/**
+ * Component axis a gizmo arrow travels along.
+ * `localAxis` is the arrow in the member's unrotated frame (0 = X, 1 = Y, 2 = Z).
+ */
+export function componentAxisForArrow(localAxis: 0 | 1 | 2, rotationDeg: Vec3): 0 | 1 | 2 {
+  const direction = rotateEulerXYZ(LOCAL_AXES[localAxis], rotationDeg);
+  let axis: 0 | 1 | 2 = 0;
+  let best = Math.abs(direction[0]);
+  for (let index = 1; index < 3; index++) {
+    const magnitude = Math.abs(direction[index]);
+    if (magnitude > best) {
+      best = magnitude;
+      axis = index as 0 | 1 | 2;
+    }
+  }
+  return axis;
 }

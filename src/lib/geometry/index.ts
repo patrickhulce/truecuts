@@ -20,6 +20,7 @@ export {
   boxPolyhedronAt,
   faceNormal,
   flatLBracketPolyhedron,
+  joistHangerPolyhedron,
   lBracketPolyhedron,
   rodPolyhedron,
   saddlePolyhedron,
@@ -43,7 +44,15 @@ export {
 export { clipPolyhedron } from "./clip";
 export { applyCuts, cutToPlane, defaultAround } from "./cuts";
 export { gapCount, layoutClosed, layoutOpen, type Justify } from "./justify";
-export { applyPose, inverseRotateEulerXYZ, rotateEulerXYZ, translateByWorldDelta, unapplyPose } from "./pose";
+export {
+  applyPose,
+  componentAxisForArrow,
+  composeEulerXYZ,
+  inverseRotateEulerXYZ,
+  rotateEulerXYZ,
+  translateByWorldDelta,
+  unapplyPose,
+} from "./pose";
 export {
   centroid3,
   convexArea,
@@ -58,14 +67,21 @@ export {
   aabbDistance,
   aabbGap,
   aabbInFrame,
+  groupOrigin,
+  placementAfterReseat,
+  placementInNewGroup,
   unionAabb,
+  worldPlacementPose,
   boundarySnapDelta,
   NEAR_REACH,
   nearInstanceKeys,
   originCorner,
   posedAabb,
+  positionAlongAxis,
   positionForOriginCorner,
+  snapResizeFace,
   type Aabb,
+  type PlacementPose,
 } from "./proximity";
 export {
   CONTACT_GAP,

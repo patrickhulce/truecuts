@@ -13,6 +13,15 @@ import type { SceneComponent, SceneMemberInstance, SceneModel } from "@/lib/scen
 import { localShiftForWorldX } from "@/lib/geometry/pose";
 import { EMPTY_SELECTION, pruneSelection, selectAdded, selectAll, selectKeys, selectMember, type Selection } from "@/lib/selection";
 import {
+  EXPORT_CAMERAS_KEY,
+  readExportCameras,
+  snapshotExportCamera,
+  writeExportCameras,
+  type ExportCamera,
+  type ViewportExportApi,
+} from "@/lib/export-view";
+import { composeSheet, exportSheetFilename, layoutSheet, overallDimensions } from "@/lib/export-sheet";
+import {
   DEFAULT_PREFERENCES,
   PREFERENCES_KEY,
   readPreferences,
@@ -35,6 +44,7 @@ const headerButtonClass =
   "grid h-8 w-8 cursor-pointer place-items-center rounded border border-[#6b4a2b] bg-[#1a120b] text-[#d6c3a3] hover:border-[#f59e0b] hover:text-[#f59e0b]";
 
 const PREFERENCES_EVENT = "truecuts-preferences";
+const EXPORT_CAMERAS_EVENT = "truecuts-export-cameras";
 
 function subscribePreferences(onStoreChange: () => void) {
   const handler = () => onStoreChange();
@@ -48,6 +58,20 @@ function subscribePreferences(onStoreChange: () => void) {
 
 function preferencesSnapshot() {
   return window.localStorage.getItem(PREFERENCES_KEY) ?? "";
+}
+
+function subscribeExportCameras(onStoreChange: () => void) {
+  const handler = () => onStoreChange();
+  window.addEventListener("storage", handler);
+  window.addEventListener(EXPORT_CAMERAS_EVENT, handler);
+  return () => {
+    window.removeEventListener("storage", handler);
+    window.removeEventListener(EXPORT_CAMERAS_EVENT, handler);
+  };
+}
+
+function exportCamerasSnapshot() {
+  return window.localStorage.getItem(EXPORT_CAMERAS_KEY) ?? "";
 }
 
 type ClipboardItem = {
@@ -93,6 +117,11 @@ export function Workspace() {
   const sidebarRef = usePanelRef();
   const storedPreferences = useSyncExternalStore(subscribePreferences, preferencesSnapshot, () => "");
   const preferences = readPreferences(storedPreferences || null);
+  const storedExportCameras = useSyncExternalStore(subscribeExportCameras, exportCamerasSnapshot, () => "");
+  const exportCameras = readExportCameras(storedExportCameras || null);
+  const exportApiRef = useRef<ViewportExportApi | null>(null);
+  const [exporting, setExporting] = useState(false);
+  const [exportError, setExportError] = useState<string | null>(null);
   const selectionRef = useRef(selection);
   const textRef = useRef(text);
   const compiledRef = useRef(compiled);
@@ -108,6 +137,11 @@ export function Workspace() {
     const resolved = typeof next === "function" ? next(current) : next;
     window.localStorage.setItem(PREFERENCES_KEY, writePreferences(resolved));
     window.dispatchEvent(new Event(PREFERENCES_EVENT));
+  }, []);
+
+  const setExportCameras = useCallback((cameras: ExportCamera[]) => {
+    window.localStorage.setItem(EXPORT_CAMERAS_KEY, writeExportCameras(cameras));
+    window.dispatchEvent(new Event(EXPORT_CAMERAS_EVENT));
   }, []);
 
   const handleSelect = useCallback((key: string | null, options?: { shift?: boolean }) => {
@@ -407,6 +441,87 @@ export function Workspace() {
     return () => window.removeEventListener("keydown", onKeyDown, true);
   }, [commit, handleSelect, redo, undo]);
 
+  const buildBounds = useMemo(() => {
+    const scene = compiled.scene;
+    if (!scene) return null;
+    return unionAabb(scene.components.flatMap((component) => component.members.map((part) => part.worldBounds)));
+  }, [compiled.scene]);
+  const exportTitle = compiled.scene?.name ?? compiled.document?.name ?? "Untitled";
+  const exportDimensions = buildBounds ? overallDimensions(buildBounds) : "Fix the build to measure it.";
+
+  const handleUseCurrentCamera = useCallback(
+    (id: string) => {
+      const orbit = exportApiRef.current?.readOrbit();
+      if (!orbit) {
+        setExportError("The view is not ready yet.");
+        return;
+      }
+      setExportError(null);
+      const current = readExportCameras(window.localStorage.getItem(EXPORT_CAMERAS_KEY));
+      setExportCameras(current.map((camera) => (camera.id === id ? snapshotExportCamera(camera, orbit) : camera)));
+    },
+    [setExportCameras],
+  );
+
+  const handlePreviewCamera = useCallback(
+    (camera: ExportCamera) => {
+      if (!buildBounds) {
+        setExportError("Fix the build to frame a camera.");
+        return;
+      }
+      if (!exportApiRef.current) {
+        setExportError("The view is not ready yet.");
+        return;
+      }
+      setExportError(null);
+      exportApiRef.current.preview(camera, buildBounds);
+    },
+    [buildBounds],
+  );
+
+  const handleDownloadSheet = useCallback(async () => {
+    const bounds = buildBounds;
+    const api = exportApiRef.current;
+    const cameras = readExportCameras(window.localStorage.getItem(EXPORT_CAMERAS_KEY));
+    if (!bounds || cameras.length === 0) return;
+    if (!api) {
+      setExportError("The view is not ready yet.");
+      return;
+    }
+    setExporting(true);
+    setExportError(null);
+    try {
+      const layout = layoutSheet(cameras.length);
+      if (layout.cells.length === 0) return;
+      const shots = await api.capture(
+        cameras,
+        bounds,
+        layout.cells.map((cell) => ({
+          width: Math.max(1, Math.round(cell.image.width)),
+          height: Math.max(1, Math.round(cell.image.height)),
+        })),
+      );
+      if (document.fonts?.ready) await document.fonts.ready;
+      const sheet = composeSheet({
+        title: exportTitle,
+        dimensions: overallDimensions(bounds),
+        views: cameras.map((camera, index) => ({ name: camera.name, image: shots[index]! })),
+      });
+      const blob = await new Promise<Blob | null>((resolve) => sheet.toBlob(resolve, "image/png"));
+      if (!blob) throw new Error("Could not encode the sheet");
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = exportSheetFilename(exportTitle);
+      link.click();
+      URL.revokeObjectURL(url);
+    } catch (cause) {
+      setExportError(cause instanceof Error ? cause.message : "Could not export the sheet");
+    } finally {
+      setExporting(false);
+    }
+  }, [buildBounds, exportTitle]);
+
   return (
     <div className="flex h-full min-h-0 flex-col">
       <header className="flex items-center justify-between border-b border-[#3d2a18] bg-[#241a10] px-4 py-2.5">
@@ -429,7 +544,7 @@ export function Workspace() {
             type="button"
             aria-label="Toggle side panel"
             aria-pressed={sidebarOpen}
-            title="Catalog, builds, and settings"
+            title="Catalog, builds, export, and settings"
             onClick={toggleSidebar}
             className={`${headerButtonClass} ${sidebarOpen ? "border-[#f59e0b] text-[#f59e0b]" : ""}`}
           >
@@ -484,6 +599,7 @@ export function Workspace() {
             onPlaceMember={handlePlaceMember}
             members={compiled.document?.members}
             onResizeMember={handleResizeMember}
+            exportApiRef={exportApiRef}
           />
         </Panel>
         <Separator className="w-1.5 bg-[#3d2a18] hover:bg-[#d97706]" />
@@ -515,6 +631,16 @@ export function Workspace() {
             onPreferences={setPreferences}
             onFactoryReset={factoryReset}
             libraryEpoch={libraryEpoch}
+            exportCameras={exportCameras}
+            exportTitle={exportTitle}
+            exportDimensions={exportDimensions}
+            canExport={buildBounds !== null && exportCameras.length > 0}
+            exporting={exporting}
+            exportError={exportError}
+            onExportCameras={setExportCameras}
+            onUseCurrentCamera={handleUseCurrentCamera}
+            onPreviewCamera={handlePreviewCamera}
+            onDownloadSheet={() => void handleDownloadSheet()}
           />
         </Panel>
       </Group>

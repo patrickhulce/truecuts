@@ -1,9 +1,17 @@
 "use client";
 
 import { GizmoHelper, GizmoViewport, Grid, OrbitControls } from "@react-three/drei";
-import { Canvas } from "@react-three/fiber";
-import { useEffect, useMemo, useRef, useState, type DragEvent as ReactDragEvent, type KeyboardEvent, type PointerEvent } from "react";
+import { Canvas, useThree } from "@react-three/fiber";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ComponentRef, type DragEvent as ReactDragEvent, type KeyboardEvent, type PointerEvent, type RefObject } from "react";
 import * as THREE from "three";
+import { frameCamera } from "@/lib/camera-frame";
+import {
+  orbitPreviewOffset,
+  resolveExportPose,
+  type ExportCamera,
+  type OrbitSnapshot,
+  type ViewportExportApi,
+} from "@/lib/export-view";
 import { getCatalogPart, resolveStockSize, stockGeometry } from "@/lib/catalog";
 import { freeAxes } from "@/lib/catalog-families";
 import { connectionContactPairs } from "@/lib/connections";
@@ -100,6 +108,7 @@ type ViewportProps = {
   onPlaceMember?: (input: NewMemberInput, position: Vec3) => void;
   members?: ResolvedMember[];
   onResizeMember?: (update: ResizeUpdate) => string | null;
+  exportApiRef?: RefObject<ViewportExportApi | null>;
 };
 
 const ZERO: Vec3 = [0, 0, 0];
@@ -324,9 +333,16 @@ export function Viewport({
   onPlaceMember,
   members = [],
   onResizeMember,
+  exportApiRef,
 }: ViewportProps) {
   const rootRef = useRef<HTMLDivElement>(null);
   const cameraRef = useRef<THREE.Camera | null>(null);
+  const glRef = useRef<THREE.WebGLRenderer | null>(null);
+  const threeSceneRef = useRef<THREE.Scene | null>(null);
+  const invalidateRef = useRef<(() => void) | null>(null);
+  const captureGate = useRef<{ resolve: () => void } | null>(null);
+  const capturingRef = useRef(false);
+  const [capturing, setCapturing] = useState(false);
   const draggingRef = useRef(false);
   const marqueeDataRef = useRef({
     scene: undefined as SceneModel | undefined,
@@ -348,6 +364,9 @@ export function Viewport({
   const [componentDraft, setComponentDraft] = useState<ComponentPoseUpdate | null>(null);
   const [focusedPatch, setFocusedPatch] = useState<string | null>(null);
   const [pan, setPan] = useState(false);
+  const [resetToken, setResetToken] = useState(0);
+  const frameableRef = useRef(false);
+  const controlsRef = useRef<ComponentRef<typeof OrbitControls>>(null);
   const [resize, setResize] = useState(false);
   const [measure, setMeasure] = useState(false);
   const [activeMeasuredAxis, setActiveMeasuredAxis] = useState<0 | 1 | 2 | null>(null);
@@ -360,6 +379,12 @@ export function Viewport({
     const onKeyDown = (event: globalThis.KeyboardEvent) => {
       if (event.metaKey || event.ctrlKey || event.altKey || event.repeat) return;
       if (isTextField(event.target)) return;
+      if (event.key === "Home") {
+        if (!frameableRef.current) return;
+        event.preventDefault();
+        setResetToken((token) => token + 1);
+        return;
+      }
       const key = event.key.toLowerCase();
       if (key !== "p" && key !== "r" && key !== "m") return;
       event.preventDefault();
@@ -771,6 +796,14 @@ export function Viewport({
     return targets;
   }, [scene, selectedKeys.length, selectedSet]);
 
+  const buildBounds = useMemo(() => {
+    if (!scene) return null;
+    return unionAabb(scene.components.flatMap((component) => component.members.map((part) => part.worldBounds)));
+  }, [scene]);
+  useEffect(() => {
+    frameableRef.current = buildBounds !== null;
+  }, [buildBounds]);
+
   const worldOffsets = useMemo(
     () => (scene ? computeExplodeOffsets(scene, explode) : new Map<string, Vec3>()),
     [scene, explode],
@@ -791,6 +824,91 @@ export function Viewport({
       enabled: !pan && !resize && !measure,
     };
   }, [measure, onMarqueeSelect, pan, resize, scene, worldOffsets]);
+
+  useLayoutEffect(() => {
+    if (!capturing) return;
+    const gate = captureGate.current;
+    captureGate.current = null;
+    gate?.resolve();
+  }, [capturing]);
+
+  const readOrbit = useCallback((): OrbitSnapshot | null => {
+    const view = cameraRef.current;
+    const orbit = controlsRef.current;
+    if (!(view instanceof THREE.PerspectiveCamera) || !orbit) return null;
+    return {
+      position: [view.position.x, view.position.y, view.position.z],
+      target: [orbit.target.x, orbit.target.y, orbit.target.z],
+      fov: view.fov,
+    };
+  }, []);
+
+  const previewExport = useCallback((camera: ExportCamera, bounds: Aabb) => {
+    const view = cameraRef.current;
+    const orbit = controlsRef.current;
+    const gl = glRef.current;
+    if (!(view instanceof THREE.PerspectiveCamera) || !orbit || !gl) return;
+    const width = gl.domElement.clientWidth;
+    const height = gl.domElement.clientHeight;
+    const aspect = width > 0 && height > 0 ? width / height : 1;
+    const pose = resolveExportPose(camera, bounds, aspect);
+    const length = Math.hypot(
+      pose.position[0] - pose.target[0],
+      pose.position[1] - pose.target[1],
+      pose.position[2] - pose.target[2],
+    );
+    const offset = orbitPreviewOffset(camera.azimuthDeg, camera.elevationDeg, length);
+    orbit.target.set(pose.target[0], pose.target[1], pose.target[2]);
+    view.up.set(0, 1, 0);
+    view.position.set(pose.target[0] + offset[0], pose.target[1] + offset[1], pose.target[2] + offset[2]);
+    view.fov = pose.fov;
+    view.near = pose.near;
+    view.far = pose.far;
+    view.aspect = aspect;
+    view.updateProjectionMatrix();
+    orbit.update();
+    view.fov = pose.fov;
+    view.near = pose.near;
+    view.far = pose.far;
+    view.aspect = aspect;
+    view.updateProjectionMatrix();
+    invalidateRef.current?.();
+  }, []);
+
+  const captureExport = useCallback(async (
+    cameras: readonly ExportCamera[],
+    bounds: Aabb,
+    sizes: readonly { width: number; height: number }[],
+  ): Promise<HTMLCanvasElement[]> => {
+    const gl = glRef.current;
+    const threeScene = threeSceneRef.current;
+    if (!gl || !threeScene) throw new Error("The view is not ready yet");
+    if (sizes.length !== cameras.length || sizes.some((size) => size.width < 1 || size.height < 1)) {
+      throw new Error("The sheet cell has no size");
+    }
+    if (capturingRef.current) throw new Error("An export is already running");
+    capturingRef.current = true;
+    setCapturing(true);
+    try {
+      await new Promise<void>((resolve) => {
+        captureGate.current = { resolve };
+      });
+      return renderStills(gl, threeScene, cameras, bounds, sizes);
+    } finally {
+      capturingRef.current = false;
+      setCapturing(false);
+      invalidateRef.current?.();
+    }
+  }, []);
+
+  useLayoutEffect(() => {
+    if (!exportApiRef) return;
+    const api: ViewportExportApi = { readOrbit, preview: previewExport, capture: captureExport };
+    exportApiRef.current = api;
+    return () => {
+      if (exportApiRef.current === api) exportApiRef.current = null;
+    };
+  }, [captureExport, exportApiRef, previewExport, readOrbit]);
 
   return (
     <div
@@ -835,8 +953,10 @@ export function Viewport({
           if (!pan && !measure) selectPart(null);
         }}
         gl={{ antialias: true }}
-        onCreated={({ gl, camera }) => {
+        onCreated={({ gl, camera, scene: threeScene }) => {
           cameraRef.current = camera;
+          glRef.current = gl;
+          threeSceneRef.current = threeScene;
           gl.shadowMap.enabled = true;
           gl.shadowMap.type = THREE.PCFShadowMap;
         }}
@@ -877,7 +997,8 @@ export function Viewport({
           const componentRotation = drafted?.rotation ?? component.rotation;
           const qInv = quaternionInverse(componentRotation);
           const showGizmo = Boolean(
-            selected &&
+            !capturing &&
+              selected &&
               gizmoPose &&
               onChangePoses &&
               !resize &&
@@ -892,7 +1013,8 @@ export function Viewport({
             spec.axis === "L" ? [0 as const] : spec.axis === "W" ? [1 as const] : [2 as const],
           );
           const showResize = Boolean(
-            resize &&
+            !capturing &&
+              resize &&
               !pan &&
               !measure &&
               selected &&
@@ -906,10 +1028,10 @@ export function Viewport({
                 <MemberMesh
                   key={part.key}
                   instance={posed(part, component.rotation)}
-                  selected={selectedSet.has(part.key)}
-                  preview={part.key === hoveredKey && !selectedSet.has(part.key)}
-                  muted={part.key === singleKey && activeConnection !== null}
-                  dimmed={hasSelection && !selectedSet.has(part.key) && part.key !== hoveredKey}
+                  selected={!capturing && selectedSet.has(part.key)}
+                  preview={!capturing && part.key === hoveredKey && !selectedSet.has(part.key)}
+                  muted={!capturing && part.key === singleKey && activeConnection !== null}
+                  dimmed={!capturing && hasSelection && !selectedSet.has(part.key) && part.key !== hoveredKey}
                   offset={toLocalOffset(worldOffsets.get(part.key) ?? ZERO, qInv)}
                   interactive={!pan && !measure}
                   boreDiameter={boreDiameter}
@@ -953,7 +1075,7 @@ export function Viewport({
             </group>
           );
         })}
-        {groupBounds && (!rigidComponent || !onChangeComponentPose) && onChangePoses && !pan && !resize && !measure ? (
+        {groupBounds && (!rigidComponent || !onChangeComponentPose) && onChangePoses && !capturing && !pan && !resize && !measure ? (
           <PartGizmo
             key={`${selectedKeys.join("|")}:${groupBounds.min.join(",")}:${groupBounds.max.join(",")}`}
             pose={{ position: groupDraft ?? ZERO, rotation: ZERO }}
@@ -966,7 +1088,7 @@ export function Viewport({
             onCommit={commitGroup}
           />
         ) : null}
-        {rigidComponent && rigidBounds && onChangeComponentPose && !pan && !resize && !measure ? (
+        {rigidComponent && rigidBounds && onChangeComponentPose && !capturing && !pan && !resize && !measure ? (
           <PartGizmo
             key={`${rigidComponent.id}:${rigidComponent.position.join(",")}:${rigidComponent.rotation.join(",")}`}
             pose={{
@@ -989,18 +1111,18 @@ export function Viewport({
           <FastenerMesh
             key={fastener.key}
             fastener={fastener}
-            highlighted={attachedKeys.has(fastener.key)}
+            highlighted={!capturing && attachedKeys.has(fastener.key)}
             offset={averageOffset(fastener, worldOffsets)}
           />
         ))}
-        {scene && singleKey && editedPatches.length > 0 ? (
+        {scene && !capturing && singleKey && editedPatches.length > 0 ? (
           <ConnectionFaceOverlay
             patches={editedPatches}
             instanceKey={singleKey}
             explodeOffset={worldOffsets.get(singleKey) ?? ZERO}
           />
         ) : null}
-        {scene && showContacts && singleKey ? (
+        {scene && !capturing && showContacts && singleKey ? (
           <ContactOverlay
             contacts={scene.contacts}
             instanceKey={singleKey}
@@ -1011,7 +1133,7 @@ export function Viewport({
             interactive={!pan && !measure}
           />
         ) : null}
-        {measure && scene ? (
+        {measure && scene && !capturing ? (
           <MeasurementOverlay
             dimensions={measuredDimensions}
             corners={measureTargets.corners}
@@ -1021,33 +1143,31 @@ export function Viewport({
           />
         ) : null}
         <OrbitControls
+          ref={controlsRef}
           makeDefault
           enabled={!dragging}
           // Shift+left pans inside OrbitControls, so both stay off while a marquee can start.
           enableRotate={!(shiftHeld && !pan && !resize && !measure)}
           enablePan={!(shiftHeld && !pan && !resize && !measure)}
-          target={[20, 0, 12]}
-          screenSpacePanning={false}
+          screenSpacePanning
           mouseButtons={{
             LEFT: pan ? THREE.MOUSE.PAN : THREE.MOUSE.ROTATE,
             MIDDLE: THREE.MOUSE.PAN,
             RIGHT: THREE.MOUSE.DOLLY,
           }}
-          onChange={(event) => {
-            const controls = event?.target;
-            if (!controls || Math.abs(controls.target.y) < 1e-6) return;
-            // Assign only. update() is already on the frame loop and re-entering it overflows.
-            controls.target.y = 0;
-          }}
           maxPolarAngle={Math.PI / 2 + (20 * Math.PI) / 180}
         />
-        <GizmoHelper alignment="bottom-right" margin={[64, 64]}>
-          <GizmoViewport
-            axisColors={gimbalAxisColors(measure ? activeMeasuredAxis : null)}
-            axisHeadScale={measure && activeMeasuredAxis !== null ? 1.15 : 1}
-            labelColor="#d6c3a3"
-          />
-        </GizmoHelper>
+        <FitCamera bounds={buildBounds} resetToken={resetToken} controlsRef={controlsRef} cameraRef={cameraRef} />
+        <ExportInvalidate invalidateRef={invalidateRef} />
+        {!capturing ? (
+          <GizmoHelper alignment="bottom-right" margin={[64, 64]}>
+            <GizmoViewport
+              axisColors={gimbalAxisColors(measure ? activeMeasuredAxis : null)}
+              axisHeadScale={measure && activeMeasuredAxis !== null ? 1.15 : 1}
+              labelColor="#d6c3a3"
+            />
+          </GizmoHelper>
+        ) : null}
       </Canvas>
       {marquee ? (
         <div
@@ -1068,6 +1188,8 @@ export function Viewport({
         explode={explode}
         onExplode={setExplode}
         pan={pan}
+        canFrame={buildBounds !== null}
+        onResetView={() => setResetToken((token) => token + 1)}
         onPan={(next) => {
           setPan(next);
           setResize(false);
@@ -1124,6 +1246,123 @@ export function Viewport({
       ) : null}
     </div>
   );
+}
+
+function FitCamera({
+  bounds,
+  resetToken,
+  controlsRef,
+  cameraRef,
+}: {
+  bounds: Aabb | null;
+  resetToken: number;
+  controlsRef: RefObject<ComponentRef<typeof OrbitControls> | null>;
+  cameraRef: RefObject<THREE.Camera | null>;
+}) {
+  const size = useThree((state) => state.size);
+  const invalidate = useThree((state) => state.invalidate);
+  const fitted = useRef(false);
+  const appliedToken = useRef(resetToken);
+
+  useLayoutEffect(() => {
+    const controls = controlsRef.current;
+    const camera = cameraRef.current;
+    if (!bounds || !controls || size.width < 1 || size.height < 1) return;
+    if (!(camera instanceof THREE.PerspectiveCamera)) return;
+    if (fitted.current && resetToken === appliedToken.current) return;
+
+    const aspect = size.width / size.height;
+    const frame = frameCamera(bounds, camera.fov, aspect);
+    const offset = camera.position.clone().sub(controls.target);
+    if (offset.lengthSq() < 1e-6) offset.set(90, 55, 90);
+    offset.normalize().multiplyScalar(frame.distance);
+    controls.target.set(frame.center[0], frame.center[1], frame.center[2]);
+    camera.position.copy(controls.target).add(offset);
+    camera.near = frame.near;
+    camera.far = frame.far;
+    camera.aspect = aspect;
+    camera.updateProjectionMatrix();
+    controls.update();
+    fitted.current = true;
+    appliedToken.current = resetToken;
+    invalidate();
+  }, [bounds, cameraRef, controlsRef, invalidate, resetToken, size.height, size.width]);
+
+  return null;
+}
+
+function ExportInvalidate({ invalidateRef }: { invalidateRef: RefObject<(() => void) | null> }) {
+  const invalidate = useThree((state) => state.invalidate);
+  useLayoutEffect(() => {
+    invalidateRef.current = invalidate;
+    return () => {
+      invalidateRef.current = null;
+    };
+  }, [invalidate, invalidateRef]);
+  return null;
+}
+
+function renderStills(
+  gl: THREE.WebGLRenderer,
+  threeScene: THREE.Scene,
+  cameras: readonly ExportCamera[],
+  bounds: Aabb,
+  sizes: readonly { width: number; height: number }[],
+): HTMLCanvasElement[] {
+  const camera = new THREE.PerspectiveCamera(35, 1, 0.1, 4000);
+  const previous = gl.getRenderTarget();
+  const shots: HTMLCanvasElement[] = [];
+  let target: THREE.WebGLRenderTarget | null = null;
+  try {
+    for (let index = 0; index < cameras.length; index += 1) {
+      const width = Math.round(sizes[index]!.width);
+      const height = Math.round(sizes[index]!.height);
+      const aspect = width / height;
+      if (!target || target.width !== width || target.height !== height) {
+        target?.dispose();
+        target = new THREE.WebGLRenderTarget(width, height, {
+          samples: 4,
+          colorSpace: THREE.SRGBColorSpace,
+          type: THREE.UnsignedByteType,
+        });
+      }
+      const pose = resolveExportPose(cameras[index]!, bounds, aspect);
+      camera.fov = pose.fov;
+      camera.aspect = aspect;
+      camera.near = pose.near;
+      camera.far = pose.far;
+      camera.position.set(pose.position[0], pose.position[1], pose.position[2]);
+      camera.up.set(pose.up[0], pose.up[1], pose.up[2]);
+      camera.lookAt(pose.target[0], pose.target[1], pose.target[2]);
+      camera.updateProjectionMatrix();
+      camera.updateMatrixWorld();
+      gl.setRenderTarget(target);
+      gl.render(threeScene, camera);
+      const pixels = new Uint8Array(width * height * 4);
+      gl.readRenderTargetPixels(target, 0, 0, width, height, pixels);
+      shots.push(flipPixels(pixels, width, height));
+    }
+    return shots;
+  } finally {
+    gl.setRenderTarget(previous);
+    target?.dispose();
+  }
+}
+
+function flipPixels(pixels: Uint8Array, width: number, height: number): HTMLCanvasElement {
+  const canvas = document.createElement("canvas");
+  canvas.width = width;
+  canvas.height = height;
+  const context = canvas.getContext("2d");
+  if (!context) return canvas;
+  const image = context.createImageData(width, height);
+  const stride = width * 4;
+  for (let y = 0; y < height; y += 1) {
+    const src = (height - 1 - y) * stride;
+    image.data.set(pixels.subarray(src, src + stride), y * stride);
+  }
+  context.putImageData(image, 0, 0);
+  return canvas;
 }
 
 function isTextField(target: EventTarget | null): boolean {

@@ -10,6 +10,8 @@ type RendererToolbarProps = {
   explode: number;
   onExplode: (value: number) => void;
   pan: boolean;
+  canFrame: boolean;
+  onResetView: () => void;
   onPan: (value: boolean) => void;
   resize: boolean;
   onResize: (value: boolean) => void;
@@ -31,6 +33,8 @@ export function RendererToolbar({
   explode,
   onExplode,
   pan,
+  canFrame,
+  onResetView,
   onPan,
   resize,
   onResize,
@@ -66,6 +70,9 @@ export function RendererToolbar({
       <div className="my-0.5 h-px w-6 bg-[#3d2a18]" />
       <ToolButton label="Pan (P)" pressed={pan} onClick={() => onPan(!pan)}>
         <PanIcon />
+      </ToolButton>
+      <ToolButton label="Reset view (Home)" disabled={!canFrame} onClick={onResetView}>
+        <ResetViewIcon />
       </ToolButton>
       <ToolButton label="Resize (R)" pressed={resize} disabled={!enabled} onClick={() => onResize(!resize)}>
         <ResizeIcon />
@@ -202,6 +209,21 @@ function PanIcon() {
         strokeLinecap="round"
         strokeLinejoin="round"
         d="M12 2.5v19M2.5 12h19M12 2.5 8.5 6M12 2.5 15.5 6M12 21.5 8.5 18M12 21.5 15.5 18M2.5 12 6 8.5M2.5 12 6 15.5M21.5 12 18 8.5M21.5 12 18 15.5"
+      />
+    </svg>
+  );
+}
+
+function ResetViewIcon() {
+  return (
+    <svg viewBox="0 0 24 24" className="h-4 w-4" aria-hidden="true">
+      <circle cx="12" cy="12" r="3" fill="none" stroke="currentColor" strokeWidth="1.6" />
+      <path
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.6"
+        strokeLinecap="round"
+        d="M12 3.5v3.2M12 17.3V20.5M3.5 12h3.2M17.3 12h3.2"
       />
     </svg>
   );

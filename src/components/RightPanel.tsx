@@ -5,11 +5,13 @@ import { type BuildRecord } from "@/lib/builds";
 import { loadSavedBuilds } from "@/lib/builds-storage";
 import type { CompileResult } from "@/lib/compile";
 import { type Preferences } from "@/lib/preferences";
+import type { ExportCamera } from "@/lib/export-view";
 import { BuildsTab } from "./BuildsTab";
 import { CatalogTab } from "./CatalogTab";
+import { ExportTab } from "./ExportTab";
 import { SettingsTab } from "./SettingsTab";
 
-type Tab = "catalog" | "builds" | "settings";
+type Tab = "catalog" | "builds" | "export" | "settings";
 
 type RightPanelProps = {
   text: string;
@@ -21,6 +23,16 @@ type RightPanelProps = {
   onPreferences: (preferences: Preferences) => void;
   onFactoryReset: () => void;
   libraryEpoch: number;
+  exportCameras: ExportCamera[];
+  exportTitle: string;
+  exportDimensions: string;
+  canExport: boolean;
+  exporting: boolean;
+  exportError: string | null;
+  onExportCameras: (cameras: ExportCamera[]) => void;
+  onUseCurrentCamera: (id: string) => void;
+  onPreviewCamera: (camera: ExportCamera) => void;
+  onDownloadSheet: () => void;
 };
 
 export function RightPanel({
@@ -33,6 +45,16 @@ export function RightPanel({
   onPreferences,
   onFactoryReset,
   libraryEpoch,
+  exportCameras,
+  exportTitle,
+  exportDimensions,
+  canExport,
+  exporting,
+  exportError,
+  onExportCameras,
+  onUseCurrentCamera,
+  onPreviewCamera,
+  onDownloadSheet,
 }: RightPanelProps) {
   const [tab, setTab] = useState<Tab>("catalog");
   const [builds, setBuilds] = useState<BuildRecord[]>([]);
@@ -68,6 +90,9 @@ export function RightPanel({
           <TabButton id="builds" selected={tab === "builds"} onSelect={setTab}>
             Builds
           </TabButton>
+          <TabButton id="export" selected={tab === "export"} onSelect={setTab}>
+            Export
+          </TabButton>
           <TabButton id="settings" selected={tab === "settings"} onSelect={setTab}>
             Settings
           </TabButton>
@@ -93,6 +118,20 @@ export function RightPanel({
             builds={builds}
             onRefresh={refresh}
             onLoadBuild={onLoadBuild}
+          />
+        ) : null}
+        {tab === "export" ? (
+          <ExportTab
+            cameras={exportCameras}
+            title={exportTitle}
+            dimensions={exportDimensions}
+            canExport={canExport}
+            exporting={exporting}
+            error={exportError}
+            onCameras={onExportCameras}
+            onUseCurrent={onUseCurrentCamera}
+            onPreview={onPreviewCamera}
+            onDownload={onDownloadSheet}
           />
         ) : null}
         {tab === "settings" ? (

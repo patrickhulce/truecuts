@@ -3,6 +3,8 @@
 import { useRef, useState } from "react";
 import { applyImport, buildsExportFilename, BuildsFileError, parseBuildsFile, serializeBuilds, type BuildRecord } from "@/lib/builds";
 import { replaceAllBuilds } from "@/lib/builds-storage";
+import { compileDocument } from "@/lib/compile";
+import { sceneHasExportableSolids, sceneToGlb } from "@/lib/mesh/export-scene";
 import { type Preferences } from "@/lib/preferences";
 
 type SettingsTabProps = {
@@ -16,7 +18,7 @@ type SettingsTabProps = {
   onFactoryReset: () => void;
 };
 
-function download(filename: string, contents: string, type: string) {
+function download(filename: string, contents: BlobPart, type: string) {
   const blob = new Blob([contents], { type });
   const url = URL.createObjectURL(blob);
   const link = document.createElement("a");
@@ -72,6 +74,27 @@ export function SettingsTab({
   async function importFile(file: File) {
     const raw = await file.text();
     await importText(raw);
+  }
+
+  async function downloadGlb() {
+    setError(null);
+    setMessage(null);
+    const compiled = compileDocument(text);
+    const problem = compiled.diagnostics.find((issue) => issue.severity === "error");
+    if (!compiled.scene || problem) {
+      setError(problem?.message ?? "This document has nothing to export.");
+      return;
+    }
+    if (!sceneHasExportableSolids(compiled.scene)) {
+      setError("This document has nothing to export.");
+      return;
+    }
+    try {
+      const glb = await sceneToGlb(compiled.scene);
+      download(`${fileSlug(name)}.glb`, glb, "model/gltf-binary");
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "Could not export 3D");
+    }
   }
 
   function openYaml(file: File) {
@@ -147,6 +170,14 @@ export function SettingsTab({
           className="cursor-pointer rounded border border-[#3d2a18] px-2.5 py-1 text-xs text-[#d6c3a3] hover:border-[#f59e0b] hover:text-[#f59e0b]"
         >
           Download current build as .yaml
+        </button>
+        <button
+          type="button"
+          title="glTF in real-world meters, converted from inches"
+          onClick={() => void downloadGlb()}
+          className="cursor-pointer rounded border border-[#3d2a18] px-2.5 py-1 text-xs text-[#d6c3a3] hover:border-[#f59e0b] hover:text-[#f59e0b]"
+        >
+          Download 3D (.glb)
         </button>
         <button
           type="button"

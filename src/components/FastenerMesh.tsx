@@ -2,25 +2,11 @@
 
 import { useEffect, useMemo, useRef } from "react";
 import * as THREE from "three";
-import {
-  flatLBracketPolyhedron,
-  joistHangerPolyhedron,
-  lBracketPolyhedron,
-  saddlePolyhedron,
-  tConnectorPolyhedron,
-  type Polyhedron,
-  type Vec3,
-} from "@/lib/geometry";
+import type { Polyhedron, Vec3 } from "@/lib/geometry";
 import { facesToGeometry } from "@/lib/mesh/subtract-holes";
+import { fastenerQuaternion, fastenerSolid, type FastenerPiece } from "@/lib/mesh/fastener-solids";
 import type { SceneFastener } from "@/lib/scene";
 import { applyScrewStripeShader, screwStripeCacheKey } from "./stripeMaterial";
-
-function lookAlongY(direction: Vec3): THREE.Quaternion {
-  const dir = new THREE.Vector3(direction[0], direction[1], direction[2]);
-  if (dir.lengthSq() < 1e-10) return new THREE.Quaternion();
-  dir.normalize();
-  return new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0, 1, 0), dir);
-}
 
 function Steel({
   color,
@@ -49,99 +35,16 @@ function add(a: Vec3, b: Vec3): Vec3 {
   return [a[0] + b[0], a[1] + b[1], a[2] + b[2]];
 }
 
-function frameQuaternion(across: Vec3, direction: Vec3): THREE.Quaternion {
-  const y = new THREE.Vector3(direction[0], direction[1], direction[2]);
-  if (y.lengthSq() < 1e-10) return new THREE.Quaternion();
-  y.normalize();
-  const x = new THREE.Vector3(across[0], across[1], across[2]);
-  if (x.lengthSq() < 1e-10) x.set(1, 0, 0);
-  x.addScaledVector(y, -x.dot(y));
-  if (x.lengthSq() < 1e-10) {
-    x.set(1, 0, 0).addScaledVector(y, -y.x);
-    if (x.lengthSq() < 1e-10) x.set(0, 0, 1);
-  }
-  x.normalize();
-  const z = new THREE.Vector3().crossVectors(x, y).normalize();
-  return new THREE.Quaternion().setFromRotationMatrix(new THREE.Matrix4().makeBasis(x, y, z));
-}
-
-function NailMesh({
-  fastener,
-  highlighted,
-  offset,
-}: {
-  fastener: SceneFastener;
-  highlighted: boolean;
-  offset: Vec3;
-}) {
-  const quaternion = useMemo(() => lookAlongY(fastener.direction), [fastener.direction]);
-  const shankR = Math.max(fastener.diameter / 2, 0.03);
-  const headR = shankR * 2.4;
-  const headH = Math.min(0.08, fastener.length * 0.06);
-  const shankH = Math.max(fastener.length - headH, 0.05);
-  return (
-    <group position={add(fastener.origin, offset)} quaternion={quaternion}>
-      <mesh position={[0, headH / 2, 0]}>
-        <cylinderGeometry args={[headR, headR, headH, 16]} />
-        <Steel color={fastener.color} highlighted={highlighted && !fastener.headCovered} striped={fastener.headCovered} />
-      </mesh>
-      <mesh position={[0, headH + shankH / 2, 0]}>
-        <cylinderGeometry args={[shankR, shankR, shankH, 10]} />
-        <Steel color={fastener.color} highlighted={highlighted && !fastener.headCovered} striped={fastener.headCovered} />
-      </mesh>
-    </group>
-  );
-}
-
-function ConnectorMesh({
-  fastener,
-  highlighted,
-  offset,
-}: {
-  fastener: SceneFastener;
-  highlighted: boolean;
-  offset: Vec3;
-}) {
-  const [length, width, thickness] = fastener.size;
-  const riser = fastener.riser ?? 3;
-  const geometry = useMemo(
-    () => facesToGeometry(tConnectorPolyhedron([length, width, thickness], riser)),
-    [length, width, thickness, riser],
-  );
-  const live = useRef(geometry);
-  // eslint-disable-next-line react-hooks/refs -- dispose guard must see this render's geometry before effects
-  live.current = geometry;
-  useEffect(() => {
-    const current = geometry;
-    return () => {
-      queueMicrotask(() => {
-        if (live.current !== current) current.dispose();
-      });
-    };
-  }, [geometry]);
-  const quaternion = useMemo(
-    () => frameQuaternion(fastener.across ?? [1, 0, 0], fastener.direction),
-    [fastener.across, fastener.direction],
-  );
-  return (
-    <group position={add(fastener.origin, offset)} quaternion={quaternion}>
-      <mesh geometry={geometry} position={[-length / 2, -(fastener.bedInset ?? 0), -width / 2]}>
-        <Steel color={fastener.color} highlighted={highlighted} />
-      </mesh>
-    </group>
-  );
-}
-
-function HardwareMesh({
-  fastener,
+function FacePiece({
   faces,
+  position,
+  color,
   highlighted,
-  offset,
 }: {
-  fastener: SceneFastener;
   faces: Polyhedron;
+  position: Vec3;
+  color: string;
   highlighted: boolean;
-  offset: Vec3;
 }) {
   const geometry = useMemo(() => facesToGeometry(faces), [faces]);
   const live = useRef(geometry);
@@ -155,113 +58,39 @@ function HardwareMesh({
       });
     };
   }, [geometry]);
-  const anchor = fastener.anchor ?? [0, 0, 0];
-  const quaternion = useMemo(
-    () => frameQuaternion(fastener.across ?? [1, 0, 0], fastener.direction),
-    [fastener.across, fastener.direction],
-  );
   return (
-    <group position={add(fastener.origin, offset)} quaternion={quaternion}>
-      <mesh geometry={geometry} position={[-anchor[0], -anchor[1], -anchor[2]]}>
-        <Steel color={fastener.color} highlighted={highlighted} />
-      </mesh>
-    </group>
+    <mesh geometry={geometry} position={position}>
+      <Steel color={color} highlighted={highlighted} />
+    </mesh>
   );
 }
 
-function SeatedHardwareMesh({
-  fastener,
+function SolidPieces({
+  pieces,
+  color,
   highlighted,
-  offset,
+  striped,
 }: {
-  fastener: SceneFastener;
+  pieces: FastenerPiece[];
+  color: string;
   highlighted: boolean;
-  offset: Vec3;
+  striped: boolean;
 }) {
-  const [length, width, thickness] = fastener.size;
-  const riser = fastener.riser ?? 0;
-  const face = fastener.face ?? 1.5;
-  const faces = useMemo(() => {
-    const size: Vec3 = [length, width, thickness];
-    if (fastener.subtype === "bracket") return lBracketPolyhedron(size);
-    if (fastener.subtype === "bracket-flat") return flatLBracketPolyhedron(size);
-    if (fastener.subtype === "saddle") return saddlePolyhedron(size, riser);
-    return joistHangerPolyhedron(size, riser, face);
-  }, [fastener.subtype, length, width, thickness, riser, face]);
-  return <HardwareMesh fastener={fastener} faces={faces} highlighted={highlighted} offset={offset} />;
-}
-
-function ScrewMesh({
-  fastener,
-  highlighted,
-  offset,
-}: {
-  fastener: SceneFastener;
-  highlighted: boolean;
-  offset: Vec3;
-}) {
-  const quaternion = useMemo(() => lookAlongY(fastener.direction), [fastener.direction]);
-  const shankR = Math.max(fastener.diameter / 2, 0.04);
-  const headR = shankR * 1.7;
-  const headH = Math.min(0.12, fastener.length * 0.12);
-  const shankH = Math.max(fastener.length - headH, 0.1);
-  return (
-    <group position={add(fastener.origin, offset)} quaternion={quaternion}>
-      <mesh position={[0, headH / 2, 0]}>
-        <cylinderGeometry args={[headR, headR * 0.82, headH, 16]} />
-        <Steel color={fastener.color} highlighted={highlighted && !fastener.headCovered} striped={fastener.headCovered} />
+  return pieces.map((piece, index) =>
+    piece.kind === "cylinder" ? (
+      <mesh key={index} position={piece.position}>
+        <cylinderGeometry args={[piece.radiusTop, piece.radiusBottom, piece.height, piece.segments]} />
+        <Steel color={color} highlighted={highlighted} striped={striped} />
       </mesh>
-      <mesh position={[0, headH + shankH / 2, 0]}>
-        <cylinderGeometry args={[shankR * 0.45, shankR, shankH, 12]} />
-        <Steel color={fastener.color} highlighted={highlighted && !fastener.headCovered} striped={fastener.headCovered} />
-      </mesh>
-    </group>
-  );
-}
-
-function BoltMesh({
-  fastener,
-  highlighted,
-  offset,
-}: {
-  fastener: SceneFastener;
-  highlighted: boolean;
-  offset: Vec3;
-}) {
-  const quaternion = useMemo(() => lookAlongY(fastener.direction), [fastener.direction]);
-  const diameter = Math.max(fastener.diameter, 0.08);
-  const shankR = diameter / 2;
-  const acrossFlats = diameter * 1.5;
-  const headR = acrossFlats / Math.sqrt(3);
-  const headH = diameter * 0.65;
-  const washerR = diameter * 1.1;
-  const washerH = Math.max(diameter * 0.16, 0.04);
-  const nutH = diameter * 0.8;
-  const span = fastener.grip && fastener.grip > 1e-4 ? fastener.grip : fastener.length;
-  const shankH = Math.max(fastener.length, 0.1);
-  return (
-    <group position={add(fastener.origin, offset)} quaternion={quaternion}>
-      <mesh position={[0, -(washerH + headH / 2), 0]}>
-        <cylinderGeometry args={[headR, headR, headH, 6]} />
-        <Steel color={fastener.color} highlighted={highlighted} />
-      </mesh>
-      <mesh position={[0, -washerH / 2, 0]}>
-        <cylinderGeometry args={[washerR, washerR, washerH, 24]} />
-        <Steel color={fastener.color} highlighted={highlighted} />
-      </mesh>
-      <mesh position={[0, shankH / 2, 0]}>
-        <cylinderGeometry args={[shankR, shankR, shankH, 12]} />
-        <Steel color={fastener.color} highlighted={highlighted} />
-      </mesh>
-      <mesh position={[0, span + washerH / 2, 0]}>
-        <cylinderGeometry args={[washerR, washerR, washerH, 24]} />
-        <Steel color={fastener.color} highlighted={highlighted} />
-      </mesh>
-      <mesh position={[0, span + washerH + nutH / 2, 0]}>
-        <cylinderGeometry args={[headR, headR, nutH, 6]} />
-        <Steel color={fastener.color} highlighted={highlighted} />
-      </mesh>
-    </group>
+    ) : (
+      <FacePiece
+        key={index}
+        faces={piece.faces}
+        position={piece.position}
+        color={color}
+        highlighted={highlighted}
+      />
+    ),
   );
 }
 
@@ -283,7 +112,7 @@ function GlueMesh({
           <mesh
             key={`${fastener.key}-glue-${index}`}
             position={add(member.point, offset)}
-            quaternion={lookAlongY(dir)}
+            quaternion={fastenerQuaternion(dir)}
             renderOrder={2}
           >
             <cylinderGeometry args={[radius, radius, 0.06, 20]} />
@@ -315,25 +144,20 @@ export function FastenerMesh({
   highlighted?: boolean;
   offset?: Vec3;
 }) {
+  const solid = useMemo(() => fastenerSolid(fastener), [fastener]);
+  const quaternion = useMemo(
+    () => (solid ? fastenerQuaternion(solid.direction, solid.across) : new THREE.Quaternion()),
+    [solid],
+  );
   if (fastener.subtype === "glue") {
     return <GlueMesh fastener={fastener} highlighted={highlighted} offset={offset} />;
   }
-  if (fastener.subtype === "bolt") {
-    return <BoltMesh fastener={fastener} highlighted={highlighted} offset={offset} />;
-  }
-  if (fastener.subtype === "nail") {
-    return <NailMesh fastener={fastener} highlighted={highlighted} offset={offset} />;
-  }
-  if (fastener.subtype === "connector") {
-    return <ConnectorMesh fastener={fastener} highlighted={highlighted} offset={offset} />;
-  }
-  if (
-    fastener.subtype === "bracket" ||
-    fastener.subtype === "bracket-flat" ||
-    fastener.subtype === "saddle" ||
-    fastener.subtype === "joist-hanger"
-  ) {
-    return <SeatedHardwareMesh fastener={fastener} highlighted={highlighted} offset={offset} />;
-  }
-  return <ScrewMesh fastener={fastener} highlighted={highlighted} offset={offset} />;
+  if (!solid) return null;
+  const striped =
+    Boolean(fastener.headCovered) && (fastener.subtype === "screw" || fastener.subtype === "nail");
+  return (
+    <group position={add(fastener.origin, offset)} quaternion={quaternion}>
+      <SolidPieces pieces={solid.pieces} color={fastener.color} highlighted={highlighted} striped={striped} />
+    </group>
+  );
 }

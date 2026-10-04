@@ -1,5 +1,6 @@
 "use client";
 
+import { Blocks, House, Scaling } from "lucide-react";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 
 type RendererToolbarProps = {
@@ -9,10 +10,6 @@ type RendererToolbarProps = {
   onRedo: () => void;
   explode: number;
   onExplode: (value: number) => void;
-  pan: boolean;
-  canFrame: boolean;
-  onResetView: () => void;
-  onPan: (value: boolean) => void;
   resize: boolean;
   onResize: (value: boolean) => void;
   measure: boolean;
@@ -20,6 +17,13 @@ type RendererToolbarProps = {
   showContacts: boolean;
   onShowContacts: (value: boolean) => void;
   enabled: boolean;
+};
+
+type CameraToolbarProps = {
+  pan: boolean;
+  canFrame: boolean;
+  onResetView: () => void;
+  onPan: (value: boolean) => void;
 };
 
 const toolClass =
@@ -32,10 +36,6 @@ export function RendererToolbar({
   onRedo,
   explode,
   onExplode,
-  pan,
-  canFrame,
-  onResetView,
-  onPan,
   resize,
   onResize,
   measure,
@@ -68,14 +68,8 @@ export function RendererToolbar({
         <RedoIcon />
       </ToolButton>
       <div className="my-0.5 h-px w-6 bg-[#3d2a18]" />
-      <ToolButton label="Pan (P)" pressed={pan} onClick={() => onPan(!pan)}>
-        <PanIcon />
-      </ToolButton>
-      <ToolButton label="Reset view (Home)" disabled={!canFrame} onClick={onResetView}>
-        <ResetViewIcon />
-      </ToolButton>
       <ToolButton label="Resize (R)" pressed={resize} disabled={!enabled} onClick={() => onResize(!resize)}>
-        <ResizeIcon />
+        <Scaling className="h-4 w-4" strokeWidth={1.75} aria-hidden="true" />
       </ToolButton>
       <ToolButton label="Measure (M)" pressed={measure} disabled={!enabled} onClick={() => onMeasure(!measure)}>
         <RulerIcon />
@@ -87,7 +81,7 @@ export function RendererToolbar({
           disabled={!enabled}
           onClick={() => setExplodeOpen((open) => !open)}
         >
-          <ExplodeIcon />
+          <Blocks className="h-4 w-4" strokeWidth={1.75} aria-hidden="true" />
         </ToolButton>
         {explodeOpen ? (
           <div className="absolute left-full top-0 ml-2 w-56 rounded-md border border-[#3d2a18] bg-[#241a10]/95 p-3 text-xs text-[#d6c3a3] shadow-lg">
@@ -169,6 +163,19 @@ function Preset({ label, selected, onClick }: { label: string; selected: boolean
   );
 }
 
+export function CameraToolbar({ pan, canFrame, onResetView, onPan }: CameraToolbarProps) {
+  return (
+    <div className="absolute bottom-7 right-44 z-20 flex items-center gap-1 rounded-lg border border-[#3d2a18] bg-[#241a10]/95 p-1 shadow-xl">
+      <ToolButton label="Pan (P)" pressed={pan} onClick={() => onPan(!pan)}>
+        <PanIcon />
+      </ToolButton>
+      <ToolButton label="Reset view (Home)" disabled={!canFrame} onClick={onResetView}>
+        <House className="h-4 w-4" strokeWidth={1.75} aria-hidden="true" />
+      </ToolButton>
+    </div>
+  );
+}
+
 function UndoIcon() {
   return (
     <svg viewBox="0 0 24 24" className="h-4 w-4" aria-hidden="true">
@@ -214,36 +221,6 @@ function PanIcon() {
   );
 }
 
-function ResetViewIcon() {
-  return (
-    <svg viewBox="0 0 24 24" className="h-4 w-4" aria-hidden="true">
-      <circle cx="12" cy="12" r="3" fill="none" stroke="currentColor" strokeWidth="1.6" />
-      <path
-        fill="none"
-        stroke="currentColor"
-        strokeWidth="1.6"
-        strokeLinecap="round"
-        d="M12 3.5v3.2M12 17.3V20.5M3.5 12h3.2M17.3 12h3.2"
-      />
-    </svg>
-  );
-}
-
-function ResizeIcon() {
-  return (
-    <svg viewBox="0 0 24 24" className="h-4 w-4" aria-hidden="true">
-      <path
-        fill="none"
-        stroke="currentColor"
-        strokeWidth="1.8"
-        strokeLinecap="round"
-        strokeLinejoin="round"
-        d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"
-      />
-    </svg>
-  );
-}
-
 function RulerIcon() {
   return (
     <svg viewBox="0 0 24 24" className="h-4 w-4" aria-hidden="true">
@@ -261,17 +238,6 @@ function RulerIcon() {
         strokeLinecap="round"
         d="M7 8.5v3.2M10 8.5v2M13 8.5v3.2M16 8.5v2M19 8.5v3.2"
       />
-    </svg>
-  );
-}
-
-function ExplodeIcon() {
-  return (
-    <svg viewBox="0 0 24 24" className="h-4 w-4" aria-hidden="true">
-      <rect x="3" y="3" width="6" height="6" fill="none" stroke="currentColor" strokeWidth="1.6" />
-      <rect x="15" y="3" width="6" height="6" fill="none" stroke="currentColor" strokeWidth="1.6" />
-      <rect x="3" y="15" width="6" height="6" fill="none" stroke="currentColor" strokeWidth="1.6" />
-      <rect x="15" y="15" width="6" height="6" fill="none" stroke="currentColor" strokeWidth="1.6" />
     </svg>
   );
 }

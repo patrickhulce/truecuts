@@ -53,7 +53,7 @@ import { PartGizmo, type PartPose } from "./PartGizmo";
 import { MeasurementOverlay } from "./MeasurementOverlay";
 import { MemberMesh } from "./MemberMesh";
 import { RenderAlertOverlay, useRenderAlert } from "./RenderAlert";
-import { RendererToolbar } from "./RendererToolbar";
+import { CameraToolbar, RendererToolbar } from "./RendererToolbar";
 import { ResizeGizmo } from "./ResizeGizmo";
 
 type DraftPose = PartPose & { key: string };
@@ -1187,19 +1187,6 @@ export function Viewport({
         onRedo={onRedo}
         explode={explode}
         onExplode={setExplode}
-        pan={pan}
-        canFrame={buildBounds !== null}
-        onResetView={() => setResetToken((token) => token + 1)}
-        onPan={(next) => {
-          setPan(next);
-          setResize(false);
-          setMeasure(false);
-          setDragActive(false);
-          setDraft(null);
-          setGroupDraft(null);
-          setComponentDraft(null);
-          setResizePreview(null);
-        }}
         resize={resize}
         onResize={(next) => {
           setResize(next);
@@ -1225,6 +1212,21 @@ export function Viewport({
         showContacts={showContacts}
         onShowContacts={onShowContacts}
         enabled={Boolean(scene)}
+      />
+      <CameraToolbar
+        pan={pan}
+        canFrame={buildBounds !== null}
+        onResetView={() => setResetToken((token) => token + 1)}
+        onPan={(next) => {
+          setPan(next);
+          setResize(false);
+          setMeasure(false);
+          setDragActive(false);
+          setDraft(null);
+          setGroupDraft(null);
+          setComponentDraft(null);
+          setResizePreview(null);
+        }}
       />
       {selectedKeys.length > 1 && scene ? (
         <MultiSelectionCard

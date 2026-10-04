@@ -13,7 +13,60 @@ export class EditError extends Error {
   }
 }
 
-const STRINGIFY = { lineWidth: 0 } as const;
+const STRINGIFY = { lineWidth: 80 } as const;
+const FLOW_SEQUENCES = new Set(["position", "rotation", "size", "at"]);
+
+function scalarKey(key: unknown): string | null {
+  if (typeof key === "string") return key;
+  return isScalar(key) && typeof key.value === "string" ? key.value : null;
+}
+
+function fitsOnOneLine(node: { flow?: boolean; toString: () => string }): boolean {
+  const previous = node.flow;
+  node.flow = true;
+  let rendered = "";
+  try {
+    rendered = node.toString().trim();
+  } catch {
+    node.flow = previous;
+    return false;
+  }
+  node.flow = previous;
+  return rendered.length > 0 && rendered.length <= STRINGIFY.lineWidth && !rendered.includes("\n");
+}
+
+/** Block-print components and placements. Keep short vectors, cuts, and fasteners in flow. */
+function styleNode(node: unknown, key: string | null, ancestors: readonly string[]): void {
+  if (isSeq(node)) {
+    node.flow = key !== null && FLOW_SEQUENCES.has(key);
+    const next = key === null ? ancestors : [...ancestors, key];
+    for (const child of node.items) styleNode(child, null, next);
+    return;
+  }
+  if (!isMap(node)) return;
+  const next = key === null ? ancestors : [...ancestors, key];
+  for (const item of node.items) styleNode(item.value, scalarKey(item.key), next);
+  const parent = ancestors[ancestors.length - 1];
+  const compact =
+    key === "variant" ||
+    parent === "cuts" ||
+    parent === "fasteners" ||
+    (parent === "members" && (ancestors.includes("connections") || ancestors.includes("fasteners")));
+  node.flow = compact && fitsOnOneLine(node);
+}
+
+function stringifyDocument(doc: Document): string {
+  if (doc.contents) styleNode(doc.contents, null, []);
+  const text = doc.toString(STRINGIFY);
+  return text.endsWith("\n") ? text : `${text}\n`;
+}
+
+/** Pretty-print a document. Invalid YAML is returned unchanged. */
+export function formatDocumentYaml(text: string): string {
+  const doc = parseDocument(text);
+  if (doc.errors.length > 0 || !doc.contents) return text;
+  return stringifyDocument(doc);
+}
 
 function parseEditDocument(text: string): Document {
   const doc = parseDocument(text);
@@ -327,7 +380,7 @@ export function addMember(text: string, input: NewMemberInput): string {
     );
   }
 
-  return doc.toString(STRINGIFY);
+  return stringifyDocument(doc);
 }
 
 /**
@@ -360,7 +413,7 @@ export function deleteMember(text: string, memberId: string): string {
   stripFastenerSeq(doc, ["fasteners"], memberId);
   stripConnectionSeq(doc, ["connections"], memberId);
   doc.deleteIn(["members", memberIndex]);
-  return doc.toString(STRINGIFY);
+  return stringifyDocument(doc);
 }
 
 /**
@@ -387,7 +440,7 @@ export function setPlacementPose(
   const base = ["components", cIndex, "members", placementIndex] as Array<string | number>;
   setVec3(doc, [...base, "position"], position, 4);
   setVec3(doc, [...base, "rotation"], rotation, 1);
-  return doc.toString(STRINGIFY);
+  return stringifyDocument(doc);
 }
 
 /** Write a component's world position (inches) and XYZ euler rotation (degrees). */
@@ -396,7 +449,7 @@ export function setComponentPose(text: string, componentId: string, position: Ve
   const cIndex = componentIndex(doc, componentId);
   setVec3(doc, ["components", cIndex, "position"], position, 4);
   setVec3(doc, ["components", cIndex, "rotation"], rotation, 1);
-  return doc.toString(STRINGIFY);
+  return stringifyDocument(doc);
 }
 
 function componentIndex(doc: Document, componentId: string): number {
@@ -429,7 +482,7 @@ export function setConnectionFastener(
     throw new EditError(`Fastener index ${fastenerIndex} is out of range`);
   }
   doc.setIn([...fastenersPath, fastenerIndex], doc.createNode(fastener));
-  return doc.toString(STRINGIFY);
+  return stringifyDocument(doc);
 }
 
 export function defaultConnectionFastener(stock: string): RawConnectionFastener {
@@ -496,7 +549,7 @@ export function promoteExplicitFasteners(
   const nextIndex = isSeq(existing) ? existing.items.length : 0;
   if (!isSeq(existing)) doc.setIn(connectionsPath, doc.createNode([]));
   doc.setIn([...connectionsPath, nextIndex], doc.createNode({ members: memberNodes, fasteners: recipes }));
-  return doc.toString(STRINGIFY);
+  return stringifyDocument(doc);
 }
 
 export type ConnectionMemberRef = {
@@ -528,7 +581,7 @@ export function addConnection(
   const nextIndex = isSeq(existing) ? existing.items.length : 0;
   if (!isSeq(existing)) doc.setIn(connectionsPath, doc.createNode([]));
   doc.setIn([...connectionsPath, nextIndex], doc.createNode({ members: memberNodes, fasteners: [fastener] }));
-  return doc.toString(STRINGIFY);
+  return stringifyDocument(doc);
 }
 
 const DIMENSION_AXIS = ["L", "W", "T"] as const;
@@ -717,7 +770,7 @@ export function setMemberDimension(
       throw new EditError(error instanceof Error ? error.message : String(error));
     }
     writeMemberSize(doc, memberIndex, sizeOverride(part, values));
-    return doc.toString(STRINGIFY);
+    return stringifyDocument(doc);
   }
 
   if (raw.cuts.length === 0) {
@@ -725,7 +778,7 @@ export function setMemberDimension(
     if (inches > stockSize[axis] + 1e-6) throw new EditError(longer);
     if (nearly(inches, stockSize[axis])) return text;
     writeMemberCuts(doc, memberIndex, [{ axis, angle: 90, at: roundInches(inches) }]);
-    return doc.toString(STRINGIFY);
+    return stringifyDocument(doc);
   }
 
   // Cuts exist. Cuts on other axes are left alone; every cut on this axis must
@@ -763,13 +816,13 @@ export function setMemberDimension(
     const rounded = roundInches(at);
     if (!(rounded > 1e-6) || rounded >= limit - 1e-6) throw new EditError(YAML_CUTS);
     doc.setIn([...cutsPath, target.index, "at"], rounded);
-    return doc.toString(STRINGIFY);
+    return stringifyDocument(doc);
   };
 
   // No cut on this axis yet: add an end cut, keeping the cuts on other axes.
   if (!start && !end) {
     writeMemberCuts(doc, memberIndex, [...stored.map(cutInput), { axis, angle: 90, at: roundInches(inches) }]);
-    return doc.toString(STRINGIFY);
+    return stringifyDocument(doc);
   }
 
   // A start cut anchors the near end, so the end cut moves to make the dimension.
@@ -780,7 +833,7 @@ export function setMemberDimension(
     }
     if (nearly(at, limit)) {
       writeMemberCuts(doc, memberIndex, without(end));
-      return doc.toString(STRINGIFY);
+      return stringifyDocument(doc);
     }
     return moveTo(end, at);
   }
@@ -788,7 +841,7 @@ export function setMemberDimension(
   if (end) {
     if (inches >= limit - 1e-6) {
       writeMemberCuts(doc, memberIndex, without(end));
-      return doc.toString(STRINGIFY);
+      return stringifyDocument(doc);
     }
     return moveTo(end, inches);
   }
@@ -796,7 +849,7 @@ export function setMemberDimension(
   if (start) {
     if (inches >= limit - 1e-6) {
       writeMemberCuts(doc, memberIndex, without(start));
-      return doc.toString(STRINGIFY);
+      return stringifyDocument(doc);
     }
     return moveTo(start, limit - inches);
   }
@@ -1059,7 +1112,7 @@ export function resizeMemberCut(
   if (drafted.kind === "size") {
     if (sameSize(raw.size, drafted.size)) return text;
     writeMemberSize(doc, memberIndex, drafted.size);
-    return doc.toString(STRINGIFY);
+    return stringifyDocument(doc);
   }
   const cutsSame = sameCutList(raw.cuts, drafted.cuts);
   if (cutsSame && nearly(drafted.shift, 0)) return text;
@@ -1068,7 +1121,7 @@ export function resizeMemberCut(
     shiftMemberPlacements(doc, memberId, axis, drafted.shift);
     shiftMemberBores(doc, memberIndex, axis, drafted.shift);
   }
-  return doc.toString(STRINGIFY);
+  return stringifyDocument(doc);
 }
 
 function readVec3(value: unknown): Vec3 | null {
@@ -1171,7 +1224,7 @@ export function duplicateMember(
 ): string {
   const doc = parseEditDocument(text);
   placeMemberCopy(doc, memberId, componentId, position, rotation);
-  return doc.toString(STRINGIFY);
+  return stringifyDocument(doc);
 }
 
 export type DuplicateMember = {
@@ -1289,7 +1342,7 @@ export function duplicateMembers(text: string, items: DuplicateMember[]): string
     idMap.set(instanceRefKey(item.componentId, item.memberId, item.occurrence), newId);
   }
   copyInternalJoints(doc, idMap);
-  return doc.toString(STRINGIFY);
+  return stringifyDocument(doc);
 }
 
 export type GroupPlacement = {
@@ -1452,7 +1505,7 @@ export function groupMembers(
     for (const item of items) {
       setVec3(doc, ["components", cIndex, "members", item.placementIndex, "position"], item.position, 4);
     }
-    return { text: doc.toString(STRINGIFY), componentId: reseatComponentId };
+    return { text: stringifyDocument(doc), componentId: reseatComponentId };
   }
 
   const movedNew = new Map<string, number>();
@@ -1615,5 +1668,5 @@ export function groupMembers(
     }
   }
 
-  return { text: doc.toString(STRINGIFY), componentId: newComponentId };
+  return { text: stringifyDocument(doc), componentId: newComponentId };
 }

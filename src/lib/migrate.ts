@@ -1,4 +1,5 @@
 import { isMap, isSeq, parseDocument, type YAMLMap } from "yaml";
+import { formatDocumentYaml } from "./edit";
 
 function renameKey(map: YAMLMap, from: string, to: string): boolean {
   if (!map.has(from) || map.has(to)) return false;
@@ -57,5 +58,5 @@ export function migrateDocumentYaml(text: string): string {
   }
   if (renameFastenerMembers(root.get("fasteners", true))) changed = true;
 
-  return changed ? doc.toString({ lineWidth: 0 }) : text;
+  return changed ? formatDocumentYaml(doc.toString()) : text;
 }

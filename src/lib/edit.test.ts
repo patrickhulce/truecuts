@@ -21,6 +21,7 @@ import {
   setConnectionFastener,
   setMemberDimension,
   setPlacementPose,
+  formatDocumentYaml,
   SNAP_DEG,
   SNAP_DEG_FINE,
   SNAP_INCH,
@@ -1119,5 +1120,34 @@ describe("snap", () => {
   it("snaps rotation to 45° or 15°", () => {
     expect(snapRotation([40, 2, -10], SNAP_DEG)).toEqual([45, 0, 0]);
     expect(snapRotation([40, 2, -10], SNAP_DEG_FINE)).toEqual([45, 0, -15]);
+  });
+});
+
+describe("formatDocumentYaml", () => {
+  it("prints a one-line component as an indented block", () => {
+    const raw = `version: 1
+name: Posts
+members: [ { label: Post, stock: 6x6x8 }, { label: Post, stock: 6x6x8 } ]
+components: [ { label: Build, position: [0, 0, 0], rotation: [0, 0, 0], members: [ { id: post-1, position: [0, 0, 0], rotation: [0, 0, 0] }, { id: post-2, position: [10, 0, 0], rotation: [0, 0, 0] } ], connections: [ { members: [ { id: post-1 }, { id: post-2 } ], fasteners: [ { kind: none } ] } ] } ]
+`;
+    const next = formatDocumentYaml(raw);
+    expect(next).not.toMatch(/^components:\s*\[/m);
+    expect(next).toMatch(/components:\n {2}- label: Build/);
+    expect(next).toMatch(/id: post-1\n\s+position: \[\s*0,\s*0,\s*0\s*\]/);
+    expect(next).toMatch(/id: post-2\n\s+position: \[\s*10,\s*0,\s*0\s*\]/);
+    expect(next).toMatch(/\{\s*id: post-1\s*\}/);
+    const result = compileDocument(next);
+    expect(result.diagnostics.filter((item) => item.severity === "error")).toEqual([]);
+    expect(result.document?.components[0].members.map((member) => member.id)).toEqual(["post-1", "post-2"]);
+    expect(formatDocumentYaml(next)).toBe(next);
+  });
+
+  it("leaves invalid YAML unchanged", () => {
+    expect(formatDocumentYaml("components: [")).toBe("components: [");
+  });
+
+  it("keeps a leading comment", () => {
+    const raw = `# keep me\nversion: 1\nname: Box\nmembers: []\ncomponents: []\n`;
+    expect(formatDocumentYaml(raw)).toContain("# keep me");
   });
 });

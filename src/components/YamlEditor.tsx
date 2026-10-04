@@ -91,7 +91,7 @@ export function YamlEditor({ value, onChange, diagnostics }: YamlEditorProps) {
         { key: "Mod-y", run: () => true },
       ]),
     );
-    return [yaml(), woodTheme, syntaxHighlighting(woodHighlight), lintGutter(), lintExt, blockHistory];
+    return [yaml(), EditorView.lineWrapping, woodTheme, syntaxHighlighting(woodHighlight), lintGutter(), lintExt, blockHistory];
   }, [diagnostics, value]);
 
   return (

@@ -89,7 +89,7 @@ type ViewportProps = {
   scene?: SceneModel;
   selectedKeys: string[];
   selectionMode: SelectionMode;
-  hoveredKey: string | null;
+  hoveredKeys: readonly string[];
   onSelect: (key: string | null, options?: { shift?: boolean }) => void;
   onMarqueeSelect: (keys: string[]) => void;
   onDeleteMembers?: (memberIds: string[]) => void;
@@ -315,7 +315,7 @@ export function Viewport({
   scene,
   selectedKeys,
   selectionMode,
-  hoveredKey,
+  hoveredKeys,
   onSelect,
   onMarqueeSelect,
   onDeleteMembers,
@@ -449,6 +449,7 @@ export function Viewport({
   const soleKey = selectedKeys.length === 1 ? selectedKeys[0] : null;
   const singleKey = selectionMode === "single" ? (soleKey ?? null) : null;
   const hasSelection = selectedKeys.length > 0;
+  const hoveredSet = new Set(hoveredKeys);
   const selected = scene?.components
     .flatMap((component) => component.members)
     .find((part) => part.key === soleKey);
@@ -1029,9 +1030,14 @@ export function Viewport({
                   key={part.key}
                   instance={posed(part, component.rotation)}
                   selected={!capturing && selectedSet.has(part.key)}
-                  preview={!capturing && part.key === hoveredKey && !selectedSet.has(part.key)}
+                  preview={!capturing && hoveredSet.has(part.key) && !selectedSet.has(part.key)}
                   muted={!capturing && part.key === singleKey && activeConnection !== null}
-                  dimmed={!capturing && hasSelection && !selectedSet.has(part.key) && part.key !== hoveredKey}
+                  dimmed={
+                    !capturing &&
+                    !selectedSet.has(part.key) &&
+                    !hoveredSet.has(part.key) &&
+                    (hasSelection || hoveredSet.size > 0)
+                  }
                   offset={toLocalOffset(worldOffsets.get(part.key) ?? ZERO, qInv)}
                   interactive={!pan && !measure}
                   boreDiameter={boreDiameter}

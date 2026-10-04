@@ -110,7 +110,7 @@ export function Workspace() {
     const live = new Set(scene.components.flatMap((component) => component.members.map((member) => member.key)));
     return pruneSelection(storedSelection, live);
   }, [compiled.scene, storedSelection]);
-  const [hoveredKey, setHoveredKey] = useState<string | null>(null);
+  const [hoveredKeys, setHoveredKeys] = useState<string[]>([]);
   const [activeConnectionKey, setActiveConnectionKey] = useState<string | null>(null);
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [libraryEpoch, setLibraryEpoch] = useState(0);
@@ -145,7 +145,7 @@ export function Workspace() {
   }, []);
 
   const handleSelect = useCallback((key: string | null, options?: { shift?: boolean }) => {
-    setHoveredKey(null);
+    setHoveredKeys([]);
     const current = selectionRef.current;
     const next = key === null ? EMPTY_SELECTION : selectMember(current, key, Boolean(options?.shift));
     const unchangedSingle =
@@ -159,10 +159,10 @@ export function Workspace() {
     setStoredSelection(next);
   }, []);
 
-  const handleSelectKeys = useCallback((keys: string[]) => {
-    setHoveredKey(null);
+  const handleSelectKeys = useCallback((keys: string[], mode?: Selection["mode"]) => {
+    setHoveredKeys([]);
     const current = selectionRef.current;
-    const next = selectKeys(current, keys);
+    const next = selectKeys(current, keys, mode);
     if (next === current) return;
     setActiveConnectionKey(null);
     selectionRef.current = next;
@@ -170,7 +170,7 @@ export function Workspace() {
   }, []);
 
   const handleMarqueeSelect = useCallback((keys: string[]) => {
-    setHoveredKey(null);
+    setHoveredKeys([]);
     const current = selectionRef.current;
     const next = selectAdded(current, keys);
     if (next === current) return;
@@ -194,7 +194,7 @@ export function Workspace() {
           next = deleteMember(next, memberId);
         }
         commit(next);
-        setHoveredKey(null);
+        setHoveredKeys([]);
         setActiveConnectionKey(null);
         selectionRef.current = EMPTY_SELECTION;
         setStoredSelection(EMPTY_SELECTION);
@@ -299,7 +299,7 @@ export function Workspace() {
     void clearBuilds().finally(() => setLibraryEpoch((epoch) => epoch + 1));
     selectionRef.current = EMPTY_SELECTION;
     setStoredSelection(EMPTY_SELECTION);
-    setHoveredKey(null);
+    setHoveredKeys([]);
     setActiveConnectionKey(null);
   }, [reset, setPreferences]);
 
@@ -331,7 +331,7 @@ export function Workspace() {
         const next = selectAll(keys);
         selectionRef.current = next;
         setStoredSelection(next);
-        setHoveredKey(null);
+        setHoveredKeys([]);
         setActiveConnectionKey(null);
         return;
       }
@@ -430,7 +430,7 @@ export function Workspace() {
                 : EMPTY_SELECTION;
           selectionRef.current = next;
           setStoredSelection(next);
-          setHoveredKey(null);
+          setHoveredKeys([]);
           setActiveConnectionKey(null);
         } catch {
           // Leave the YAML alone if the group cannot be written.
@@ -567,7 +567,7 @@ export function Workspace() {
             selectionMode={selection.mode}
             onSelect={handleSelect}
             onSelectKeys={handleSelectKeys}
-            onHover={setHoveredKey}
+            onHover={setHoveredKeys}
             activeConnectionKey={activeConnectionKey}
             onActiveConnection={setActiveConnectionKey}
             boreDiameter={preferences.boreDiameter}
@@ -579,7 +579,7 @@ export function Workspace() {
             scene={compiled.scene}
             selectedKeys={selection.keys}
             selectionMode={selection.mode}
-            hoveredKey={hoveredKey}
+            hoveredKeys={hoveredKeys}
             onSelect={handleSelect}
             onMarqueeSelect={handleMarqueeSelect}
             onDeleteMembers={handleDeleteMembers}
@@ -623,7 +623,7 @@ export function Workspace() {
               commit(yaml);
               selectionRef.current = EMPTY_SELECTION;
               setStoredSelection(EMPTY_SELECTION);
-              setHoveredKey(null);
+              setHoveredKeys([]);
               setActiveConnectionKey(null);
             }}
             onClose={toggleSidebar}

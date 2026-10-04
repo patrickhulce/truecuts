@@ -23,7 +23,8 @@ type PartsBrowserProps = {
   selectedKeys: string[];
   selectionMode: SelectionMode;
   onSelect: (key: string | null, options?: { shift?: boolean }) => void;
-  onHover: (key: string | null) => void;
+  onSelectKeys: (keys: string[], mode?: SelectionMode) => void;
+  onHover: (keys: string[]) => void;
   onActiveConnection: (key: string | null) => void;
   onOpenComponent: (componentId: string) => void;
   boreDiameter: number;
@@ -272,12 +273,23 @@ export function PartsBrowser({
   selectedKeys,
   selectionMode,
   onSelect,
+  onSelectKeys,
   onHover,
   onActiveConnection,
   onOpenComponent,
   boreDiameter,
 }: PartsBrowserProps) {
-  useEffect(() => () => onHover(null), [onHover]);
+  const [collapsedIds, setCollapsedIds] = useState<ReadonlySet<string>>(() => new Set());
+  useEffect(() => () => onHover([]), [onHover]);
+
+  function toggleCollapsed(id: string) {
+    setCollapsedIds((current) => {
+      const next = new Set(current);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }
 
   if (!scene || !document) {
     return (
@@ -306,7 +318,7 @@ export function PartsBrowser({
         onActiveConnection={onActiveConnection}
         byKey={byKey}
         onBack={() => {
-          onHover(null);
+          onHover([]);
           onSelect(null);
         }}
         onSelect={onSelect}
@@ -328,50 +340,86 @@ export function PartsBrowser({
   return (
     <div className="min-h-0 flex-1 overflow-auto pb-6">
       {selectionMode === "multi" && picked.length > 0 ? (
-        <MultiSummary scene={scene} instances={picked} onClear={() => onSelect(null)} onSelect={onSelect} />
+        <MultiSummary
+          scene={scene}
+          instances={picked}
+          onClear={() => onSelect(null)}
+          onSelect={onSelect}
+          onHover={onHover}
+        />
       ) : null}
       {scene.components.map((component) => {
         const fasteners = local.get(component.id) ?? [];
+        const memberKeys = component.members.map((part) => part.key);
+        const groupSelected = memberKeys.length > 0 && memberKeys.every((key) => selectedSet.has(key));
+        const expanded = !collapsedIds.has(component.id);
+        const count = component.members.length;
         return (
-          <section key={component.id} className="border-b border-[#3d2a18]/80">
-            <h2 className="px-3 pb-1 pt-4 font-[family-name:var(--font-display)] text-sm text-[#f59e0b]">
-              {component.label}
-            </h2>
-            <SectionLabel>Members</SectionLabel>
-            {component.members.length === 0 ? (
-              <EmptyRow>No members</EmptyRow>
-            ) : (
-              <ul>
-                {component.members.map((part) => (
-                  <li key={part.key}>
-                    <button
-                      type="button"
-                      aria-pressed={selectedSet.has(part.key)}
-                      onClick={(event) => onSelect(part.key, { shift: event.shiftKey })}
-                      className={`flex w-full cursor-pointer flex-col items-start gap-0.5 px-3 py-1.5 text-left hover:bg-[#2a1d12] ${
-                        selectedSet.has(part.key) ? "bg-[#3d2a18]" : ""
-                      }`}
-                    >
-                      <span className="text-sm text-[#d6c3a3]">{part.label}</span>
-                      <span className="text-[11px] text-[#8a7355]">
-                        {part.memberId} · {part.stockLabel} · {formatFinished(part.finished)}
-                      </span>
-                      {part.bores.length > 0 ? (
-                        <span className="text-[11px] text-[#a89070]">{part.bores.map(formatBore).join("; ")}</span>
-                      ) : null}
-                    </button>
-                  </li>
-                ))}
-              </ul>
-            )}
-            {fasteners.length > 0 ? (
+          <section key={component.id} className="border-b border-[#3d2a18]/80" onMouseLeave={() => onHover([])}>
+            <div className="flex items-stretch pt-2">
+              <button
+                type="button"
+                aria-expanded={expanded}
+                aria-label={expanded ? `Collapse ${component.label}` : `Expand ${component.label}`}
+                onClick={() => toggleCollapsed(component.id)}
+                className="grid w-7 shrink-0 cursor-pointer place-items-center text-[#8a7355] hover:text-[#f59e0b]"
+              >
+                <ChevronIcon expanded={expanded} />
+              </button>
+              <button
+                type="button"
+                aria-pressed={groupSelected}
+                onClick={() => onSelectKeys(memberKeys, "multi")}
+                onMouseEnter={() => onHover(memberKeys)}
+                className={`flex min-w-0 flex-1 cursor-pointer flex-col items-start gap-0.5 py-1.5 pr-3 text-left hover:bg-[#2a1d12] ${
+                  groupSelected ? "bg-[#3d2a18]" : ""
+                }`}
+              >
+                <span className="font-[family-name:var(--font-display)] text-sm text-[#f59e0b]">{component.label}</span>
+                <span className="text-[11px] text-[#8a7355]">
+                  {component.id} · {count} {count === 1 ? "member" : "members"}
+                </span>
+              </button>
+            </div>
+            {expanded ? (
               <>
-                <SectionLabel>Fasteners</SectionLabel>
-                <ul>
-                  {fasteners.map((fastener) => (
-                    <FastenerRow key={fastener.key} fastener={fastener} byKey={byKey} />
-                  ))}
-                </ul>
+                {count === 0 ? (
+                  <EmptyRow>No members</EmptyRow>
+                ) : (
+                  <ul>
+                    {component.members.map((part) => (
+                      <li key={part.key}>
+                        <button
+                          type="button"
+                          aria-pressed={selectedSet.has(part.key)}
+                          onClick={(event) => onSelect(part.key, { shift: event.shiftKey })}
+                          onMouseEnter={() => onHover([part.key])}
+                          className={`flex w-full cursor-pointer flex-col items-start gap-0.5 py-1.5 pl-8 pr-3 text-left hover:bg-[#2a1d12] ${
+                            selectedSet.has(part.key) ? "bg-[#3d2a18]" : ""
+                          }`}
+                        >
+                          <span className="text-sm text-[#d6c3a3]">{part.label}</span>
+                          <span className="text-[11px] text-[#8a7355]">
+                            {part.memberId} · {part.stockLabel} · {formatFinished(part.finished)}
+                          </span>
+                          {part.bores.length > 0 ? (
+                            <span className="text-[11px] text-[#a89070]">{part.bores.map(formatBore).join("; ")}</span>
+                          ) : null}
+                        </button>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+                {fasteners.length > 0 ? (
+                  <div className="pl-5">
+                    <SectionLabel>Fasteners</SectionLabel>
+                    <ul>
+                      {fasteners.map((fastener) => (
+                        <FastenerRow key={fastener.key} fastener={fastener} byKey={byKey} />
+                      ))}
+                    </ul>
+                  </div>
+                ) : null}
               </>
             ) : null}
           </section>
@@ -431,11 +479,13 @@ function MultiSummary({
   instances,
   onClear,
   onSelect,
+  onHover,
 }: {
   scene: SceneModel;
   instances: SceneMemberInstance[];
   onClear: () => void;
   onSelect: (key: string) => void;
+  onHover: (keys: string[]) => void;
 }) {
   const span = unionAabb(instances.map((instance) => instance.worldBounds));
   const count = instances.length;
@@ -468,6 +518,8 @@ function MultiSummary({
               <button
                 type="button"
                 onClick={() => onSelect(instance.key)}
+                onMouseEnter={() => onHover([instance.key])}
+                onMouseLeave={() => onHover([])}
                 className="flex w-full cursor-pointer flex-col items-start gap-0.5 px-3 py-1.5 text-left hover:bg-[#2a1d12]"
               >
                 <span className="text-sm text-[#d6c3a3]">{instance.label}</span>
@@ -510,7 +562,7 @@ function PartDetail({
   byKey: Map<string, SceneMemberInstance>;
   onBack: () => void;
   onSelect: (key: string, options?: { shift?: boolean }) => void;
-  onHover: (key: string | null) => void;
+  onHover: (keys: string[]) => void;
   onOpenComponent: (componentId: string) => void;
   boreDiameter: number;
 }) {
@@ -743,8 +795,8 @@ function PartDetail({
                       type="button"
                       aria-pressed={connectorOpen}
                       onClick={openConnector}
-                      onMouseEnter={() => onHover(neighbor.instance.key)}
-                      onMouseLeave={() => onHover(null)}
+                      onMouseEnter={() => onHover([neighbor.instance.key])}
+                      onMouseLeave={() => onHover([])}
                       className={`flex min-w-0 flex-1 cursor-pointer items-center gap-3 rounded px-1 text-left hover:bg-[#2a1d12] ${
                         connectorOpen ? "bg-[#2a1d12]" : ""
                       }`}
@@ -809,8 +861,8 @@ function PartDetail({
                           event.stopPropagation();
                           onSelect(neighbor.instance.key, { shift: event.shiftKey });
                         }}
-                        onMouseEnter={() => onHover(neighbor.instance.key)}
-                        onMouseLeave={() => onHover(null)}
+                        onMouseEnter={() => onHover([neighbor.instance.key])}
+                        onMouseLeave={() => onHover([])}
                         className="grid h-8 w-8 shrink-0 cursor-pointer place-items-center self-center rounded border border-[#3d2a18] text-[#a89070] hover:border-[#6b4a2b] hover:bg-[#2a1d12] hover:text-[#f59e0b]"
                       >
                         <SelectIcon />
@@ -1055,6 +1107,25 @@ function FastenerRow({
         {covered ? " · head covered" : ""}
       </div>
     </li>
+  );
+}
+
+function ChevronIcon({ expanded }: { expanded: boolean }) {
+  return (
+    <svg
+      viewBox="0 0 16 16"
+      className={`h-3 w-3 ${expanded ? "rotate-90" : ""}`}
+      aria-hidden="true"
+    >
+      <path
+        d="M6 3.5 11 8 6 12.5"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.6"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </svg>
   );
 }
 

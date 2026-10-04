@@ -2,16 +2,16 @@
 
 import { useState, type ReactNode } from "react";
 import type { CompileResult } from "@/lib/compile";
+import { formatDocumentYaml } from "@/lib/edit";
 import { parseInstanceKey } from "@/lib/fasteners";
 import type { SelectionMode } from "@/lib/selection";
 import type { SceneModel } from "@/lib/scene";
 import { formatInches } from "@/lib/units";
-import { ComponentsBrowser } from "./ComponentsBrowser";
 import { DiagnosticsPanel } from "./DiagnosticsPanel";
 import { PartsBrowser } from "./PartsBrowser";
 import { YamlEditor } from "./YamlEditor";
 
-type Tab = "parts" | "components" | "yaml";
+type Tab = "build" | "yaml";
 
 type EditorPanelProps = {
   text: string;
@@ -21,8 +21,8 @@ type EditorPanelProps = {
   selectedKeys: string[];
   selectionMode: SelectionMode;
   onSelect: (key: string | null, options?: { shift?: boolean }) => void;
-  onSelectKeys: (keys: string[]) => void;
-  onHover: (key: string | null) => void;
+  onSelectKeys: (keys: string[], mode?: SelectionMode) => void;
+  onHover: (keys: string[]) => void;
   activeConnectionKey: string | null;
   onActiveConnection: (key: string | null) => void;
   boreDiameter: number;
@@ -56,31 +56,33 @@ export function EditorPanel({
   onActiveConnection,
   boreDiameter,
 }: EditorPanelProps) {
-  const [tab, setTab] = useState<Tab>("parts");
-  const [openComponentId, setOpenComponentId] = useState<string | null>(null);
+  const [tab, setTab] = useState<Tab>("build");
 
   function openComponent(id: string) {
     const component = compiled.scene?.components.find((item) => item.id === id);
-    setTab("components");
-    setOpenComponentId(id);
-    onSelectKeys(component?.members.map((member) => member.key) ?? []);
+    onSelectKeys(component?.members.map((member) => member.key) ?? [], "multi");
+  }
+
+  function selectTab(next: Tab) {
+    if (next === "yaml") {
+      const formatted = formatDocumentYaml(text);
+      if (formatted !== text) onCommit(formatted);
+    }
+    setTab(next);
   }
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
       <div role="tablist" aria-label="Editor views" className="flex border-b border-[#3d2a18] bg-[#241a10] px-2">
-        <TabButton id="parts" selected={tab === "parts"} onSelect={setTab}>
-          Members
+        <TabButton id="build" selected={tab === "build"} onSelect={selectTab}>
+          Build
         </TabButton>
-        <TabButton id="components" selected={tab === "components"} onSelect={setTab}>
-          Components
-        </TabButton>
-        <TabButton id="yaml" selected={tab === "yaml"} onSelect={setTab}>
+        <TabButton id="yaml" selected={tab === "yaml"} onSelect={selectTab}>
           YAML
         </TabButton>
       </div>
       <div className="flex min-h-0 flex-1 flex-col" role="tabpanel">
-        {tab === "parts" ? (
+        {tab === "build" ? (
           <PartsBrowser
             scene={compiled.scene}
             document={compiled.document}
@@ -89,19 +91,11 @@ export function EditorPanel({
             selectedKeys={selectedKeys}
             selectionMode={selectionMode}
             onSelect={onSelect}
+            onSelectKeys={onSelectKeys}
             onHover={onHover}
             onActiveConnection={onActiveConnection}
             onOpenComponent={openComponent}
             boreDiameter={boreDiameter}
-          />
-        ) : tab === "components" ? (
-          <ComponentsBrowser
-            scene={compiled.scene}
-            selectedKeys={selectedKeys}
-            openId={openComponentId}
-            onOpen={setOpenComponentId}
-            onSelectKeys={onSelectKeys}
-            onSelect={onSelect}
           />
         ) : (
           <div className="min-h-0 flex-1">

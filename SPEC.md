@@ -327,7 +327,7 @@ Each cut clips whatever remains. Both ends of a board can be mitered by followin
 
 ## Catalog
 
-v1 ships a small built-in dataset in `src/lib/catalog.ts`. Catalog `size` is always **actual L×W×T**, longest → shortest (a 2×4×8 is 8′ × 3.5″ × 1.5″). Trade names stay (it is still a 2×4). Sheet goods are 96″ × 48″ × listed thickness. Lumber and sheet goods are discrete rows: a 2×10 is not a scaled 2×4, because actual thickness stays 1.5″ while actual width changes. Angle L-brackets, flat L-brackets, the post-to-beam T-connector, the post saddle, and the 2×4 joist hanger are renderable hardware. Each can be placed as a member, and each can also be a connection recipe when the joint fits (see Connections). They do not take planar cuts. Round rods are renderable hardware too. A rod is a round prism inscribed in its L×W×T box, and it takes the same planar cuts as lumber. Screws, nails, bolts, and glue are rendered as instances. Hinges and drawer slides are catalogued for later rendering and procedural use.
+v1 ships a small built-in dataset in `src/lib/catalog.ts`. Catalog `size` is always **actual L×W×T**, longest → shortest (a 2×4×8 is 8′ × 3.5″ × 1.5″). Trade names stay (it is still a 2×4). Sheet goods are 96″ × 48″ × listed thickness. The MDF 1×4 and 1×6 are plain primed-white boards, actual 8′ × 3.5″ × 0.75″ and 8′ × 5.5″ × 0.75″. Lumber and sheet goods are discrete rows: a 2×10 is not a scaled 2×4, because actual thickness stays 1.5″ while actual width changes. Angle L-brackets, flat L-brackets, the post-to-beam T-connector, the post saddle, and the 2×4 joist hanger are renderable hardware. Each can be placed as a member, and each can also be a connection recipe when the joint fits (see Connections). They do not take planar cuts. Round rods are renderable hardware too. A rod is a round prism inscribed in its L×W×T box, and it takes the same planar cuts as lumber. Screws, nails, bolts, and glue are rendered as instances. Hinges and drawer slides are catalogued for later rendering and procedural use.
 
 Parameterized stock (`bracket-l`, `connector-t`, `saddle`) stores a spec per axis. A member's `size` lists only the free axes. Fixed axes and extra features stay at the catalog value, so lengthening a plate does not thicken it or change stem or flange height.
 
@@ -343,6 +343,15 @@ Parameterized stock (`bracket-l`, `connector-t`, `saddle`) stores a spec per axi
 | `2x6x8` | lumber | 96 × 5.5 × 1.5 | pine |
 | `2x6x10` | lumber | 120 × 5.5 × 1.5 | pine |
 | `2x6x12` | lumber | 144 × 5.5 × 1.5 | pine |
+| `1x6x8` | lumber | 96 × 5.5 × 0.75 | pine |
+| `1x6x10` | lumber | 120 × 5.5 × 0.75 | pine |
+| `1x6x12` | lumber | 144 × 5.5 × 0.75 | pine |
+| `4x4x8` | lumber | 96 × 3.5 × 3.5 | pine |
+| `4x4x10` | lumber | 120 × 3.5 × 3.5 | pine |
+| `4x4x12` | lumber | 144 × 3.5 × 3.5 | pine |
+| `4x6x8` | lumber | 96 × 5.5 × 3.5 | pine |
+| `4x6x10` | lumber | 120 × 5.5 × 3.5 | pine |
+| `4x6x12` | lumber | 144 × 5.5 × 3.5 | pine |
 | `6x6x8` | lumber | 96 × 5.5 × 5.5 | pine |
 | `6x6x10` | lumber | 120 × 5.5 × 5.5 | pine |
 | `6x6x12` | lumber | 144 × 5.5 × 5.5 | pine |
@@ -354,6 +363,8 @@ Parameterized stock (`bracket-l`, `connector-t`, `saddle`) stores a spec per axi
 | `mdf-1/4-4x8` | sheet | 96 × 48 × 0.25 | |
 | `mdf-1/2-4x8` | sheet | 96 × 48 × 0.5 | |
 | `mdf-3/4-4x8` | sheet | 96 × 48 × 0.75 | |
+| `mdf-1x4x8` | sheet | 96 × 3.5 × 0.75 | primed white MDF 1×4, plain board |
+| `mdf-1x6x8` | sheet | 96 × 5.5 × 0.75 | primed white MDF 1×6, plain board |
 | `screw-wood-6x1.25` | fastener | #6 × 1¼″ wood screw | rendered as a fastener |
 | `screw-wood-8x1.25` | fastener | #8 × 1¼″ wood screw | rendered as a fastener |
 | `screw-wood-8x2` | fastener | #8 × 2″ wood screw | rendered as a fastener |

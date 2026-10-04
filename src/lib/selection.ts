@@ -31,18 +31,21 @@ export function selectAdded(current: Selection, keys: readonly string[]): Select
   return { keys: next, mode: "multi" };
 }
 
-/** Replace the selection with these members. An empty list leaves the selection unchanged. */
-export function selectKeys(current: Selection, keys: readonly string[]): Selection {
+/**
+ * Replace the selection with these members. An empty list leaves the selection unchanged.
+ * Pass `mode` when a one-member group should stay on the tree instead of opening detail.
+ */
+export function selectKeys(current: Selection, keys: readonly string[], mode?: SelectionMode): Selection {
   if (keys.length === 0) return current;
-  const mode = keys.length === 1 ? "single" : "multi";
+  const nextMode = mode ?? (keys.length === 1 ? "single" : "multi");
   if (
-    current.mode === mode &&
+    current.mode === nextMode &&
     current.keys.length === keys.length &&
     current.keys.every((key, index) => key === keys[index])
   ) {
     return current;
   }
-  return { keys: [...keys], mode };
+  return { keys: [...keys], mode: nextMode };
 }
 
 /** Every member. A single member stays in single mode so the detail pane still applies. */

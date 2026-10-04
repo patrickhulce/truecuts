@@ -53,6 +53,10 @@ describe("selectKeys", () => {
     expect(selectKeys({ keys: ["a"], mode: "single" }, ["b", "c"])).toEqual(multi(["b", "c"]));
   });
 
+  it("keeps an explicit multi mode for a single member", () => {
+    expect(selectKeys({ keys: ["a"], mode: "single" }, ["b"], "multi")).toEqual(multi(["b"]));
+  });
+
   it("returns the same selection when those members are already selected", () => {
     const current = multi(["a", "b"]);
     expect(selectKeys(current, ["a", "b"])).toBe(current);

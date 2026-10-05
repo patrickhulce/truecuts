@@ -594,6 +594,8 @@ export function Workspace() {
             onRedo={redo}
             showContacts={preferences.showContacts}
             onShowContacts={(showContacts) => setPreferences((current) => ({ ...current, showContacts }))}
+            showUnattached={preferences.showUnattached}
+            onShowUnattached={(showUnattached) => setPreferences((current) => ({ ...current, showUnattached }))}
             fineSnap={preferences.fineSnap}
             boreDiameter={preferences.boreDiameter}
             onPlaceMember={handlePlaceMember}

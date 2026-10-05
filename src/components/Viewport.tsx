@@ -102,6 +102,8 @@ type ViewportProps = {
   onRedo: () => void;
   showContacts: boolean;
   onShowContacts: (value: boolean) => void;
+  showUnattached: boolean;
+  onShowUnattached: (value: boolean) => void;
   fineSnap?: boolean;
   /** Inches. Bores smaller than this are omitted from the mesh. */
   boreDiameter: number;
@@ -328,6 +330,8 @@ export function Viewport({
   onRedo,
   showContacts,
   onShowContacts,
+  showUnattached,
+  onShowUnattached,
   fineSnap = false,
   boreDiameter,
   onPlaceMember,
@@ -1037,6 +1041,7 @@ export function Viewport({
                   offset={toLocalOffset(worldOffsets.get(part.key) ?? ZERO, qInv)}
                   interactive={!pan && !measure}
                   boreDiameter={boreDiameter}
+                  showUnattached={showUnattached}
                   onSelect={selectPart}
                 />
               ))}
@@ -1215,6 +1220,8 @@ export function Viewport({
         enabled={Boolean(scene)}
       />
       <CameraToolbar
+        showUnattached={showUnattached}
+        onShowUnattached={onShowUnattached}
         pan={pan}
         canFrame={buildBounds !== null}
         onResetView={() => setResetToken((token) => token + 1)}

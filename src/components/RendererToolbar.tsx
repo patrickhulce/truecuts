@@ -1,6 +1,6 @@
 "use client";
 
-import { Blocks, House, Scaling } from "lucide-react";
+import { Blocks, House, Scaling, Unlink } from "lucide-react";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 
 type RendererToolbarProps = {
@@ -20,6 +20,8 @@ type RendererToolbarProps = {
 };
 
 type CameraToolbarProps = {
+  showUnattached: boolean;
+  onShowUnattached: (value: boolean) => void;
   pan: boolean;
   canFrame: boolean;
   onResetView: () => void;
@@ -163,9 +165,24 @@ function Preset({ label, selected, onClick }: { label: string; selected: boolean
   );
 }
 
-export function CameraToolbar({ pan, canFrame, onResetView, onPan }: CameraToolbarProps) {
+export function CameraToolbar({
+  showUnattached,
+  onShowUnattached,
+  pan,
+  canFrame,
+  onResetView,
+  onPan,
+}: CameraToolbarProps) {
   return (
     <div className="absolute bottom-7 right-44 z-20 flex items-center gap-1 rounded-lg border border-[#3d2a18] bg-[#241a10]/95 p-1 shadow-xl">
+      <ToolButton
+        label="Unattached"
+        pressed={showUnattached}
+        onClick={() => onShowUnattached(!showUnattached)}
+      >
+        <Unlink className="h-4 w-4" strokeWidth={1.75} aria-hidden="true" />
+      </ToolButton>
+      <div className="mx-0.5 h-6 w-px bg-[#3d2a18]" />
       <ToolButton label="Pan (P)" pressed={pan} onClick={() => onPan(!pan)}>
         <PanIcon />
       </ToolButton>

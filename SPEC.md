@@ -279,7 +279,7 @@ Rules:
 - Screws, nails, and bolts require exactly two members, and every member needs `direction` (head → tip). Glue requires two or more.
 - Members must name a member that is actually placed in the referenced component, including L-bracket hardware members (a screw through a bracket names the bracket and the wood it bites).
 
-Connectivity: fasteners and expanded connections are undirected edges between member instances (glue with N members is a clique). The **seed** is the first member of the first component. Any instance not reachable from the seed is drawn with red/white hazard stripes. The seed itself is always treated as fastened.
+Connectivity: fasteners and expanded connections are undirected edges between member instances (glue with N members is a clique). The **seed** is the first member of the first component. Any instance not reachable from the seed is drawn with red/white hazard stripes, unless the view toggle hides them. The seed itself is always treated as fastened.
 
 ## Cut semantics
 
@@ -471,7 +471,7 @@ components:
 - Fasteners render as solids: screws (head + shank), nails (flat head + shank), bolts (hex head, washers, shank, and nut), glue beads, and hardware seated by a `connector`, `bracket`, `flat-bracket`, `saddle`, or `hanger` recipe. Connection recipes expand into those instances. The same hardware placed as a member still renders as an ordinary metal part.
 - Drilled bores, including derived pilot and clearance bores, are cut out of the rendered member when their diameter is at least the bore threshold. Smaller ones are omitted from the mesh. A blind bore has a bottom at `depth`. A through bore is open on the exit face. A mesh that is not one watertight solid keeps a dark marker instead of a cut.
 - An explode slider radiates members from the scene center (distance-proportional). Parts resting on the floor slide horizontally; downward motion stops at the floor so nothing sinks through it. Fasteners travel with their members.
-- Any member not reachable from the first member of the first component is drawn with red/white hazard stripes.
+- Any member not reachable from the first member of the first component is drawn with red/white hazard stripes. The Unattached toggle on the bottom view strip, and the matching preference, hide those stripes and the red edges; covered screws still hatch when the head is blocked.
 - A screw whose head is covered by a member it joins (no driver access) keeps the red/white hazard hatch along its shank, including when that member is selected, whichever way the screw points. The parts list and selection card call it out.
 - The document autosaves to `localStorage`. **Reset demo** restores `examples/demo.yaml`.
 - Invalid YAML or validation errors keep the last good scene from rendering; the viewport shows a placeholder until the document compiles.

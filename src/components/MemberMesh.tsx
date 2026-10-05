@@ -98,6 +98,8 @@ type MemberMeshProps = {
   interactive?: boolean;
   /** Inches. Bores smaller than this are omitted from the mesh, markers, and edges. */
   boreDiameter?: number;
+  /** Red edges and hazard stripes on members not fastened to the assembly. */
+  showUnattached?: boolean;
   onSelect?: (key: string, options?: { shift: boolean }) => void;
 };
 
@@ -111,6 +113,7 @@ export function MemberMesh({
   offset = ZERO,
   interactive = true,
   boreDiameter = DEFAULT_PREFERENCES.boreDiameter,
+  showUnattached = true,
   onSelect,
 }: MemberMeshProps) {
   const drilledBores = useMemo(
@@ -170,7 +173,8 @@ export function MemberMesh({
   const emissive = selected ? "#d97706" : preview ? "#c4a36a" : "#000000";
   const fastenedIntensity = selected ? 0.35 : preview ? 0.18 : 0;
   const stripeIntensity = selected ? 0.25 : preview ? 0.12 : 0;
-  const edgeColor = selected ? "#f59e0b" : preview ? "#d6c3a3" : instance.fastened ? "#3b2410" : "#7f1d1d";
+  const markUnattached = showUnattached && !instance.fastened;
+  const edgeColor = selected ? "#f59e0b" : preview ? "#d6c3a3" : markUnattached ? "#7f1d1d" : "#3b2410";
 
   return (
     <group
@@ -200,18 +204,7 @@ export function MemberMesh({
         castShadow={!dimmed && !muted && !isolate}
         receiveShadow={!dimmed && !muted && !isolate}
       >
-      {instance.fastened ? (
-        <meshStandardMaterial
-          color={instance.color}
-          roughness={dimmed ? 0.4 : 0.55}
-          metalness={0.04}
-          transparent
-          opacity={opacity}
-          depthWrite={!dimmed && !muted}
-          emissive={emissive}
-          emissiveIntensity={fastenedIntensity}
-        />
-      ) : (
+      {markUnattached ? (
         <meshStandardMaterial
           key="stripes"
           color="#ffffff"
@@ -224,6 +217,17 @@ export function MemberMesh({
           emissiveIntensity={stripeIntensity}
           onBeforeCompile={applyStripeShader}
           customProgramCacheKey={stripeCacheKey}
+        />
+      ) : (
+        <meshStandardMaterial
+          color={instance.color}
+          roughness={dimmed ? 0.4 : 0.55}
+          metalness={0.04}
+          transparent
+          opacity={opacity}
+          depthWrite={!dimmed && !muted}
+          emissive={emissive}
+          emissiveIntensity={fastenedIntensity}
         />
       )}
       {drilled.cut ? null : (

@@ -1,6 +1,8 @@
 export type Preferences = {
   fineSnap: boolean;
   showContacts: boolean;
+  /** Red edges and hazard stripes on members not fastened to the assembly. */
+  showUnattached: boolean;
   /** Inches. Bores smaller than this are left out of the 3D mesh. 0 cuts every bore. */
   boreDiameter: number;
 };
@@ -8,6 +10,7 @@ export type Preferences = {
 export const DEFAULT_PREFERENCES: Preferences = {
   fineSnap: false,
   showContacts: true,
+  showUnattached: true,
   boreDiameter: 1,
 };
 
@@ -20,6 +23,7 @@ export function readPreferences(raw: string | null): Preferences {
     return {
       fineSnap: data.fineSnap === true,
       showContacts: data.showContacts !== false,
+      showUnattached: data.showUnattached !== false,
       boreDiameter: boreDiameterOf(data.boreDiameter),
     };
   } catch {

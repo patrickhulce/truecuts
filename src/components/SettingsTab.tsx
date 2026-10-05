@@ -224,6 +224,20 @@ export function SettingsTab({
           <span className="mt-0.5 block text-[11px] text-[#8a7355]">Contact patches on the selected member.</span>
         </span>
       </label>
+      <label className="mt-3 flex cursor-pointer items-start gap-2 text-xs text-[#d6c3a3]">
+        <input
+          type="checkbox"
+          checked={preferences.showUnattached}
+          onChange={(event) => onPreferences({ ...preferences, showUnattached: event.target.checked })}
+          className="mt-0.5 accent-[#f59e0b]"
+        />
+        <span>
+          Unattached members
+          <span className="mt-0.5 block text-[11px] text-[#8a7355]">
+            Red edges and hazard stripes on members not fastened to the assembly.
+          </span>
+        </span>
+      </label>
       <BoreThresholdField
         value={preferences.boreDiameter}
         onCommit={(boreDiameter) => onPreferences({ ...preferences, boreDiameter })}

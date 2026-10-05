@@ -45,7 +45,7 @@ import { aabbCorners, projectedBoxHitsRect, type ScreenRect } from "@/lib/marque
 import type { SelectionMode } from "@/lib/selection";
 import type { ResolvedBore, ResolvedMember } from "@/lib/schema";
 import { computeExplodeOffsets, meshMember, type SceneConnection, type SceneFastener, type SceneModel, type SceneMemberInstance } from "@/lib/scene";
-import { extractSceneDimensions, sceneMeasureTargets } from "@/lib/measure";
+import { sceneMeasureTargets } from "@/lib/measure";
 import { formatInches } from "@/lib/units";
 import { ConnectionFaceOverlay, ContactOverlay } from "./ContactOverlay";
 import { FastenerMesh } from "./FastenerMesh";
@@ -809,10 +809,6 @@ export function Viewport({
     () => (scene ? computeExplodeOffsets(scene, explode) : new Map<string, Vec3>()),
     [scene, explode],
   );
-  const measuredDimensions = useMemo(
-    () => (scene && measure ? extractSceneDimensions(scene, worldOffsets) : []),
-    [measure, scene, worldOffsets],
-  );
   const measureTargets = useMemo(
     () => (scene && measure ? sceneMeasureTargets(scene, worldOffsets) : { corners: [], edges: [] }),
     [measure, scene, worldOffsets],
@@ -1141,7 +1137,6 @@ export function Viewport({
         ) : null}
         {measure && scene && !capturing ? (
           <MeasurementOverlay
-            dimensions={measuredDimensions}
             corners={measureTargets.corners}
             edges={measureTargets.edges}
             onActiveAxis={setActiveMeasuredAxis}

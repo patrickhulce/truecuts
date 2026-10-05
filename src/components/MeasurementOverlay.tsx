@@ -1,24 +1,28 @@
 "use client";
 
-import { Html, useCursor } from "@react-three/drei";
+import { Html, Line, useCursor } from "@react-three/drei";
 import { useThree } from "@react-three/fiber";
 import { useEffect, useRef, useState } from "react";
 import * as THREE from "three";
-import { add, cross, normalize, scale, sub, type Vec3 } from "@/lib/geometry";
-import {
-  dimensionId,
-  measureAlongAxes,
-  type MeasureEdge,
-  type MemberDimension,
-  type TapeReading,
-} from "@/lib/measure";
+import { add, cross, len, normalize, scale, sub, type Vec3 } from "@/lib/geometry";
+import { measureAlongAxes, type MeasureEdge, type TapeReading } from "@/lib/measure";
+import { tapeBadgePlacement, type ScreenPoint } from "@/lib/tape-badge";
 import { formatInches } from "@/lib/units";
 
 const PICK_PX = 36;
 const AXIS_NAME = ["X", "Y", "Z"] as const;
+const NEON = "#39ff14";
+/** Screen thickness of the measured segment, in CSS pixels. */
+const LINE_PX = 4;
+const LINE_GLOW_PX = 16;
+/** End bars: long enough to read as brackets, thick enough to beat the segment. */
+const TICK_LENGTH_PX = 20;
+const TICK_PX = 4;
+const TICK_GLOW_PX = 16;
+/** Keeps the readout past the end bar. Half the bar, plus a gap. */
+const BADGE_GAP_PX = TICK_LENGTH_PX / 2 + 28;
 
 type MeasurementOverlayProps = {
-  dimensions: MemberDimension[];
   corners: Vec3[];
   edges: MeasureEdge[];
   onActiveAxis: (axis: 0 | 1 | 2 | null) => void;
@@ -27,47 +31,9 @@ type MeasurementOverlayProps = {
 
 function ignoreRaycast() {}
 
-function alignCylinder(direction: Vec3): THREE.Quaternion {
-  const dir = new THREE.Vector3(direction[0], direction[1], direction[2]);
-  if (dir.lengthSq() < 1e-12) return new THREE.Quaternion();
-  return new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0, 1, 0), dir.normalize());
-}
-
-function perpendicular(direction: Vec3): Vec3 {
-  const axis: Vec3 = Math.abs(direction[1]) > 0.9 ? [1, 0, 0] : [0, 1, 0];
-  const side = normalize(cross(direction, axis));
-  if (side[0] === 0 && side[1] === 0 && side[2] === 0) return [1, 0, 0];
-  return side;
-}
-
 function samePoint(a: Vec3 | null, b: Vec3 | null): boolean {
   if (!a || !b) return a === b;
   return Math.abs(a[0] - b[0]) < 1e-3 && Math.abs(a[1] - b[1]) < 1e-3 && Math.abs(a[2] - b[2]) < 1e-3;
-}
-
-function Rod({
-  a,
-  b,
-  radius,
-  color,
-  opacity = 1,
-}: {
-  a: Vec3;
-  b: Vec3;
-  radius: number;
-  color: string;
-  opacity?: number;
-}) {
-  const delta = sub(b, a);
-  const length = Math.hypot(delta[0], delta[1], delta[2]);
-  if (length < 0.04) return null;
-  const mid: Vec3 = [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2, (a[2] + b[2]) / 2];
-  return (
-    <mesh position={mid} quaternion={alignCylinder(delta)} raycast={ignoreRaycast} renderOrder={6} frustumCulled={false}>
-      <cylinderGeometry args={[radius, radius, length, 8]} />
-      <meshBasicMaterial color={color} transparent opacity={opacity} depthTest toneMapped={false} />
-    </mesh>
-  );
 }
 
 function CornerDot({ position }: { position: Vec3 }) {
@@ -96,7 +62,6 @@ function projectPoint(
 }
 
 export function MeasurementOverlay({
-  dimensions,
   corners,
   edges,
   onActiveAxis,
@@ -111,6 +76,7 @@ export function MeasurementOverlay({
   const listenRef = useRef<(() => void) | null>(null);
   const [hover, setHover] = useState<Vec3 | null>(null);
   const [tape, setTape] = useState<TapeReading | null>(null);
+  const [pointer, setPointer] = useState<ScreenPoint | null>(null);
   const [dragging, setDragging] = useState(false);
 
   useEffect(() => {
@@ -128,6 +94,12 @@ export function MeasurementOverlay({
 
   useEffect(() => {
     const canvas = gl.domElement;
+
+    const canvasPoint = (event: PointerEvent): ScreenPoint | null => {
+      const rect = canvas.getBoundingClientRect();
+      if (rect.width < 1 || rect.height < 1) return null;
+      return { x: event.clientX - rect.left, y: event.clientY - rect.top };
+    };
 
     const rayFrom = (event: PointerEvent): { origin: Vec3; dir: Vec3 } | null => {
       const rect = canvas.getBoundingClientRect();
@@ -184,12 +156,16 @@ export function MeasurementOverlay({
       setTape(next);
       setHover(corner);
       setDragging(true);
+      const point = canvasPoint(event);
+      if (point) setPointer(point);
       onDragActiveRef.current(true);
 
-      const move = (pointer: PointerEvent) => {
+      const move = (pointerEvent: PointerEvent) => {
         const current = dragRef.current;
         if (!current) return;
-        const live = rayFrom(pointer);
+        const point = canvasPoint(pointerEvent);
+        if (point) setPointer(point);
+        const live = rayFrom(pointerEvent);
         if (!live) return;
         const reading = measureAlongAxes(current.start, live.origin, live.dir, edgesRef.current);
         if (!reading) return;
@@ -230,76 +206,128 @@ export function MeasurementOverlay({
 
   return (
     <group>
-      {dimensions.map((dimension) => {
-        const id = dimensionId(dimension);
-        const side = perpendicular(dimension.worldDirection);
-        const tick = 1.15;
-        return (
-          <group key={id}>
-            <Rod a={dimension.worldStart} b={dimension.worldEnd} radius={0.07} color="#a89070" opacity={0.75} />
-            <Rod
-              a={add(dimension.worldStart, scale(side, -tick))}
-              b={add(dimension.worldStart, scale(side, tick))}
-              radius={0.07}
-              color="#a89070"
-              opacity={0.75}
-            />
-            <Rod
-              a={add(dimension.worldEnd, scale(side, -tick))}
-              b={add(dimension.worldEnd, scale(side, tick))}
-              radius={0.07}
-              color="#a89070"
-              opacity={0.75}
-            />
-            <Html
-              position={dimension.badgePosition}
-              center
-              sprite
-              pointerEvents="none"
-              zIndexRange={[40, 0]}
-              style={{ pointerEvents: "none" }}
-            >
-              <div className="whitespace-nowrap rounded border border-[#3d2a18] bg-[#241a10]/95 px-1.5 py-0.5 font-mono text-[11px] text-[#d6c3a3] shadow-md">
-                {formatInches(dimension.length)}
-              </div>
-            </Html>
-          </group>
-        );
-      })}
       {hover && !samePoint(hover, tape?.start ?? null) ? <CornerDot position={hover} /> : null}
-      {tape ? <TapeStrip tape={tape} /> : null}
+      {tape ? <TapeStrip tape={tape} pointer={pointer} /> : null}
     </group>
   );
 }
 
-function TapeStrip({ tape }: { tape: TapeReading }) {
+function TapeStrip({ tape, pointer }: { tape: TapeReading; pointer: ScreenPoint | null }) {
+  const camera = useThree((state) => state.camera);
+  const size = useThree((state) => state.size);
+  const badgeRef = useRef<HTMLDivElement>(null);
   const delta = sub(tape.end, tape.start);
   const length = Math.hypot(delta[0], delta[1], delta[2]);
-  const side = perpendicular(length > 1e-4 ? delta : [1, 0, 0]);
-  const mid: Vec3 = [
-    (tape.start[0] + tape.end[0]) / 2,
-    (tape.start[1] + tape.end[1]) / 2,
-    (tape.start[2] + tape.end[2]) / 2,
-  ];
-  const badge = add(tape.end, scale(side, 2.4));
+  const startPx = projectPoint(tape.start, camera, size.width, size.height);
+  const endPx = projectPoint(tape.end, camera, size.width, size.height);
+  const placement = tapeBadgePlacement(startPx, endPx, pointer, BADGE_GAP_PX);
+  const segment: [Vec3, Vec3] = [tape.start, tape.end];
+  const startTick = length >= 0.04 ? tickPoints(tape.start, delta, camera, size.height) : null;
+  const endTick = length >= 0.04 ? tickPoints(tape.end, delta, camera, size.height) : null;
+
+  const calculatePosition = (el: THREE.Object3D, cam: THREE.Camera, viewport: { width: number; height: number }) => {
+    const end = projectObject(el, cam, viewport);
+    const start = projectPoint(tape.start, cam, viewport.width, viewport.height);
+    const next = tapeBadgePlacement(start, end, pointer, BADGE_GAP_PX);
+    if (badgeRef.current) badgeRef.current.style.transform = next.transform;
+    return [end.x, end.y];
+  };
+
   return (
     <group>
-      <CornerDot position={tape.start} />
-      {length >= 0.04 ? (
+      {length >= 0.04 && startTick && endTick ? (
         <>
-          <mesh position={mid} quaternion={alignCylinder(delta)} raycast={ignoreRaycast} renderOrder={8} frustumCulled={false}>
-            <boxGeometry args={[0.55, length, 0.08]} />
-            <meshBasicMaterial color="#fbbf24" depthTest={false} toneMapped={false} />
-          </mesh>
-          <CornerDot position={tape.end} />
-          <Html position={badge} center sprite pointerEvents="none" zIndexRange={[50, 0]} style={{ pointerEvents: "none" }}>
-            <div className="whitespace-nowrap rounded border border-[#f59e0b] bg-[#241a10]/95 px-1.5 py-0.5 font-mono text-[11px] text-[#fbbf24] shadow-md">
+          <TapeMark points={segment} width={LINE_GLOW_PX} opacity={0.35} />
+          <TapeMark points={segment} width={LINE_PX} />
+          <TapeMark points={startTick} width={TICK_GLOW_PX} opacity={0.4} />
+          <TapeMark points={startTick} width={TICK_PX} />
+          <TapeMark points={endTick} width={TICK_GLOW_PX} opacity={0.4} />
+          <TapeMark points={endTick} width={TICK_PX} />
+          <Html
+            position={tape.end}
+            calculatePosition={calculatePosition}
+            sprite
+            pointerEvents="none"
+            zIndexRange={[50, 0]}
+            style={{ pointerEvents: "none" }}
+          >
+            <div
+              ref={badgeRef}
+              className="whitespace-nowrap rounded border border-[#39ff14] bg-[#241a10]/95 px-2 py-1 font-mono text-sm text-[#39ff14] shadow-md"
+              style={{ transform: placement.transform }}
+            >
               <div>{formatInches(tape.distance)}</div>
-              <div className="text-[9px] tracking-wide text-[#f59e0b]">{AXIS_NAME[tape.axis]} AXIS</div>
+              <div className="text-[10px] tracking-wide text-[#86efac]">{AXIS_NAME[tape.axis]} AXIS</div>
             </div>
           </Html>
         </>
-      ) : null}
+      ) : (
+        <CornerDot position={tape.start} />
+      )}
     </group>
   );
+}
+
+function TapeMark({ points, width, opacity = 1 }: { points: [Vec3, Vec3]; width: number; opacity?: number }) {
+  return (
+    <Line
+      points={points}
+      color={NEON}
+      lineWidth={width}
+      transparent
+      opacity={opacity}
+      depthTest={false}
+      depthWrite={false}
+      toneMapped={false}
+      raycast={ignoreRaycast}
+      frustumCulled={false}
+      renderOrder={opacity < 1 ? 8 : 9}
+    />
+  );
+}
+
+/** World length of `pixels` at `point`, so markers stay the same size on screen. */
+function pixelsToWorld(camera: THREE.Camera, point: Vec3, pixels: number, viewportHeight: number): number {
+  const height = Math.max(viewportHeight, 1);
+  if (camera instanceof THREE.PerspectiveCamera) {
+    const depth = new THREE.Vector3(point[0], point[1], point[2]).applyMatrix4(camera.matrixWorldInverse).z;
+    const distance = Math.max(0.5, -depth);
+    const span = 2 * Math.tan((camera.fov * Math.PI) / 360) * distance;
+    return (pixels * span) / height;
+  }
+  if (camera instanceof THREE.OrthographicCamera) {
+    return (pixels * ((camera.top - camera.bottom) / camera.zoom)) / height;
+  }
+  return pixels;
+}
+
+/** End bar perpendicular to the measurement, lying in the screen plane. */
+function tickPoints(at: Vec3, line: Vec3, camera: THREE.Camera, viewportHeight: number): [Vec3, Vec3] {
+  const half = pixelsToWorld(camera, at, TICK_LENGTH_PX / 2, viewportHeight);
+  const side = screenTickDirection(line, camera, at);
+  return [add(at, scale(side, -half)), add(at, scale(side, half))];
+}
+
+function screenTickDirection(line: Vec3, camera: THREE.Camera, point: Vec3): Vec3 {
+  const lineDir = normalize(line);
+  const toCam = normalize(sub([camera.position.x, camera.position.y, camera.position.z], point));
+  let side = cross(lineDir, toCam);
+  if (len(side) < 1e-4) {
+    const axis: Vec3 = Math.abs(lineDir[1]) > 0.9 ? [1, 0, 0] : [0, 1, 0];
+    side = cross(lineDir, axis);
+  }
+  return normalize(side);
+}
+
+function projectObject(
+  el: THREE.Object3D,
+  camera: THREE.Camera,
+  size: { width: number; height: number },
+): ScreenPoint {
+  const world = new THREE.Vector3().setFromMatrixPosition(el.matrixWorld);
+  world.project(camera);
+  return {
+    x: (world.x * 0.5 + 0.5) * size.width,
+    y: (-world.y * 0.5 + 0.5) * size.height,
+  };
 }

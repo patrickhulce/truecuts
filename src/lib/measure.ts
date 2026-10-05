@@ -1,24 +1,7 @@
 import { add, applyPose, dot, len, NEAR_REACH, scale, sub, type Vec3 } from "./geometry";
 import type { SceneModel } from "./scene";
 
-/** Part dimensions longer than this are labelled in measurement mode. */
-export const MIN_LABEL_INCHES = 12;
-
 const PARALLEL = 1e-8;
-
-export type MemberDimension = {
-  memberKey: string;
-  label: string;
-  /** Cut axis: 0 = L, 1 = W, 2 = T. */
-  axis: 0 | 1 | 2;
-  length: number;
-  worldStart: Vec3;
-  worldEnd: Vec3;
-  worldDirection: Vec3;
-  /** Closest world axis: 0 = X, 1 = Y, 2 = Z. */
-  worldAxis: 0 | 1 | 2;
-  badgePosition: Vec3;
-};
 
 export type MeasureEdge = {
   a: Vec3;
@@ -33,28 +16,11 @@ export type TapeReading = {
   snapped: boolean;
 };
 
-const AXIS_COORD = [0, 2, 1] as const;
 const AXIS_DIR: readonly Vec3[] = [
   [1, 0, 0],
   [0, 1, 0],
   [0, 0, 1],
 ];
-/** Push dimension lines off the stock corner so they sit outside the part. */
-const LINE_OUT = 1.25;
-/** Extra push so the size badge clears the line. */
-const BADGE_OUT = 2;
-
-/**
- * World axis with the largest component. Ties resolve toward X, then Y, then Z.
- */
-export function dominantWorldAxis(direction: Vec3): 0 | 1 | 2 {
-  const ax = Math.abs(direction[0]);
-  const ay = Math.abs(direction[1]);
-  const az = Math.abs(direction[2]);
-  if (ax >= ay && ax >= az) return 0;
-  if (ay >= az) return 1;
-  return 2;
-}
 
 /**
  * Scalar distance along `lineDir` from `lineStart` to the point on the line
@@ -71,32 +37,6 @@ export function projectRayToLine(rayOrigin: Vec3, rayDir: Vec3, lineStart: Vec3,
   const denom = a * c - b * b;
   if (Math.abs(denom) < PARALLEL) return e / c;
   return (a * e - b * d) / denom;
-}
-
-export function dimensionId(dimension: MemberDimension): string {
-  return `${dimension.memberKey}:${dimension.axis}`;
-}
-
-/**
- * Dimension of `scene` longer than `minInches`, in world space.
- * `worldOffsets` are explode shifts keyed by member instance.
- */
-export function extractSceneDimensions(
-  scene: SceneModel,
-  worldOffsets: Map<string, Vec3>,
-  minInches = MIN_LABEL_INCHES,
-): MemberDimension[] {
-  const dimensions: MemberDimension[] = [];
-  for (const component of scene.components) {
-    for (const member of component.members) {
-      const offset = worldOffsets.get(member.key) ?? [0, 0, 0];
-      for (const axis of [0, 1, 2] as const) {
-        const dimension = memberDimension(member, component, axis, offset, minInches);
-        if (dimension) dimensions.push(dimension);
-      }
-    }
-  }
-  return dimensions;
 }
 
 /** Posed box corners and edges for every member, shifted by explode offsets. */
@@ -232,71 +172,6 @@ function gapToRay(rayOrigin: Vec3, rayDir: Vec3, point: Vec3): number | null {
   const t = speed < PARALLEL ? 0 : dot(w, rayDir) / speed;
   if (t < 0) return null;
   return len(sub(point, add(rayOrigin, scale(rayDir, t))));
-}
-
-function memberDimension(
-  member: SceneModel["components"][number]["members"][number],
-  component: { position: Vec3; rotation: Vec3 },
-  axis: 0 | 1 | 2,
-  worldOffset: Vec3,
-  minInches: number,
-): MemberDimension | null {
-  const { min, max } = member.bounds;
-  const coord = AXIS_COORD[axis];
-  const extent = max[coord] - min[coord];
-  if (!(extent > minInches)) return null;
-
-  const edge = edgeInLocal(min, max, axis);
-  const worldStart = toWorld(edge.start, member, component, worldOffset);
-  const worldEnd = toWorld(edge.end, member, component, worldOffset);
-  const delta = sub(worldEnd, worldStart);
-  const length = len(delta);
-  if (!(length > minInches)) return null;
-  const worldDirection = scale(delta, 1 / length);
-  return {
-    memberKey: member.key,
-    label: member.label,
-    axis,
-    length,
-    worldStart,
-    worldEnd,
-    worldDirection,
-    worldAxis: dominantWorldAxis(worldDirection),
-    badgePosition: toWorld(edge.badge, member, component, worldOffset),
-  };
-}
-
-function edgeInLocal(
-  min: Vec3,
-  max: Vec3,
-  axis: 0 | 1 | 2,
-): { start: Vec3; end: Vec3; badge: Vec3 } {
-  if (axis === 0) {
-    const y = max[1] + LINE_OUT;
-    const z = max[2] + LINE_OUT;
-    const start: Vec3 = [min[0], y, z];
-    const end: Vec3 = [max[0], y, z];
-    return { start, end, badge: offsetBadge(start, end, [0, 1, 1]) };
-  }
-  if (axis === 1) {
-    const x = max[0] + LINE_OUT;
-    const y = max[1] + LINE_OUT;
-    const start: Vec3 = [x, y, min[2]];
-    const end: Vec3 = [x, y, max[2]];
-    return { start, end, badge: offsetBadge(start, end, [1, 1, 0]) };
-  }
-  const x = max[0] + LINE_OUT;
-  const z = max[2] + LINE_OUT;
-  const start: Vec3 = [x, min[1], z];
-  const end: Vec3 = [x, max[1], z];
-  return { start, end, badge: offsetBadge(start, end, [1, 0, 1]) };
-}
-
-function offsetBadge(start: Vec3, end: Vec3, outward: Vec3): Vec3 {
-  const mid: Vec3 = [(start[0] + end[0]) / 2, (start[1] + end[1]) / 2, (start[2] + end[2]) / 2];
-  const n = len(outward);
-  if (n < PARALLEL) return mid;
-  return add(mid, scale(outward, BADGE_OUT / n));
 }
 
 function toWorld(

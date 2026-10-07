@@ -22,6 +22,7 @@ import {
   saddlePolyhedron,
   scale,
   tConnectorPolyhedron,
+  uBarPolyhedron,
   worldPolyhedron,
   type Polyhedron,
   type SceneContacts,
@@ -179,6 +180,7 @@ const GEOMETRY_LABEL: Record<Exclude<StockGeometry, "box" | "rod">, string> = {
   "connector-t": "T-connector",
   saddle: "Saddle",
   "joist-hanger": "Joist hanger",
+  "u-bar": "Monkey bar",
 };
 
 function featureHeight(member: ResolvedMember, name: string, label: string): number {
@@ -209,6 +211,8 @@ function hardwarePolyhedron(member: ResolvedMember, geometry: Exclude<StockGeome
         featureHeight(member, "height", label),
         featureHeight(member, "face", label),
       );
+    case "u-bar":
+      return uBarPolyhedron(member.size, featureHeight(member, "drop", label), featureHeight(member, "flange", label));
   }
 }
 

@@ -211,6 +211,42 @@ members:
     expect(result.scene).toBeUndefined();
     expect(result.diagnostics.some((item) => item.message.includes("cannot take planar cuts"))).toBe(true);
   });
+
+  it("meshes a monkey bar and keeps the drop when the span changes", () => {
+    const result = compileDocument(`
+version: 1
+name: Bars
+members:
+  - { label: Short, stock: u-bar }
+  - { label: Long, stock: u-bar, size: [72] }
+components:
+  - label: Ceiling
+    members:
+      - { id: short-1, position: [0, 0, 0] }
+      - { id: long-1, position: [40, 0, 0] }
+`);
+    expect(result.diagnostics.filter((item) => item.severity === "error")).toEqual([]);
+    const members = result.scene?.components[0].members ?? [];
+    const short = members.find((part) => part.stockId === "u-bar" && part.label === "Short");
+    const long = members.find((part) => part.label === "Long");
+    expect(short?.finished.length).toBeCloseTo(18, 4);
+    expect(short?.finished.width).toBeCloseTo(2, 4);
+    expect(short?.finished.thickness).toBeCloseTo(5, 4);
+    expect(long?.finished.length).toBeCloseTo(72, 4);
+    expect(long?.finished.thickness).toBeCloseTo(5, 4);
+    expect(long?.finished.width).toBeCloseTo(2, 4);
+  });
+
+  it("rejects cuts on a monkey bar", () => {
+    const result = compileDocument(`
+version: 1
+name: Bad
+members:
+  - { label: Bar, stock: u-bar, cuts: [{ axis: 0, angle: 90, at: 12 }] }
+`);
+    expect(result.scene).toBeUndefined();
+    expect(result.diagnostics.some((item) => item.message.includes("cannot take planar cuts"))).toBe(true);
+  });
 });
 
 describe("validateDocument fasteners default", () => {

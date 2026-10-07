@@ -24,6 +24,7 @@ export {
   lBracketPolyhedron,
   rodPolyhedron,
   saddlePolyhedron,
+  uBarPolyhedron,
   tConnectorPolyhedron,
   polyhedronVolume,
   vertexCount,

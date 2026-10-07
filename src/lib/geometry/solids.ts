@@ -1,6 +1,6 @@
 import { BOX_FACE_ORDER, faceQuad } from "./faces";
 import type { Face, Polyhedron, Vec3 } from "./types";
-import { add, cross, dot, normalize, sub, uniquePoints } from "./vec3";
+import { add, cross, dot, len, normalize, scale, sub, uniquePoints } from "./vec3";
 
 export function faceNormal(face: Face): Vec3 {
   if (face.length < 3) return [0, 0, 0];
@@ -96,6 +96,77 @@ export function rodPolyhedron(size: Vec3): Polyhedron {
     faces.push(quad);
   }
   return faces;
+}
+
+const PIPE_SEGMENTS = 16;
+/** Mounting-plate thickness for a U-bar. Not a catalog axis. */
+const U_BAR_PLATE = 0.25;
+
+/** Closed prism from `a` to `b`. Caps face outward along the axis. */
+function cylinderBetween(a: Vec3, b: Vec3, radius: number): Polyhedron {
+  const axis = sub(b, a);
+  const length = len(axis);
+  if (!(length > 1e-8) || !(radius > 1e-8)) return [];
+  const dir = scale(axis, 1 / length);
+  const helper: Vec3 = Math.abs(dir[1]) > 0.9 ? [1, 0, 0] : [0, 1, 0];
+  const u = normalize(cross(dir, helper));
+  const v = normalize(cross(dir, u));
+  const ring = (origin: Vec3): Vec3[] =>
+    Array.from({ length: PIPE_SEGMENTS }, (_, index) => {
+      const theta = (index / PIPE_SEGMENTS) * Math.PI * 2;
+      return add(origin, add(scale(u, radius * Math.cos(theta)), scale(v, radius * Math.sin(theta))));
+    });
+  const start = ring(a);
+  const end = ring(b);
+  const faces: Polyhedron = [];
+
+  const startCap = [...start];
+  if (dot(faceNormal(startCap), dir) > 0) startCap.reverse();
+  faces.push(startCap);
+
+  const endCap = [...end];
+  if (dot(faceNormal(endCap), dir) < 0) endCap.reverse();
+  faces.push(endCap);
+
+  for (let index = 0; index < PIPE_SEGMENTS; index++) {
+    const next = (index + 1) % PIPE_SEGMENTS;
+    const outward = add(
+      scale(u, Math.cos(((index + 0.5) / PIPE_SEGMENTS) * Math.PI * 2)),
+      scale(v, Math.sin(((index + 0.5) / PIPE_SEGMENTS) * Math.PI * 2)),
+    );
+    let quad: Face = [start[index], end[index], end[next], start[next]];
+    if (dot(faceNormal(quad), outward) < 0) {
+      quad = [start[index], start[next], end[next], end[index]];
+    }
+    faces.push(quad);
+  }
+  return faces;
+}
+
+/**
+ * U-shaped pipe hold. `size` is [overall length, pipe OD, pipe OD].
+ * A bar runs along +X on the ground. A round end rises along +Y at each end,
+ * finished with a mounting plate of diameter `flange`. `drop` is the overall
+ * height and does not follow the length. Origin at the outside corner.
+ */
+export function uBarPolyhedron(size: Vec3, drop: number, flange: number): Polyhedron {
+  const [length, width, thickness] = size;
+  const pipe = Math.min(width, thickness);
+  const radius = pipe / 2;
+  const plate = Math.max(flange, pipe);
+  const plateRadius = plate / 2;
+  const rise = Math.max(drop, radius + U_BAR_PLATE);
+  const z = plate / 2;
+  const left = plateRadius;
+  const right = Math.max(length - plateRadius, left);
+  const legTop = rise - U_BAR_PLATE;
+  return [
+    ...cylinderBetween([left, radius, z], [right, radius, z], radius),
+    ...cylinderBetween([left, radius, z], [left, legTop, z], radius),
+    ...cylinderBetween([right, radius, z], [right, legTop, z], radius),
+    ...cylinderBetween([left, legTop, z], [left, rise, z], plateRadius),
+    ...cylinderBetween([right, legTop, z], [right, rise, z], plateRadius),
+  ];
 }
 
 /**

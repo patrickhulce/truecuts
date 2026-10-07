@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   boundingBox,
   boxPolyhedron,
+  faceNormal,
   flatLBracketPolyhedron,
   lBracketPolyhedron,
   polyhedronVolume,
@@ -9,6 +10,7 @@ import {
   joistHangerPolyhedron,
   saddlePolyhedron,
   tConnectorPolyhedron,
+  uBarPolyhedron,
 } from "./solids";
 
 const BOX: [number, number, number] = [10, 4, 2];
@@ -135,5 +137,41 @@ describe("rodPolyhedron", () => {
     expect(polyhedronVolume(poly)).toBeCloseTo(prism, 4);
     expect(polyhedronVolume(poly)).toBeLessThan(cylinder);
     expect(polyhedronVolume(poly)).toBeLessThan(12);
+  });
+});
+
+describe("uBarPolyhedron", () => {
+  it("spans the length and stands the ends up to the drop", () => {
+    const length = 18;
+    const drop = 5;
+    const flange = 2;
+    const poly = uBarPolyhedron([length, 0.75, 0.75], drop, flange);
+    const box = boundingBox(poly);
+    expect(box.min[0]).toBeCloseTo(0, 5);
+    expect(box.min[1]).toBeCloseTo(0, 5);
+    expect(box.min[2]).toBeCloseTo(0, 5);
+    expect(box.max[0]).toBeCloseTo(length, 5);
+    expect(box.max[1]).toBeCloseTo(drop, 5);
+    expect(box.max[2]).toBeCloseTo(flange, 5);
+    expect(polyhedronVolume(poly)).toBeGreaterThan(0);
+    const bottom = poly
+      .map((face) => ({
+        face,
+        y: face.reduce((sum, point) => sum + point[1], 0) / face.length,
+      }))
+      .sort((a, b) => a.y - b.y)[0];
+    expect(bottom).toBeDefined();
+    expect(faceNormal(bottom!.face)[1]).toBeLessThan(0);
+  });
+
+  it("lengthens the bar without raising the ends or widening the plates", () => {
+    const short = boundingBox(uBarPolyhedron([24, 0.75, 0.75], 5, 2));
+    const long = boundingBox(uBarPolyhedron([72, 0.75, 0.75], 5, 2));
+    expect(long.max[0] - long.min[0]).toBeCloseTo(72, 5);
+    expect(long.max[1]).toBeCloseTo(short.max[1], 5);
+    expect(long.max[2]).toBeCloseTo(short.max[2], 5);
+    expect(polyhedronVolume(uBarPolyhedron([72, 0.75, 0.75], 5, 2))).toBeGreaterThan(
+      polyhedronVolume(uBarPolyhedron([24, 0.75, 0.75], 5, 2)),
+    );
   });
 });

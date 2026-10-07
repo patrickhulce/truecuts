@@ -66,19 +66,30 @@ function previewRendererInstance(): THREE.WebGLRenderer {
 }
 
 /** Square framing. Very long stock is cropped so the cross-section stays visible. */
-function previewFrame(bounds: { min: [number, number, number]; max: [number, number, number] }): {
+function previewFrame(
+  bounds: { min: [number, number, number]; max: [number, number, number] },
+  stockId?: string,
+): {
   focus: THREE.Vector3;
   extent: number;
 } {
   const dims = [0, 1, 2].map((axis) => Math.max(bounds.max[axis] - bounds.min[axis], 0.05));
   const longest = Math.max(...dims);
   const mid = [...dims].sort((a, b) => b - a)[1] ?? longest;
-  const extent = longest / Math.max(mid, 0.05) > 4 ? mid * 3.5 : longest;
-  const focus = new THREE.Vector3(
-    bounds.min[0] + Math.min(dims[0] * 0.5, extent * 0.45),
-    bounds.min[1] + Math.min(dims[1] * 0.5, extent * 0.45),
-    bounds.min[2] + Math.min(dims[2] * 0.5, extent * 0.45),
-  );
+  // A monkey bar is a U: both mounting ends have to stay in frame, or the span looks like a stub.
+  const whole = stockId === "u-bar" || longest / Math.max(mid, 0.05) <= 4;
+  const extent = whole ? longest : mid * 3.5;
+  const focus = whole
+    ? new THREE.Vector3(
+        bounds.min[0] + dims[0] / 2,
+        bounds.min[1] + dims[1] / 2,
+        bounds.min[2] + dims[2] / 2,
+      )
+    : new THREE.Vector3(
+        bounds.min[0] + Math.min(dims[0] * 0.5, extent * 0.45),
+        bounds.min[1] + Math.min(dims[1] * 0.5, extent * 0.45),
+        bounds.min[2] + Math.min(dims[2] * 0.5, extent * 0.45),
+      );
   return { focus, extent: Math.max(extent, 0.5) };
 }
 
@@ -104,10 +115,13 @@ function drawCatalogPreview(instance: SceneMemberInstance): string {
   );
   scene.add(mesh, edges);
 
-  const { focus, extent } = previewFrame({
-    min: instance.bounds.min,
-    max: instance.bounds.max,
-  });
+  const { focus, extent } = previewFrame(
+    {
+      min: instance.bounds.min,
+      max: instance.bounds.max,
+    },
+    instance.stockId,
+  );
   const camera = new THREE.OrthographicCamera(
     -PREVIEW_PX / 2,
     PREVIEW_PX / 2,

@@ -2,7 +2,7 @@
 
 TrueCuts is a carpenter's CAD planner. A project is a YAML document: **members** cut from catalog **stock**, assembled into **components**, then joined by **connections** (recipes of **fasteners** and the **bores** those fasteners need). A **part** is anything on the purchase and cut list — a member or a fastener. The editor is the source of truth in v1. The 3D view is a live visualization of that document.
 
-This document is the format reference. v1 implements members (lumber, sheet goods, L-brackets, and parameterized post hardware), planar cuts, components, connections (screws, nails, bolts, wood glue, and derived hardware: a T-connector, angle bracket, flat bracket, post saddle, or joist hanger), explicit fasteners as a hand-placed escape hatch, and rendering. Hinges, drawer slides, and procedural components are specified here for later versions.
+This document is the format reference. v1 implements members (lumber, sheet goods including multiwall polycarbonate, L-brackets, parameterized post hardware, and a U-shaped monkey bar), planar cuts, components, connections (screws, nails, bolts, wood glue, and derived hardware: a T-connector, angle bracket, flat bracket, post saddle, or joist hanger), explicit fasteners as a hand-placed escape hatch, and rendering. Hinges, drawer slides, and procedural components are specified here for later versions.
 
 ## Concepts
 
@@ -327,13 +327,14 @@ Each cut clips whatever remains. Both ends of a board can be mitered by followin
 
 ## Catalog
 
-v1 ships a small built-in dataset in `src/lib/catalog.ts`. Catalog `size` is always **actual L×W×T**, longest → shortest (a 2×4×8 is 8′ × 3.5″ × 1.5″). Trade names stay (it is still a 2×4). Sheet goods are 96″ × 48″ × listed thickness. The MDF 1×4 and 1×6 are plain primed-white boards, actual 8′ × 3.5″ × 0.75″ and 8′ × 5.5″ × 0.75″. Lumber and sheet goods are discrete rows: a 2×10 is not a scaled 2×4, because actual thickness stays 1.5″ while actual width changes. Angle L-brackets, flat L-brackets, the post-to-beam T-connector, the post saddle, and the 2×4 joist hanger are renderable hardware. Each can be placed as a member, and each can also be a connection recipe when the joint fits (see Connections). They do not take planar cuts. Round rods are renderable hardware too. A rod is a round prism inscribed in its L×W×T box, and it takes the same planar cuts as lumber. Screws, nails, bolts, and glue are rendered as instances. Hinges and drawer slides are catalogued for later rendering and procedural use.
+v1 ships a small built-in dataset in `src/lib/catalog.ts`. Catalog `size` is always **actual L×W×T**, longest → shortest (a 2×4×8 is 8′ × 3.5″ × 1.5″). Trade names stay (it is still a 2×4). Sheet goods are 96″ × 48″ × listed thickness, including multiwall polycarbonate at its metric thickness. The MDF 1×4 and 1×6 are plain primed-white boards, actual 8′ × 3.5″ × 0.75″ and 8′ × 5.5″ × 0.75″. Lumber and sheet goods are discrete rows: a 2×10 is not a scaled 2×4, because actual thickness stays 1.5″ while actual width changes. Angle L-brackets, flat L-brackets, the post-to-beam T-connector, the post saddle, and the 2×4 joist hanger are renderable hardware. Each can be placed as a member, and each can also be a connection recipe when the joint fits (see Connections). They do not take planar cuts. Round rods and the U-shaped monkey bar are renderable hardware too. A rod is a round prism inscribed in its L×W×T box, and it takes the same planar cuts as lumber. The monkey bar is a length of 3/4″ black bar with a round mounting plate at each end; only the span changes. Screws, nails, bolts, and glue are rendered as instances. Hinges and drawer slides are catalogued for later rendering and procedural use.
 
-Parameterized stock (`bracket-l`, `connector-t`, `saddle`) stores a spec per axis. A member's `size` lists only the free axes. Fixed axes and extra features stay at the catalog value, so lengthening a plate does not thicken it or change stem or flange height.
+Parameterized stock (`bracket-l`, `connector-t`, `saddle`, `u-bar`) stores a spec per axis. A member's `size` lists only the free axes. Fixed axes and extra features stay at the catalog value, so lengthening a plate does not thicken it or change stem or flange height, and lengthening a monkey bar does not change the pipe, the drop, or the plates.
 
 ```yaml
 - { label: Post cap, stock: connector-t, size: [7.5, 5.5] }  # L and W; gauge stays 1/4″, riser stays 3″
 - { label: Post bracket, stock: bracket-l, size: [6, 4] }    # leg and fold; gauge stays 1/8″
+- { label: Hold, stock: u-bar, size: [48] }                  # span; pipe, drop, and plates stay put
 ```
 
 | id | kind | actual L × W × T (in) | notes |
@@ -365,6 +366,10 @@ Parameterized stock (`bracket-l`, `connector-t`, `saddle`) stores a spec per axi
 | `mdf-3/4-4x8` | sheet | 96 × 48 × 0.75 | |
 | `mdf-1x4x8` | sheet | 96 × 3.5 × 0.75 | primed white MDF 1×4, plain board |
 | `mdf-1x6x8` | sheet | 96 × 5.5 × 0.75 | primed white MDF 1×6, plain board |
+| `pc-6mm-4x8` | sheet | 96 × 48 × 6 mm | multiwall polycarbonate |
+| `pc-8mm-4x8` | sheet | 96 × 48 × 8 mm | multiwall polycarbonate |
+| `pc-10mm-4x8` | sheet | 96 × 48 × 10 mm | multiwall polycarbonate |
+| `pc-16mm-4x8` | sheet | 96 × 48 × 16 mm | multiwall polycarbonate |
 | `screw-wood-6x1.25` | fastener | #6 × 1¼″ wood screw | rendered as a fastener |
 | `screw-wood-8x1.25` | fastener | #8 × 1¼″ wood screw | rendered as a fastener |
 | `screw-wood-8x2` | fastener | #8 × 2″ wood screw | rendered as a fastener |
@@ -390,6 +395,7 @@ Parameterized stock (`bracket-l`, `connector-t`, `saddle`) stores a spec per axi
 | `rod-1x30` | hardware | 30 × 1 × 1 | black round bar, 1″ diameter |
 | `rod-1x36` | hardware | 36 × 1 × 1 | black round bar, 1″ diameter |
 | `rod-1x48` | hardware | 48 × 1 × 1 | black round bar, 1″ diameter |
+| `u-bar` | hardware | monkey bar | 3/4″ black bar U; L is 12–96 (default 18); bar fixed 3/4″; drop fixed 5″; plates fixed 2″ |
 | `bolt-hex-1/4x2` | fastener | ¼″ × 2″ hex bolt | head, washers, nut |
 | `bolt-hex-1/4x3` | fastener | ¼″ × 3″ hex bolt | head, washers, nut |
 | `bolt-hex-1/4x4` | fastener | ¼″ × 4″ hex bolt | head, washers, nut |
@@ -415,6 +421,8 @@ Saddle (`saddle`) part axes: origin at the outside corner of the seat. The seat 
 Joist hanger (`joist-hanger-2x4`): a face-mount hanger for a 2×4 set on edge. Origin at the outer corner of the near header flange. The seat is L long and T thick. The clear opening is W. Each side is gauge T and rises the catalog `height` (3⅛″) along +Y. At the header end each side bends out into a flange of catalog width `face` (1½″) and gauge T. Planar cuts are not allowed.
 
 Round rod (`rod-1x12`, `rod-1x16`, `rod-1x21`, `rod-1x24`, `rod-1x30`, `rod-1x36`, `rod-1x48`): a 16-side prism along L. The circle of diameter min(W, T) is inscribed in the W×T square, so a 1″ rod’s bounding box stays L×1×1. It takes the same planar cuts as lumber.
+
+Monkey bar (`u-bar`): a U of 3/4″ black bar. Origin at the outside corner. The bar runs along +X on `LxW@0`. A round end rises along +Y at each end and finishes in a 2″ mounting plate ¼″ thick. L is the overall span, from the outside of one plate to the outside of the other, and is the only free axis (12″ through 8′, default 18″). The drop is 5″ from the bottom of the bar to the top of the plates and does not follow L. Planar cuts are not allowed.
 
 ## Procedural components
 

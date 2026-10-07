@@ -113,6 +113,15 @@ export const STOCK_FAMILIES: StockFamily[] = [
     allowsCut: true,
   },
   {
+    id: "polycarbonate-4x8",
+    kind: "sheet",
+    title: "Polycarbonate 4×8",
+    summary: "Multiwall sheet · 6 mm through 16 mm",
+    variants: ["pc-6mm-4x8", "pc-8mm-4x8", "pc-10mm-4x8", "pc-16mm-4x8"],
+    defaultLabel: "Panel",
+    allowsCut: true,
+  },
+  {
     id: "bracket-angle",
     kind: "hardware",
     title: "Angle L-bracket",
@@ -173,6 +182,15 @@ export const STOCK_FAMILIES: StockFamily[] = [
     ],
     defaultLabel: "Rod",
     allowsCut: true,
+  },
+  {
+    id: "u-bar",
+    kind: "hardware",
+    title: "Monkey bar",
+    summary: "3/4″ black bar · U hold · 12″ through 8′",
+    variants: ["u-bar"],
+    defaultLabel: "Bar",
+    allowsCut: false,
   },
   {
     id: "wood-screw",
@@ -238,7 +256,8 @@ export function familyParts(family: StockFamily): CatalogPart[] {
 
 export function variantLabel(part: CatalogPart): string {
   if (part.id === "bracket-l" || part.id === "connector-t" || part.id === "saddle") return "Custom";
-  if (part.kind === "lumber" || part.subtype === "rod") return formatInches(part.size[0]);
+  if (part.kind === "lumber" || part.subtype === "rod" || part.subtype === "u-bar") return formatInches(part.size[0]);
+  if (part.material === "polycarbonate") return `${Math.round(part.size[2] * 25.4)} mm`;
   if (part.kind === "sheet") return formatInches(part.size[2]);
   if (part.subtype === "screw") return part.label.replace(/ wood screw$/, "");
   if (part.subtype === "nail") return part.label.replace(/ common nail$/, "");

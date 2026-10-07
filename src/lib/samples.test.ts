@@ -50,4 +50,27 @@ describe("stock families", () => {
     expect(part3ft).toBeDefined();
     expect(part3ft?.size).toEqual([36, 1, 1]);
   });
+
+  it("stocks 4×8 multiwall polycarbonate from 6 mm through 16 mm", () => {
+    const family = STOCK_FAMILIES.find((item) => item.id === "polycarbonate-4x8");
+    expect(family?.variants).toEqual(["pc-6mm-4x8", "pc-8mm-4x8", "pc-10mm-4x8", "pc-16mm-4x8"]);
+    for (const mm of [6, 8, 10, 16]) {
+      const part = getCatalogPart(`pc-${mm}mm-4x8`);
+      expect(part?.kind).toBe("sheet");
+      expect(part?.size[0]).toBe(96);
+      expect(part?.size[1]).toBe(48);
+      expect(part?.size[2]).toBeCloseTo(mm / 25.4, 6);
+    }
+  });
+
+  it("stocks a variable-length monkey bar", () => {
+    const family = STOCK_FAMILIES.find((item) => item.id === "u-bar");
+    expect(family?.variants).toEqual(["u-bar"]);
+    const part = getCatalogPart("u-bar");
+    expect(part?.geometry).toBe("u-bar");
+    expect(part?.size).toEqual([18, 0.75, 0.75]);
+    expect(part?.axes?.L).toEqual({ min: 12, max: 96, default: 18 });
+    expect(part?.features?.drop).toEqual({ fixed: 5 });
+    expect(part?.features?.flange).toEqual({ fixed: 2 });
+  });
 });

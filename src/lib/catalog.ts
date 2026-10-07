@@ -13,7 +13,7 @@ export type FastenerSubtype =
   | "saddle"
   | "joist-hanger";
 
-export type StockGeometry = "box" | "bracket-l" | "bracket-flat-l" | "connector-t" | "saddle" | "joist-hanger" | "rod";
+export type StockGeometry = "box" | "bracket-l" | "bracket-flat-l" | "connector-t" | "saddle" | "joist-hanger" | "rod" | "u-bar";
 
 export type AxisName = "L" | "W" | "T";
 
@@ -53,6 +53,7 @@ const PINE = "#c4a36a";
 const PLYWOOD = "#d2b48c";
 const MDF = "#cbb892";
 const MDF_WHITE = "#f4f3ef";
+const POLY = "#d7efe6";
 const STEEL = "#8a9096";
 const BLACK = "#3a3a3a";
 const ALUMINUM = "#c5ccd1";
@@ -105,6 +106,29 @@ function metalRod(length: number): CatalogPart {
     material: "steel",
     color: BLACK,
     notes: "Round bar, 1″ diameter. A longer rod is not a thicker rod. Takes the same planar cuts as lumber.",
+    renderable: true,
+  };
+}
+
+/** 3/4″ monkey-bar diameter. */
+const PIPE_OD = 0.75;
+/** Mounting-plate diameter on each end of a monkey bar. */
+const U_BAR_FLANGE = 2;
+/** Overall height of a monkey bar, from the bar to the top of the plates. */
+const U_BAR_DROP = 5;
+/** Default overall span, outside of one plate to the outside of the other. */
+const U_BAR_SPAN = 18;
+
+function polycarbonateSheet(mm: number): CatalogPart {
+  return {
+    id: `pc-${mm}mm-4x8`,
+    kind: "sheet",
+    label: `${mm} mm polycarbonate 4×8`,
+    size: [96, 48, mm / 25.4],
+    nominal: { thickness: mm / 25.4, width: 48, length: 96 },
+    material: "polycarbonate",
+    color: POLY,
+    notes: `Multiwall sheet. Actual 8′ × 4′ × ${mm} mm.`,
     renderable: true,
   };
 }
@@ -399,6 +423,7 @@ export const CATALOG: CatalogPart[] = [
     notes: "Plain primed board. Actual 8′ × 5.5″ × 0.75″ (L×W×T).",
     renderable: true,
   },
+  ...[6, 8, 10, 16].map((mm) => polycarbonateSheet(mm)),
   {
     id: "screw-wood-6x1.25",
     kind: "fastener",
@@ -592,6 +617,28 @@ export const CATALOG: CatalogPart[] = [
     renderable: true,
   },
   ...[12, 16, 21, 24, 30, 36, 48].map((length) => metalRod(length)),
+  {
+    id: "u-bar",
+    kind: "hardware",
+    label: "Monkey bar",
+    subtype: "u-bar",
+    geometry: "u-bar",
+    size: [U_BAR_SPAN, PIPE_OD, PIPE_OD],
+    axes: {
+      L: { min: 12, max: 96, default: U_BAR_SPAN },
+      W: { fixed: PIPE_OD },
+      T: { fixed: PIPE_OD },
+    },
+    features: {
+      drop: { fixed: U_BAR_DROP },
+      flange: { fixed: U_BAR_FLANGE },
+    },
+    material: "steel",
+    color: BLACK,
+    notes:
+      "3/4″ black bar bent into a U. Length is the overall span, 12″ through 8′, default 18″. The bar stays 3/4″, the drop stays 5″, and each end is a 2″ mounting plate.",
+    renderable: true,
+  },
   ...[2, 3, 4].map((length) => hexBolt(0.25, length)),
   ...[3, 4, 6].map((length) => hexBolt(0.375, length)),
   ...[4, 6, 8].map((length) => hexBolt(0.5, length)),

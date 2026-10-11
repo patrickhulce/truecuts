@@ -4,10 +4,13 @@
 #
 # Numeric dimensions are L×W×T, longest → shortest. A 2x4x8 is 8′ × 3.5″ × 1.5″.
 # Default local frame: X=L, Z=W, Y=T (LxW@0 down). Connections (screws, glue,
-# brackets) join members. Anything not reachable from the first member of the
-# first component renders in red/white stripes.
+# brackets) join members. Anything not reachable from the first placed member
+# renders in red/white stripes.
+#
+# The trestle is one component placed twice. Both legs are placements of one
+# member, so a cut on that member updates every leg.
 
-version: 1
+version: 2
 name: Assembly Bench
 
 members:
@@ -16,35 +19,10 @@ members:
     cuts:
       - { axis: 0, angle: 90, at: 30 }
 
-  - label: Leg
-    stock: 2x4x8
-    cuts:
-      - { axis: 0, angle: 90, at: 30 }
-
-  - label: Leg
-    stock: 2x4x8
-    cuts:
-      - { axis: 0, angle: 90, at: 30 }
-
-  - label: Leg
-    stock: 2x4x8
-    cuts:
-      - { axis: 0, angle: 90, at: 30 }
-
   - label: Long apron
     stock: 2x4x8
     cuts:
       - { axis: 0, angle: 90, at: 33 }
-
-  - label: Long apron
-    stock: 2x4x8
-    cuts:
-      - { axis: 0, angle: 90, at: 33 }
-
-  - label: Short apron
-    stock: 2x4x8
-    cuts:
-      - { axis: 0, angle: 90, at: 21 }
 
   - label: Short apron
     stock: 2x4x8
@@ -103,20 +81,25 @@ members:
     size: [12, 5.5]
 
 components:
+  # Two standing legs. [90, 90, 0] sends L up world Y, W along +X, T along +Z.
+  # No position: this is a template, placed by the bench.
+  - label: Trestle
+    members:
+      - { id: leg-1, position: [ 0, 0, 0 ], rotation: [ 90, 90, 0 ] }
+      - { id: leg-1, position: [ 36.5, 0, 0 ], rotation: [ 90, 90, 0 ] }
+
   - label: Bench
     position: [ 0, 0, 0 ]
     rotation: [ 0, 0, 0 ]
+    components:
+      - { component: trestle-1, position: [ 0, 0, 0 ], rotation: [ 0, 0, 0 ] }
+      - { component: trestle-1, position: [ 0, 0, 22.5 ], rotation: [ 0, 0, 0 ] }
     members:
-      # Standing 2x4s: [90, 90, 0] sends L up world Y, W along +X, T along +Z.
-      - { id: leg-1, position: [ 0, 0, 0 ], rotation: [ 90, 90, 0 ] }
-      - { id: leg-2, position: [ 36.5, 0, 0 ], rotation: [ 90, 90, 0 ] }
-      - { id: leg-3, position: [ 0, 0, 22.5 ], rotation: [ 90, 90, 0 ] }
-      - { id: leg-4, position: [ 36.5, 0, 22.5 ], rotation: [ 90, 90, 0 ] }
       # Aprons: [90, 0, 0] stands W up (−Y from the top origin); hang from LxT@0.
       - { id: long-apron-1, position: [ 3.5, 30, 0.5 ], rotation: [ 90, 0, 0 ] }
-      - { id: long-apron-2, position: [ 3.5, 30, 22 ], rotation: [ 90, 0, 0 ] }
+      - { id: long-apron-1, position: [ 3.5, 30, 22 ], rotation: [ 90, 0, 0 ] }
       - { id: short-apron-1, position: [ 0.5, 30, 22.5 ], rotation: [ 90, 0, -90 ] }
-      - { id: short-apron-2, position: [ 38, 30, 22.5 ], rotation: [ 90, 0, -90 ] }
+      - { id: short-apron-1, position: [ 38, 30, 22.5 ], rotation: [ 90, 0, -90 ] }
       # Lower front stretcher between the front legs.
       - { id: brace-1, position: [ 3.5, 13.5, 0 ], rotation: [ 90, 0, 0 ] }
       # Plywood sits flat by default (T along +Y).
@@ -126,7 +109,7 @@ components:
       - { id: corner-bracket-2, position: [ 36.5, 26.5, 0 ], rotation: [ 0, 0, 180 ] }
       - { id: corner-bracket-3, position: [ 3.5, 26.5, 24 ], rotation: [ 180, 0, 0 ] }
       - { id: corner-bracket-4, position: [ 36.5, 26.5, 22.5 ], rotation: [ 0, 0, 180 ] }
-      # Post stands against leg-2. Beam sits in the saddle and butts the post.
+      # Post stands against the front-right leg. Beam sits in the saddle and butts the post.
       - { id: post-1, position: [ 40, 0, 0 ], rotation: [ 90, 90, 0 ] }
       - { id: beam-saddle-1, position: [ 45.5, 0, -0.25 ], rotation: [ 0, 0, 0 ] }
       - { id: beam-1, position: [ 45.5, 0.25, 0 ], rotation: [ 0, 0, 0 ] }
@@ -134,82 +117,82 @@ components:
       # Butt screws: head in the first member, tip into the second. Centered on the contact.
       - members:
           - { id: long-apron-1 }
-          - { id: leg-1 }
+          - { component: trestle-1, id: leg-1, placement: 0 }
         fasteners:
           - { kind: screw, stock: screw-wood-8x2.5, variant: { kind: centered, separation: 6, justify: space-around } }
       - members:
           - { id: long-apron-1 }
-          - { id: leg-2 }
+          - { component: trestle-1, index: 0, id: leg-1, placement: 1 }
         fasteners:
           - { kind: screw, stock: screw-wood-8x2.5, variant: { kind: centered, separation: 6, justify: space-around } }
       - members:
-          - { id: long-apron-2 }
-          - { id: leg-3 }
+          - { id: long-apron-1, index: 1 }
+          - { component: trestle-1, index: 1, id: leg-1, placement: 0 }
         fasteners:
           - { kind: screw, stock: screw-wood-8x2.5, variant: { kind: centered, separation: 6, justify: space-around } }
       - members:
-          - { id: long-apron-2 }
-          - { id: leg-4 }
-        fasteners:
-          - { kind: screw, stock: screw-wood-8x2.5, variant: { kind: centered, separation: 6, justify: space-around } }
-      - members:
-          - { id: short-apron-1 }
-          - { id: leg-1 }
+          - { id: long-apron-1, index: 1 }
+          - { component: trestle-1, index: 1, id: leg-1, placement: 1 }
         fasteners:
           - { kind: screw, stock: screw-wood-8x2.5, variant: { kind: centered, separation: 6, justify: space-around } }
       - members:
           - { id: short-apron-1 }
-          - { id: leg-3 }
+          - { component: trestle-1, id: leg-1, placement: 0 }
         fasteners:
           - { kind: screw, stock: screw-wood-8x2.5, variant: { kind: centered, separation: 6, justify: space-around } }
       - members:
-          - { id: short-apron-2 }
-          - { id: leg-2 }
+          - { id: short-apron-1 }
+          - { component: trestle-1, index: 1, id: leg-1, placement: 0 }
         fasteners:
           - { kind: screw, stock: screw-wood-8x2.5, variant: { kind: centered, separation: 6, justify: space-around } }
       - members:
-          - { id: short-apron-2 }
-          - { id: leg-4 }
+          - { id: short-apron-1, index: 1 }
+          - { component: trestle-1, index: 0, id: leg-1, placement: 1 }
+        fasteners:
+          - { kind: screw, stock: screw-wood-8x2.5, variant: { kind: centered, separation: 6, justify: space-around } }
+      - members:
+          - { id: short-apron-1, index: 1 }
+          - { component: trestle-1, index: 1, id: leg-1, placement: 1 }
         fasteners:
           - { kind: screw, stock: screw-wood-8x2.5, variant: { kind: centered, separation: 6, justify: space-around } }
       - members:
           - { id: brace-1 }
-          - { id: leg-1 }
+          - { component: trestle-1, id: leg-1, placement: 0 }
         fasteners:
           - { kind: screw, stock: screw-wood-8x2.5, variant: { kind: centered, separation: 6, justify: space-around } }
       - members:
           - { id: brace-1 }
-          - { id: leg-2 }
+          - { component: trestle-1, index: 0, id: leg-1, placement: 1 }
         fasteners:
           - { kind: screw, stock: screw-wood-8x2.5, variant: { kind: centered, separation: 6, justify: space-around } }
       # One screw through each bracket flange into the apron and the leg.
       - members:
           - { id: corner-bracket-1 }
           - { id: long-apron-1 }
-          - { id: leg-1 }
+          - { component: trestle-1, id: leg-1, placement: 0 }
         fasteners:
           - { kind: screw, stock: screw-wood-8x1.25, variant: { kind: angle-bracket, bracket: corner-bracket-1, edge: 0.25 } }
       - members:
           - { id: corner-bracket-2 }
           - { id: long-apron-1 }
-          - { id: leg-2 }
+          - { component: trestle-1, index: 0, id: leg-1, placement: 1 }
         fasteners:
           - { kind: screw, stock: screw-wood-8x1.25, variant: { kind: angle-bracket, bracket: corner-bracket-2, edge: 0.25 } }
       - members:
           - { id: corner-bracket-3 }
-          - { id: long-apron-2 }
-          - { id: leg-3 }
+          - { id: long-apron-1, index: 1 }
+          - { component: trestle-1, index: 1, id: leg-1, placement: 0 }
         fasteners:
           - { kind: screw, stock: screw-wood-8x1.25, variant: { kind: angle-bracket, bracket: corner-bracket-3, edge: 0.25 } }
       - members:
           - { id: corner-bracket-4 }
-          - { id: long-apron-2 }
-          - { id: leg-4 }
+          - { id: long-apron-1, index: 1 }
+          - { component: trestle-1, index: 1, id: leg-1, placement: 1 }
         fasteners:
           - { kind: screw, stock: screw-wood-8x1.25, variant: { kind: angle-bracket, bracket: corner-bracket-4, edge: 0.25 } }
       - members:
           - { id: post-1 }
-          - { id: leg-2 }
+          - { component: trestle-1, index: 0, id: leg-1, placement: 1 }
         fasteners:
           - { kind: screw, stock: screw-wood-10x3, variant: { kind: centered, separation: 8, justify: space-around } }
       - members:
@@ -231,7 +214,7 @@ components:
           - { kind: screw, stock: screw-wood-8x1.25, variant: { kind: centered, separation: 16, justify: space-around } }
       - members:
           - { id: top-1 }
-          - { id: long-apron-2 }
+          - { id: long-apron-1, index: 1 }
         fasteners:
           - { kind: glue, stock: wood-glue }
           - { kind: screw, stock: screw-wood-8x1.25, variant: { kind: centered, separation: 16, justify: space-around } }
@@ -243,7 +226,7 @@ components:
           - { kind: screw, stock: screw-wood-8x1.25, variant: { kind: centered, separation: 16, justify: space-around } }
       - members:
           - { id: top-1 }
-          - { id: short-apron-2 }
+          - { id: short-apron-1, index: 1 }
         fasteners:
           - { kind: glue, stock: wood-glue }
           - { kind: screw, stock: screw-wood-8x1.25, variant: { kind: centered, separation: 16, justify: space-around } }
@@ -262,7 +245,7 @@ components:
 # Document-level connection: glue the shelf component to the bench.
 connections:
   - members:
-      - { component: bench-1, id: long-apron-2 }
+      - { component: bench-1, id: long-apron-1, index: 1 }
       - { component: shelf-1, id: shelf-board-1 }
     fasteners:
       - { kind: glue, stock: wood-glue }

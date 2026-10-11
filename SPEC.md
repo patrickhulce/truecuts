@@ -8,8 +8,8 @@ This document is the format reference. v1 implements members (lumber, sheet good
 
 | Term | Meaning |
 | --- | --- |
-| Component | A large grouping of a build: placed members (and, later, nested components) relative to a local origin, then placed in world space. |
-| Member | A block of wood, or a hardware part such as a bracket, cut from stock. YAML key `members`. |
+| Component | An arrangement of member placements and nested component placements, plus the joints between them. The component that owns that body is the template. Another placement of the same id is an instance: editing the arrangement updates every instance. |
+| Member | A configured part: stock, size, cuts, and bores. YAML key `members`. One member definition is one part. Two placements of `leg-1` are that same part, so a cut edit changes both. |
 | Stock | Raw material from the store. A catalog entry such as `2x4x8`. |
 | Cut | A planar slice that converts stock into a member. |
 | Bore | A depression or hole drilled in a member. Authored bores use YAML key `bores`. Pilot and clearance bores for a connection are derived, not authored. |
@@ -40,7 +40,7 @@ Explicit ids must match:
 
 Examples: `leg-1`, `top-1`, `cabinet-door-12`. `Leg`, `rail`, and `top_1` are invalid.
 
-Member ids and component ids share one document-wide namespace. Duplicate ids are an error. Component `members[].id` values must resolve to a member id.
+Member ids and component ids share one document-wide namespace. Duplicate ids are an error. Explicit ids are claimed before derived ids, in document order, so a new member does not take an id already used by a component. Component `members[].id` values must resolve to a member id. A root copy has no label of its own; its id is derived from the template's label.
 
 ## Units and coordinates
 
@@ -80,7 +80,7 @@ Strings that contain `"` must be YAML-quoted. Bare numbers are inches and are pr
 ## YAML document
 
 ```yaml
-version: 1
+version: 2
 name: Sawhorse
 members:
   - label: Leg                 # id defaults to leg-1
@@ -119,11 +119,11 @@ components:
 
 ### Document fields
 
-- `version` — must be `1`.
+- `version` — `2`. A `version: 1` file is opened as version 2: members stay members (identical parts are not merged), and a component that omitted `position` is written at `[0, 0, 0]` so it stays placed.
 - `name` — project title.
 - `members` — list of members (default empty).
-- `components` — list of components (default empty). Only members referenced by a component are drawn.
-- `connections` — document-level connections that may join members in different components (default empty).
+- `components` — list of component definitions and root copies (default empty). A definition with no `position` is a template only and is not drawn at the root. A placed component, including each nested instance, is drawn.
+- `connections` — document-level connections that may join members in different root components (default empty).
 - `fasteners` — hand-placed fastener instances (default empty). Prefer `connections`; this list is the escape hatch.
 
 ### Member fields
@@ -180,11 +180,29 @@ cuts:
 
 ### Component fields
 
-- `label` / `id` — as for members.
-- `members` — placements. `id` is a member **id**. `position` and `rotation` are relative to the component origin (defaults `[0, 0, 0]`).
-- `connections` — connection recipes whose members are placed in this component. Member entries omit `component` (it is implied).
-- `fasteners` — hand-placed fastener instances whose members are placed in this component. Members omit `component`.
-- `position` / `rotation` — place the component in world space.
+A definition has `label` (and optional `id`). A root copy has `component` instead of `label`: the id of a definition earlier in the file. A copy cannot carry `members`, `components`, `fasteners`, or `connections`. It is another placement of that template and receives its own id (`bench-1` placed again becomes `bench-2`).
+
+- `members` — placements. `id` is a member **id**. `position` and `rotation` are relative to the component origin (defaults `[0, 0, 0]`). Repeating an id places that same member again. Cut-list quantity counts these placements, not component instances.
+- `components` — nested placements `{ component, position, rotation }`. `component` is a definition id. A component must not contain itself, directly or through other components.
+- `connections` — recipes for members placed in this component, or reached through one nested placement. A direct member omits `component`. A member inside a nested component names that occurrence: `{ component: trestle-1, index: 0, id: leg-1, placement: 1 }`. `index` is the nested component occurrence; `placement` is the member occurrence inside it (default `0`).
+- `fasteners` — hand-placed fastener instances, with the same member references as connections. `at` stays in the member's stock frame.
+- `position` / `rotation` — place this component in world space. In version 2, omitting `position` leaves a template that is drawn only where something places it. `rotation` defaults to `[0, 0, 0]`.
+
+```yaml
+components:
+  - label: Trestle
+    members:
+      - { id: leg-1, position: [0, 0, 0], rotation: [90, 90, 0] }
+      - { id: leg-1, position: [36.5, 0, 0], rotation: [90, 90, 0] }
+  - label: Bench
+    components:
+      - { component: trestle-1, position: [0, 0, 0] }
+      - { component: trestle-1, position: [0, 0, 24] }
+    members:
+      - { id: top-1, position: [0, 30, 0] }
+    position: [0, 0, 0]
+  - { component: bench-1, position: [48, 0, 0] }   # root copy, id bench-2
+```
 
 ## Connections
 
@@ -205,7 +223,7 @@ connections:
           justify: space-between
 ```
 
-`members[]` entries are `{ id, component?, index? }`. `component` is required at document level and forbidden inside a component. `index` is the 0-based placement occurrence (default `0`).
+`members[]` entries are `{ id, component?, index?, placement? }`. At document level `component` is required and names a root occurrence; `index` is the 0-based member occurrence (default `0`); `placement` is not allowed. Inside a component, omit `component` for a member placed directly on it (`index` is that member's occurrence). Set `component` to reach a member through a nested component: `index` is that nested occurrence and `placement` is the member occurrence (default `0`). Naming the owner component on its own joint is an error.
 
 `fasteners[]` is a discriminated union on `kind`. `stock` must be a catalog entry of kind `fastener` whose subtype matches `kind`, except `none` (no stock) and the hardware recipes (`connector`, `bracket`, `flat-bracket`, `saddle`, `hanger`), whose stock is a hardware part of the matching geometry. Each entry is a recipe, not one instance. `variant` is itself a discriminated object, so a layout only carries the options that apply to it:
 
@@ -475,7 +493,7 @@ components:
 
 - Left pane: YAML editor (CodeMirror) with a walnut/amber theme and lint markers on diagnostics.
 - Right pane: react-three-fiber scene — warm hemisphere + shadowed directional light, 1″ grid with 12″ sections, orbit controls, wood-tone materials with CAD edges.
-- Click a member to inspect `id`, stock, finished AABB (L × W × T of the cut solid), whether it is fastened, and the members attached to it. Non-selected members fade so fasteners inside the assembly stay visible; attached fasteners highlight.
+- A plain click selects the member immediately. Cmd-click or Ctrl-click selects its component; the catch-all Build container is never selected by a click. Shift toggles. Member selection drops component selections. A Shift-drag marquee selects members; adding Cmd or Ctrl selects components. Select All selects members. The parts tree can select other ancestors. Copy/paste and Duplicate create independent member definitions unless exactly one component containing more than one member is selected. Only that explicit component copy stays linked. Shared members and components show an Unlink button; unlinking a component separates its arrangement, nested components, and member definitions from other copies. A component highlight covers every member under that occurrence. Moving a component moves that occurrence only. Moving a member moves that placement inside its component, so every instance of the component follows. A cut or resize writes the member, so every placement of that member follows. Non-selected members fade so fasteners inside the assembly stay visible; attached fasteners highlight.
 - Fasteners render as solids: screws (head + shank), nails (flat head + shank), bolts (hex head, washers, shank, and nut), glue beads, and hardware seated by a `connector`, `bracket`, `flat-bracket`, `saddle`, or `hanger` recipe. Connection recipes expand into those instances. The same hardware placed as a member still renders as an ordinary metal part.
 - Drilled bores, including derived pilot and clearance bores, are cut out of the rendered member when their diameter is at least the bore threshold. Smaller ones are omitted from the mesh. A blind bore has a bottom at `depth`. A through bore is open on the exit face. A mesh that is not one watertight solid keeps a dark marker instead of a cut.
 - An explode slider radiates members from the scene center (distance-proportional). Parts resting on the floor slide horizontally; downward motion stops at the floor so nothing sinks through it. Fasteners travel with their members.
@@ -489,7 +507,6 @@ Edits are one-way in v1 (YAML → 3D). GUI → YAML round-trip is on the roadmap
 ## Roadmap
 
 - Bidirectional GUI editing (select/move in 3D writes YAML; form editors for cuts).
-- Nested components.
 - Dados, rabbets, and other non-convex cuts (true CSG).
 - Cut-list optimizer (nest parts onto stock, kerf, waste).
 - CSV / STL export.

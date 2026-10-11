@@ -5,6 +5,7 @@ import { Canvas, useThree } from "@react-three/fiber";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ComponentRef, type DragEvent as ReactDragEvent, type KeyboardEvent, type PointerEvent, type RefObject } from "react";
 import * as THREE from "three";
 import { frameCamera } from "@/lib/camera-frame";
+import { isolateScene } from "@/lib/isolate";
 import {
   orbitPreviewOffset,
   resolveExportPose,
@@ -29,6 +30,7 @@ import {
   add,
   axisCoord,
   boundingBox,
+  localPoseFromWorld,
   nearInstanceKeys,
   patchesFor,
   patchNeighbor,
@@ -42,9 +44,22 @@ import {
   type Vec3,
 } from "@/lib/geometry";
 import { aabbCorners, projectedBoxHitsRect, type ScreenRect } from "@/lib/marquee";
-import type { SelectionMode } from "@/lib/selection";
+import { canSelectComponent, componentIdOfSelection, componentSelectionKey, hitSelectionKey, type SelectionMode } from "@/lib/selection";
 import type { ResolvedBore, ResolvedMember } from "@/lib/schema";
-import { computeExplodeOffsets, meshMember, type SceneConnection, type SceneFastener, type SceneModel, type SceneMemberInstance } from "@/lib/scene";
+import {
+  computeExplodeOffsets,
+  findSceneComponent,
+  findSceneParent,
+  membersUnder,
+  meshMember,
+  sceneMembers,
+  walkSceneComponents,
+  type SceneComponent,
+  type SceneConnection,
+  type SceneFastener,
+  type SceneModel,
+  type SceneMemberInstance,
+} from "@/lib/scene";
 import { sceneMeasureTargets } from "@/lib/measure";
 import { formatInches } from "@/lib/units";
 import { ConnectionFaceOverlay, ContactOverlay } from "./ContactOverlay";
@@ -90,11 +105,13 @@ type ViewportProps = {
   selectedKeys: string[];
   selectionMode: SelectionMode;
   hoveredKeys: readonly string[];
-  onSelect: (key: string | null, options?: { shift?: boolean }) => void;
-  onMarqueeSelect: (keys: string[]) => void;
+  onSelect: (key: string | null, options?: { shift?: boolean; member?: boolean }) => void;
+  onMarqueeSelect: (keys: string[], options?: { member?: boolean }) => void;
   onDeleteMembers?: (memberIds: string[]) => void;
+  onDeletePlacements?: (keys: string[]) => void;
+  onDeleteComponents?: (occurrenceIds: string[]) => void;
   onChangePoses?: (updates: PoseUpdate[]) => void;
-  onChangeComponentPose?: (update: ComponentPoseUpdate) => void;
+  onChangeComponentPose?: (updates: ComponentPoseUpdate[]) => void;
   activeConnection?: SceneConnection | null;
   canUndo: boolean;
   canRedo: boolean;
@@ -111,6 +128,9 @@ type ViewportProps = {
   members?: ResolvedMember[];
   onResizeMember?: (update: ResizeUpdate) => string | null;
   exportApiRef?: RefObject<ViewportExportApi | null>;
+  /** Occurrence shown alone, in its own frame. Null is the full build. */
+  isolatedId?: string | null;
+  onEnterIsolation?: (occurrenceId: string) => void;
 };
 
 const ZERO: Vec3 = [0, 0, 0];
@@ -140,18 +160,31 @@ function membersInMarquee(
   canvas: DOMRect,
   root: DOMRect,
   rect: ScreenRect,
+  member = false,
 ): string[] {
   camera.updateMatrixWorld();
   const keys: string[] = [];
-  for (const component of scene.components) {
+  const seen = new Set<string>();
+  walkSceneComponents(scene.components, (component) => {
     for (const part of component.members) {
       const corners = aabbCorners(part.worldBounds, offsets.get(part.key) ?? ZERO);
-      if (projectedBoxHitsRect(corners, (point) => projectToRoot(point, camera, canvas, root), rect)) {
-        keys.push(part.key);
-      }
+      if (!projectedBoxHitsRect(corners, (point) => projectToRoot(point, camera, canvas, root), rect)) continue;
+      const key = member || !canSelectComponent(component) ? part.key : componentSelectionKey(component.id);
+      if (seen.has(key)) continue;
+      seen.add(key);
+      keys.push(key);
     }
-  }
+  });
   return keys;
+}
+
+function componentLocalBounds(component: SceneComponent): Aabb | null {
+  const boxes = component.members.map((part) => posedAabb(part.bounds, part.position, part.rotation));
+  for (const child of component.children) {
+    const inner = componentLocalBounds(child);
+    if (inner) boxes.push(posedAabb(inner, child.position, child.rotation));
+  }
+  return unionAabb(boxes);
 }
 const FLOOR = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0);
 const GIMBAL_REST: [string, string, string] = ["#b45309", "#ca8a04", "#92400e"];
@@ -314,13 +347,15 @@ function MultiSelectionCard({ instances }: { instances: SceneMemberInstance[] })
 }
 
 export function Viewport({
-  scene,
+  scene: documentScene,
   selectedKeys,
   selectionMode,
   hoveredKeys,
   onSelect,
   onMarqueeSelect,
   onDeleteMembers,
+  onDeletePlacements,
+  onDeleteComponents,
   onChangePoses,
   onChangeComponentPose,
   activeConnection = null,
@@ -338,6 +373,8 @@ export function Viewport({
   members = [],
   onResizeMember,
   exportApiRef,
+  isolatedId = null,
+  onEnterIsolation,
 }: ViewportProps) {
   const rootRef = useRef<HTMLDivElement>(null);
   const cameraRef = useRef<THREE.Camera | null>(null);
@@ -378,6 +415,13 @@ export function Viewport({
   const [grabbing, setGrabbing] = useState(false);
   const { alert, show } = useRenderAlert();
   const memberById = useMemo(() => new Map(members.map((member) => [member.id, member])), [members]);
+  const scene = useMemo(() => {
+    if (!documentScene || !isolatedId || capturing) return documentScene;
+    return isolateScene(documentScene, isolatedId) ?? documentScene;
+  }, [capturing, documentScene, isolatedId]);
+  const savedOrbit = useRef<(OrbitSnapshot & { near: number; far: number }) | null>(null);
+  const isolatedBefore = useRef<string | null>(null);
+  const [focusToken, setFocusToken] = useState(0);
 
   useEffect(() => {
     const onKeyDown = (event: globalThis.KeyboardEvent) => {
@@ -451,12 +495,41 @@ export function Viewport({
 
   const selectedSet = useMemo(() => new Set(selectedKeys), [selectedKeys]);
   const soleKey = selectedKeys.length === 1 ? selectedKeys[0] : null;
-  const singleKey = selectionMode === "single" ? (soleKey ?? null) : null;
+  const componentSelectionId = soleKey ? componentIdOfSelection(soleKey) : null;
+  const memberKey = soleKey && componentSelectionId === null ? soleKey : null;
+  const singleKey = selectionMode === "single" ? memberKey : null;
   const hasSelection = selectedKeys.length > 0;
-  const hoveredSet = new Set(hoveredKeys);
-  const selected = scene?.components
-    .flatMap((component) => component.members)
-    .find((part) => part.key === soleKey);
+  const selectedMemberKeys = useMemo(() => {
+    const keys = new Set<string>();
+    if (!scene) return keys;
+    for (const key of selectedKeys) {
+      const occurrenceId = componentIdOfSelection(key);
+      if (!occurrenceId) {
+        keys.add(key);
+        continue;
+      }
+      const component = findSceneComponent(scene.components, occurrenceId);
+      if (!component) continue;
+      for (const member of membersUnder(component)) keys.add(member.key);
+    }
+    return keys;
+  }, [scene, selectedKeys]);
+  const hoveredMemberKeys = useMemo(() => {
+    const keys = new Set<string>();
+    if (!scene) return keys;
+    for (const key of hoveredKeys) {
+      const occurrenceId = componentIdOfSelection(key);
+      if (!occurrenceId) {
+        keys.add(key);
+        continue;
+      }
+      const component = findSceneComponent(scene.components, occurrenceId);
+      if (!component) continue;
+      for (const member of membersUnder(component)) keys.add(member.key);
+    }
+    return keys;
+  }, [hoveredKeys, scene]);
+  const selected = memberKey ? sceneMembers(scene?.components ?? []).find((part) => part.key === memberKey) : undefined;
   const activeDraft = draft?.key === soleKey ? draft : null;
 
   const posed = (part: SceneMemberInstance, componentRotation: Vec3): SceneMemberInstance => {
@@ -532,14 +605,20 @@ export function Viewport({
       : { position: selected.position, rotation: selected.rotation }
     : undefined;
 
-  const selectPart = (key: string | null, options?: { shift?: boolean }) => {
+  const selectPart = (key: string | null, options?: { shift?: boolean; member?: boolean }) => {
     setDraft(null);
     setGroupDraft(null);
     setComponentDraft(null);
     setDragActive(false);
     setResizePreview(null);
     setFocusedPatch(null);
-    onSelect(key, options);
+    if (!key) {
+      onSelect(key, options);
+      return;
+    }
+    const component = scene ? findSceneComponent(scene.components, parseInstanceKey(key).componentId) : undefined;
+    const hit = hitSelectionKey({ keys: selectedKeys, mode: selectionMode }, key, { member: options?.member, component });
+    onSelect(hit, { ...options, member: componentIdOfSelection(hit) === null });
   };
 
   const handlePointerDown = (event: PointerEvent<HTMLDivElement>) => {
@@ -587,7 +666,7 @@ export function Viewport({
       setMarquee(rect);
     };
 
-    const finish = () => {
+    const finish = (member: boolean) => {
       const hit = rect;
       const root = rootRef.current;
       const camera = cameraRef.current;
@@ -602,6 +681,7 @@ export function Viewport({
         canvas.getBoundingClientRect(),
         root.getBoundingClientRect(),
         hit,
+        member,
       );
       setDraft(null);
       setGroupDraft(null);
@@ -609,7 +689,7 @@ export function Viewport({
       setDragActive(false);
       setResizePreview(null);
       setFocusedPatch(null);
-      live.onMarqueeSelect(keys);
+      live.onMarqueeSelect(keys, { member });
     };
 
     const up = (pointer: globalThis.PointerEvent) => {
@@ -624,7 +704,7 @@ export function Viewport({
         window.removeEventListener("click", swallow, true);
       };
       window.addEventListener("click", swallow, true);
-      finish();
+      finish(!(pointer.metaKey || pointer.ctrlKey));
     };
 
     const cancel = (pointer: globalThis.PointerEvent) => {
@@ -646,10 +726,25 @@ export function Viewport({
     ) {
       return;
     }
-    if (!onDeleteMembers || selectedKeys.length === 0 || !scene) return;
-    const memberIds = scene.components
-      .flatMap((component) => component.members)
-      .filter((part) => selectedSet.has(part.key))
+    if (selectedKeys.length === 0 || !scene) return;
+    const occurrenceIds = selectedKeys.flatMap((key) => {
+      const id = componentIdOfSelection(key);
+      return id ? [id] : [];
+    });
+    const placements = selectedKeys.filter((key) => componentIdOfSelection(key) === null);
+    if (occurrenceIds.length > 0 && onDeleteComponents) {
+      event.preventDefault();
+      onDeleteComponents(occurrenceIds);
+      return;
+    }
+    if (placements.length > 0 && onDeletePlacements) {
+      event.preventDefault();
+      onDeletePlacements(placements);
+      return;
+    }
+    if (!onDeleteMembers || placements.length === 0) return;
+    const memberIds = sceneMembers(scene.components)
+      .filter((part) => placements.includes(part.key))
       .map((part) => part.memberId);
     if (memberIds.length === 0) return;
     event.preventDefault();
@@ -670,19 +765,37 @@ export function Viewport({
     setGroupDraft(null);
     if (!scene || !onChangePoses) return;
     const updates: PoseUpdate[] = [];
-    for (const component of scene.components) {
+    walkSceneComponents(scene.components, (component) => {
       for (const part of component.members) {
         if (!selectedSet.has(part.key)) continue;
         const { componentId, placementIndex } = parseInstanceKey(part.key);
         updates.push({
           componentId,
           placementIndex,
-          position: translateByWorldDelta(part.position, component.rotation, delta),
+          position: translateByWorldDelta(part.position, component.worldRotation, delta),
           rotation: [part.rotation[0], part.rotation[1], part.rotation[2]],
         });
       }
-    }
+    });
     if (updates.length > 0) onChangePoses(updates);
+  };
+
+  const commitComponentGroup = (delta: Vec3) => {
+    setDragActive(false);
+    setGroupDraft(null);
+    if (!scene || !onChangeComponentPose) return;
+    const updates: ComponentPoseUpdate[] = [];
+    for (const id of componentSelection) {
+      const component = findSceneComponent(scene.components, id);
+      if (!component) continue;
+      const parent = findSceneParent(scene.components, id);
+      const worldPosition = add(component.worldPosition, delta);
+      const local = parent
+        ? localPoseFromWorld(worldPosition, component.worldRotation, parent.worldPosition, parent.worldRotation)
+        : { position: worldPosition, rotation: component.worldRotation };
+      updates.push({ componentId: id, position: local.position, rotation: local.rotation });
+    }
+    if (updates.length > 0) onChangeComponentPose(updates);
   };
 
   const attachedFasteners = useMemo(() => {
@@ -718,9 +831,7 @@ export function Viewport({
   const partByKey = useMemo(() => {
     const map = new Map<string, SceneMemberInstance>();
     if (!scene) return map;
-    for (const component of scene.components) {
-      for (const part of component.members) map.set(part.key, part);
-    }
+    for (const part of sceneMembers(scene.components)) map.set(part.key, part);
     return map;
   }, [scene]);
 
@@ -747,63 +858,73 @@ export function Viewport({
   }, [partByKey, singleKey, selectedPatches]);
 
   const snapTargets = useMemo(() => {
-    if (!scene || !soleKey) return [];
-    const { componentId } = parseInstanceKey(soleKey);
-    const component = scene.components.find((item) => item.id === componentId);
+    if (!scene || !memberKey) return [];
+    const { componentId } = parseInstanceKey(memberKey);
+    const component = findSceneComponent(scene.components, componentId);
     if (!component) return [];
     const targets: Aabb[] = [];
-    for (const other of scene.components) {
-      for (const part of other.members) {
-        if (part.key === soleKey) continue;
-        targets.push(aabbInFrame(part.worldBounds, component.position, component.rotation));
-      }
+    for (const part of sceneMembers(scene.components)) {
+      if (part.key === memberKey) continue;
+      targets.push(aabbInFrame(part.worldBounds, component.worldPosition, component.worldRotation));
     }
     return targets;
-  }, [scene, soleKey]);
+  }, [memberKey, scene]);
+
+  const memberSelection = useMemo(
+    () => selectedKeys.filter((key) => componentIdOfSelection(key) === null),
+    [selectedKeys],
+  );
+  const componentSelection = useMemo(
+    () => selectedKeys.flatMap((key) => {
+      const id = componentIdOfSelection(key);
+      return id ? [id] : [];
+    }),
+    [selectedKeys],
+  );
 
   const groupBounds = useMemo(() => {
-    if (!scene || selectedKeys.length < 2) return null;
+    if (!scene || memberSelection.length < 2 || componentSelection.length > 0) return null;
     const boxes: Aabb[] = [];
-    for (const component of scene.components) {
-      for (const part of component.members) {
-        if (selectedSet.has(part.key)) boxes.push(part.worldBounds);
-      }
+    for (const part of sceneMembers(scene.components)) {
+      if (selectedSet.has(part.key)) boxes.push(part.worldBounds);
     }
     return unionAabb(boxes);
-  }, [scene, selectedKeys.length, selectedSet]);
+  }, [componentSelection.length, memberSelection.length, scene, selectedSet]);
 
-  const rigidComponent = useMemo(() => {
-    if (!scene || selectedKeys.length < 2) return null;
-    let found: (typeof scene.components)[number] | null = null;
-    for (const component of scene.components) {
-      if (component.members.length === 0) continue;
-      const hits = component.members.filter((part) => selectedSet.has(part.key));
-      if (hits.length === 0) continue;
-      if (found || hits.length !== component.members.length || hits.length !== selectedSet.size) return null;
-      found = component;
+  const selectedComponent = useMemo(() => {
+    if (!scene || !componentSelectionId || selectionMode !== "single") return null;
+    return findSceneComponent(scene.components, componentSelectionId) ?? null;
+  }, [componentSelectionId, scene, selectionMode]);
+
+  const componentGroupBounds = useMemo(() => {
+    if (!scene || componentSelection.length < 2) return null;
+    const boxes: Aabb[] = [];
+    for (const id of componentSelection) {
+      const component = findSceneComponent(scene.components, id);
+      if (!component) continue;
+      for (const part of membersUnder(component)) boxes.push(part.worldBounds);
     }
-    return found;
-  }, [scene, selectedKeys.length, selectedSet]);
+    return unionAabb(boxes);
+  }, [componentSelection, scene]);
 
   const rigidBounds = useMemo(() => {
-    if (!rigidComponent) return null;
-    return unionAabb(rigidComponent.members.map((part) => posedAabb(part.bounds, part.position, part.rotation)));
-  }, [rigidComponent]);
+    if (!selectedComponent) return null;
+    return componentLocalBounds(selectedComponent);
+  }, [selectedComponent]);
 
   const groupSnapTargets = useMemo(() => {
-    if (!scene || selectedKeys.length < 2) return [];
+    if (!scene || (memberSelection.length < 2 && componentSelection.length < 2)) return [];
+    const hidden = new Set(selectedMemberKeys);
     const targets: Aabb[] = [];
-    for (const component of scene.components) {
-      for (const part of component.members) {
-        if (!selectedSet.has(part.key)) targets.push(part.worldBounds);
-      }
+    for (const part of sceneMembers(scene.components)) {
+      if (!hidden.has(part.key)) targets.push(part.worldBounds);
     }
     return targets;
-  }, [scene, selectedKeys.length, selectedSet]);
+  }, [componentSelection.length, memberSelection.length, scene, selectedMemberKeys]);
 
   const buildBounds = useMemo(() => {
     if (!scene) return null;
-    return unionAabb(scene.components.flatMap((component) => component.members.map((part) => part.worldBounds)));
+    return unionAabb(sceneMembers(scene.components).map((part) => part.worldBounds));
   }, [scene]);
   useEffect(() => {
     frameableRef.current = buildBounds !== null;
@@ -843,6 +964,39 @@ export function Viewport({
       fov: view.fov,
     };
   }, []);
+
+  useEffect(() => {
+    const next = isolatedId;
+    const prev = isolatedBefore.current;
+    if (prev === next) return;
+    isolatedBefore.current = next;
+    if (!prev && next) {
+      const orbit = readOrbit();
+      const camera = cameraRef.current;
+      if (orbit && camera instanceof THREE.PerspectiveCamera) {
+        savedOrbit.current = { ...orbit, near: camera.near, far: camera.far };
+      }
+      setFocusToken((token) => token + 1);
+      return;
+    }
+    if (prev && !next) {
+      const saved = savedOrbit.current;
+      savedOrbit.current = null;
+      const camera = cameraRef.current;
+      const orbit = controlsRef.current;
+      if (saved && camera instanceof THREE.PerspectiveCamera && orbit) {
+        camera.position.set(saved.position[0], saved.position[1], saved.position[2]);
+        camera.near = saved.near;
+        camera.far = saved.far;
+        camera.fov = saved.fov;
+        camera.updateProjectionMatrix();
+        orbit.target.set(saved.target[0], saved.target[1], saved.target[2]);
+        orbit.update();
+      }
+      return;
+    }
+    if (next) setFocusToken((token) => token + 1);
+  }, [isolatedId, readOrbit]);
 
   const previewExport = useCallback((camera: ExportCamera, bounds: Aabb) => {
     const view = cameraRef.current;
@@ -910,6 +1064,117 @@ export function Viewport({
       if (exportApiRef.current === api) exportApiRef.current = null;
     };
   }, [captureExport, exportApiRef, previewExport, readOrbit]);
+
+  const renderOccurrence = (components: SceneComponent[], parent: SceneComponent | null) =>
+    components.map((component) => {
+      const worldDraft = componentDraft?.componentId === component.id ? componentDraft : null;
+      const grouped = Boolean(groupDraft && componentSelection.length >= 2 && componentSelection.includes(component.id));
+      const worldPosition = grouped ? add(component.worldPosition, groupDraft ?? ZERO) : (worldDraft?.position ?? component.worldPosition);
+      const worldRotation = worldDraft?.rotation ?? component.worldRotation;
+      const drafted = Boolean(worldDraft || grouped);
+      const local = drafted
+        ? parent
+          ? localPoseFromWorld(worldPosition, worldRotation, parent.worldPosition, parent.worldRotation)
+          : { position: worldPosition, rotation: worldRotation }
+        : null;
+      const componentPosition = local?.position ?? component.position;
+      const componentRotation = local?.rotation ?? component.rotation;
+      const qInv = quaternionInverse(worldRotation);
+      const showGizmo = Boolean(
+        !capturing &&
+          selected &&
+          gizmoPose &&
+          onChangePoses &&
+          !resize &&
+          !measure &&
+          parseInstanceKey(selected.key).componentId === component.id,
+      );
+      const resizeDefinition = selected ? memberById.get(selected.memberId) : undefined;
+      const resizeStock = resizeDefinition ? getCatalogPart(resizeDefinition.stock) : undefined;
+      const resizeGeometry = resizeStock ? stockGeometry(resizeStock) : undefined;
+      const resizeCuttable = resizeGeometry === "box" || resizeGeometry === "rod";
+      const resizeFreeAxes = (resizeStock ? freeAxes(resizeStock) : []).flatMap((spec) =>
+        spec.axis === "L" ? [0 as const] : spec.axis === "W" ? [1 as const] : [2 as const],
+      );
+      const showResize = Boolean(
+        !capturing &&
+          resize &&
+          !pan &&
+          !measure &&
+          selected &&
+          gizmoPose &&
+          resizeDefinition &&
+          parseInstanceKey(selected.key).componentId === component.id,
+      );
+      return (
+        <group key={component.id} position={componentPosition} rotation={deg(componentRotation)}>
+          {component.members.map((part) => (
+            <MemberMesh
+              key={part.key}
+              instance={posed(part, component.worldRotation)}
+              selected={!capturing && selectedMemberKeys.has(part.key)}
+              preview={!capturing && hoveredMemberKeys.has(part.key) && !selectedMemberKeys.has(part.key)}
+              muted={!capturing && part.key === singleKey && activeConnection !== null}
+              dimmed={
+                !capturing &&
+                !selectedMemberKeys.has(part.key) &&
+                !hoveredMemberKeys.has(part.key) &&
+                (hasSelection || hoveredMemberKeys.size > 0)
+              }
+              offset={toLocalOffset(worldOffsets.get(part.key) ?? ZERO, qInv)}
+              interactive={!pan && !measure}
+              boreDiameter={boreDiameter}
+              showUnattached={showUnattached}
+              onSelect={selectPart}
+              onDoubleClick={(key) => {
+                try {
+                  const componentId = parseInstanceKey(key).componentId;
+                  const component = scene && findSceneComponent(scene.components, componentId);
+                  if (component && canSelectComponent(component)) onEnterIsolation?.(componentId);
+                } catch {
+                  // A key that is not a member placement cannot be opened.
+                }
+              }}
+            />
+          ))}
+          {renderOccurrence(component.children, component)}
+          {showResize && resizeDefinition && selected ? (
+            <group position={toLocalOffset(worldOffsets.get(selected.key) ?? ZERO, qInv)}>
+              <group position={selected.position} rotation={deg(selected.rotation)}>
+                <ResizeGizmo
+                  key={selected.key}
+                  bounds={selected.bounds}
+                  cuttable={resizeCuttable}
+                  freeAxes={resizeFreeAxes}
+                  fineSnap={fineSnap}
+                  position={selected.position}
+                  rotation={selected.rotation}
+                  snapTargets={snapTargets}
+                  onDragStart={() => setDragActive(true)}
+                  onDraft={previewResize}
+                  onCommit={commitResize}
+                  onCancel={clearResizeDrag}
+                />
+              </group>
+            </group>
+          ) : null}
+          {showGizmo && !pan && selected && gizmoPose ? (
+            <group position={toLocalOffset(worldOffsets.get(selected.key) ?? ZERO, qInv)}>
+              <PartGizmo
+                key={`${selected.key}-${selected.position.join(",")}-${selected.rotation.join(",")}`}
+                pose={gizmoPose}
+                bounds={selected.bounds}
+                snapTargets={snapTargets}
+                fineSnap={fineSnap}
+                onDragStart={() => setDragActive(true)}
+                onDraft={(position, rotation) => setDraft({ key: selected.key, position, rotation })}
+                onCommit={commitDraft}
+              />
+            </group>
+          ) : null}
+        </group>
+      );
+    });
 
   return (
     <div
@@ -992,97 +1257,8 @@ export function Viewport({
           cellColor="#3d2a18"
           sectionColor="#6b4a2b"
         />
-        {scene?.components.map((component) => {
-          const drafted = componentDraft?.componentId === component.id ? componentDraft : null;
-          const componentPosition = drafted?.position ?? component.position;
-          const componentRotation = drafted?.rotation ?? component.rotation;
-          const qInv = quaternionInverse(componentRotation);
-          const showGizmo = Boolean(
-            !capturing &&
-              selected &&
-              gizmoPose &&
-              onChangePoses &&
-              !resize &&
-              !measure &&
-              parseInstanceKey(selected.key).componentId === component.id,
-          );
-          const resizeDefinition = selected ? memberById.get(selected.memberId) : undefined;
-          const resizeStock = resizeDefinition ? getCatalogPart(resizeDefinition.stock) : undefined;
-          const resizeGeometry = resizeStock ? stockGeometry(resizeStock) : undefined;
-          const resizeCuttable = resizeGeometry === "box" || resizeGeometry === "rod";
-          const resizeFreeAxes = (resizeStock ? freeAxes(resizeStock) : []).flatMap((spec) =>
-            spec.axis === "L" ? [0 as const] : spec.axis === "W" ? [1 as const] : [2 as const],
-          );
-          const showResize = Boolean(
-            !capturing &&
-              resize &&
-              !pan &&
-              !measure &&
-              selected &&
-              gizmoPose &&
-              resizeDefinition &&
-              parseInstanceKey(selected.key).componentId === component.id,
-          );
-          return (
-            <group key={component.id} position={componentPosition} rotation={deg(componentRotation)}>
-              {component.members.map((part) => (
-                <MemberMesh
-                  key={part.key}
-                  instance={posed(part, component.rotation)}
-                  selected={!capturing && selectedSet.has(part.key)}
-                  preview={!capturing && hoveredSet.has(part.key) && !selectedSet.has(part.key)}
-                  muted={!capturing && part.key === singleKey && activeConnection !== null}
-                  dimmed={
-                    !capturing &&
-                    !selectedSet.has(part.key) &&
-                    !hoveredSet.has(part.key) &&
-                    (hasSelection || hoveredSet.size > 0)
-                  }
-                  offset={toLocalOffset(worldOffsets.get(part.key) ?? ZERO, qInv)}
-                  interactive={!pan && !measure}
-                  boreDiameter={boreDiameter}
-                  showUnattached={showUnattached}
-                  onSelect={selectPart}
-                />
-              ))}
-              {showResize && resizeDefinition && selected ? (
-                <group position={toLocalOffset(worldOffsets.get(selected.key) ?? ZERO, qInv)}>
-                  <group position={selected.position} rotation={deg(selected.rotation)}>
-                    <ResizeGizmo
-                      key={selected.key}
-                      bounds={selected.bounds}
-                      cuttable={resizeCuttable}
-                      freeAxes={resizeFreeAxes}
-                      fineSnap={fineSnap}
-                      position={selected.position}
-                      rotation={selected.rotation}
-                      snapTargets={snapTargets}
-                      onDragStart={() => setDragActive(true)}
-                      onDraft={previewResize}
-                      onCommit={commitResize}
-                      onCancel={clearResizeDrag}
-                    />
-                  </group>
-                </group>
-              ) : null}
-              {showGizmo && !pan && selected && gizmoPose ? (
-                <group position={toLocalOffset(worldOffsets.get(selected.key) ?? ZERO, qInv)}>
-                  <PartGizmo
-                    key={`${selected.key}-${selected.position.join(",")}-${selected.rotation.join(",")}`}
-                    pose={gizmoPose}
-                    bounds={selected.bounds}
-                    snapTargets={snapTargets}
-                    fineSnap={fineSnap}
-                    onDragStart={() => setDragActive(true)}
-                    onDraft={(position, rotation) => setDraft({ key: selected.key, position, rotation })}
-                    onCommit={commitDraft}
-                  />
-                </group>
-              ) : null}
-            </group>
-          );
-        })}
-        {groupBounds && (!rigidComponent || !onChangeComponentPose) && onChangePoses && !capturing && !pan && !resize && !measure ? (
+        {scene ? renderOccurrence(scene.components, null) : null}
+        {groupBounds && onChangePoses && !capturing && !pan && !resize && !measure ? (
           <PartGizmo
             key={`${selectedKeys.join("|")}:${groupBounds.min.join(",")}:${groupBounds.max.join(",")}`}
             pose={{ position: groupDraft ?? ZERO, rotation: ZERO }}
@@ -1095,22 +1271,46 @@ export function Viewport({
             onCommit={commitGroup}
           />
         ) : null}
-        {rigidComponent && rigidBounds && onChangeComponentPose && !capturing && !pan && !resize && !measure ? (
+        {componentGroupBounds && onChangeComponentPose && !capturing && !pan && !resize && !measure ? (
           <PartGizmo
-            key={`${rigidComponent.id}:${rigidComponent.position.join(",")}:${rigidComponent.rotation.join(",")}`}
+            key={componentSelection.join("|")}
+            pose={{ position: groupDraft ?? ZERO, rotation: ZERO }}
+            bounds={componentGroupBounds}
+            snapTargets={groupSnapTargets}
+            fineSnap={fineSnap}
+            disableRotations
+            onDragStart={() => setDragActive(true)}
+            onDraft={(position) => setGroupDraft(position)}
+            onCommit={commitComponentGroup}
+          />
+        ) : null}
+        {selectedComponent &&
+        selectedComponent.id !== isolatedId &&
+        rigidBounds &&
+        onChangeComponentPose &&
+        !capturing &&
+        !pan &&
+        !resize &&
+        !measure ? (
+          <PartGizmo
+            key={`${selectedComponent.id}:${selectedComponent.worldPosition.join(",")}:${selectedComponent.worldRotation.join(",")}`}
             pose={{
-              position: componentDraft?.componentId === rigidComponent.id ? componentDraft.position : rigidComponent.position,
-              rotation: componentDraft?.componentId === rigidComponent.id ? componentDraft.rotation : rigidComponent.rotation,
+              position: componentDraft?.componentId === selectedComponent.id ? componentDraft.position : selectedComponent.worldPosition,
+              rotation: componentDraft?.componentId === selectedComponent.id ? componentDraft.rotation : selectedComponent.worldRotation,
             }}
             bounds={rigidBounds}
             snapTargets={groupSnapTargets}
             fineSnap={fineSnap}
             onDragStart={() => setDragActive(true)}
-            onDraft={(position, rotation) => setComponentDraft({ componentId: rigidComponent.id, position, rotation })}
+            onDraft={(position, rotation) => setComponentDraft({ componentId: selectedComponent.id, position, rotation })}
             onCommit={(position, rotation) => {
               setDragActive(false);
               setComponentDraft(null);
-              onChangeComponentPose({ componentId: rigidComponent.id, position, rotation });
+              const parent = scene ? findSceneParent(scene.components, selectedComponent.id) : null;
+              const local = parent
+                ? localPoseFromWorld(position, rotation, parent.worldPosition, parent.worldRotation)
+                : { position, rotation };
+              onChangeComponentPose([{ componentId: selectedComponent.id, position: local.position, rotation: local.rotation }]);
             }}
           />
         ) : null}
@@ -1163,7 +1363,13 @@ export function Viewport({
           }}
           maxPolarAngle={Math.PI / 2 + (20 * Math.PI) / 180}
         />
-        <FitCamera bounds={buildBounds} resetToken={resetToken} controlsRef={controlsRef} cameraRef={cameraRef} />
+        <FitCamera
+          bounds={buildBounds}
+          resetToken={resetToken}
+          focusToken={focusToken}
+          controlsRef={controlsRef}
+          cameraRef={cameraRef}
+        />
         <ExportInvalidate invalidateRef={invalidateRef} />
         {!capturing ? (
           <GizmoHelper alignment="bottom-right" margin={[64, 64]}>
@@ -1238,7 +1444,7 @@ export function Viewport({
       />
       {selectedKeys.length > 1 && scene ? (
         <MultiSelectionCard
-          instances={scene.components.flatMap((component) => component.members).filter((part) => selectedSet.has(part.key))}
+          instances={sceneMembers(scene.components).filter((part) => selectedMemberKeys.has(part.key))}
         />
       ) : selected ? (
         <SelectionCard
@@ -1261,11 +1467,13 @@ export function Viewport({
 function FitCamera({
   bounds,
   resetToken,
+  focusToken,
   controlsRef,
   cameraRef,
 }: {
   bounds: Aabb | null;
   resetToken: number;
+  focusToken: number;
   controlsRef: RefObject<ComponentRef<typeof OrbitControls> | null>;
   cameraRef: RefObject<THREE.Camera | null>;
 }) {
@@ -1273,13 +1481,14 @@ function FitCamera({
   const invalidate = useThree((state) => state.invalidate);
   const fitted = useRef(false);
   const appliedToken = useRef(resetToken);
+  const appliedFocus = useRef(focusToken);
 
   useLayoutEffect(() => {
     const controls = controlsRef.current;
     const camera = cameraRef.current;
     if (!bounds || !controls || size.width < 1 || size.height < 1) return;
     if (!(camera instanceof THREE.PerspectiveCamera)) return;
-    if (fitted.current && resetToken === appliedToken.current) return;
+    if (fitted.current && resetToken === appliedToken.current && focusToken === appliedFocus.current) return;
 
     const aspect = size.width / size.height;
     const frame = frameCamera(bounds, camera.fov, aspect);
@@ -1295,8 +1504,9 @@ function FitCamera({
     controls.update();
     fitted.current = true;
     appliedToken.current = resetToken;
+    appliedFocus.current = focusToken;
     invalidate();
-  }, [bounds, cameraRef, controlsRef, invalidate, resetToken, size.height, size.width]);
+  }, [bounds, cameraRef, controlsRef, focusToken, invalidate, resetToken, size.height, size.width]);
 
   return null;
 }

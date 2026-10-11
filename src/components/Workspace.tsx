@@ -6,12 +6,52 @@ import { Group, Panel, Separator, usePanelRef } from "react-resizable-panels";
 import { useDocument } from "@/hooks/useDocument";
 import { clearBuilds } from "@/lib/builds-storage";
 import { compileDocument } from "@/lib/compile";
-import { addMember, deleteMember, duplicateMembers, groupMembers, resizeMemberCut, setComponentPose, setPlacementPose, type NewMemberInput } from "@/lib/edit";
-import { parseInstanceKey } from "@/lib/fasteners";
-import { groupOrigin, placementAfterReseat, placementInNewGroup, unionAabb, worldPlacementPose, type Vec3 } from "@/lib/geometry";
-import type { SceneComponent, SceneMemberInstance, SceneModel } from "@/lib/scene";
+import {
+  addMember,
+  deleteComponentOccurrence,
+  deleteMemberPlacement,
+  duplicateComponentOccurrence,
+  duplicateMemberPlacement,
+  groupMembers,
+  groupOccurrences,
+  resizeMemberCut,
+  setComponentPose,
+  setPlacementPose,
+  type NewMemberInput,
+} from "@/lib/edit";
+import { parseInstanceKey, parseNestedOccurrence } from "@/lib/fasteners";
+import {
+  groupOrigin,
+  localPoseFromWorld,
+  placementAfterReseat,
+  placementInNewGroup,
+  unionAabb,
+  unapplyPose,
+  worldPlacementPose,
+  type Vec3,
+} from "@/lib/geometry";
+import {
+  findSceneComponent,
+  findSceneParent,
+  membersUnder,
+  sceneMembers,
+  walkSceneComponents,
+  type SceneComponent,
+  type SceneMemberInstance,
+  type SceneModel,
+} from "@/lib/scene";
 import { localShiftForWorldX } from "@/lib/geometry/pose";
-import { EMPTY_SELECTION, pruneSelection, selectAdded, selectAll, selectKeys, selectMember, type Selection } from "@/lib/selection";
+import {
+  componentIdOfSelection,
+  componentSelectionKey,
+  EMPTY_SELECTION,
+  linkedCopyComponent,
+  pruneSelection,
+  selectAll,
+  selectMarquee,
+  selectMember,
+  type Selection,
+} from "@/lib/selection";
 import {
   EXPORT_CAMERAS_KEY,
   readExportCameras,
@@ -74,19 +114,17 @@ function exportCamerasSnapshot() {
   return window.localStorage.getItem(EXPORT_CAMERAS_KEY) ?? "";
 }
 
-type ClipboardItem = {
-  memberId: string;
-  componentId: string;
-  /** 0-based occurrence of this member id in the component. */
-  occurrence: number;
-  position: Vec3;
-  rotation: Vec3;
-};
-
-type Clipboard = {
-  items: ClipboardItem[];
-  worldSpanX: number;
-};
+type Clipboard =
+  | {
+      kind: "members";
+      worldSpanX: number;
+      items: Array<{ occurrenceId: string; placementIndex: number; position: Vec3; rotation: Vec3 }>;
+    }
+  | {
+      kind: "components";
+      worldSpanX: number;
+      items: Array<{ occurrenceId: string; position: Vec3; rotation: Vec3 }>;
+    };
 
 type PoseUpdate = {
   componentId: string;
@@ -107,7 +145,11 @@ export function Workspace() {
   const selection = useMemo(() => {
     const scene = compiled.scene;
     if (!scene) return storedSelection;
-    const live = new Set(scene.components.flatMap((component) => component.members.map((member) => member.key)));
+    const live = new Set<string>();
+    walkSceneComponents(scene.components, (component) => {
+      live.add(componentSelectionKey(component.id));
+      for (const member of component.members) live.add(member.key);
+    });
     return pruneSelection(storedSelection, live);
   }, [compiled.scene, storedSelection]);
   const [hoveredKeys, setHoveredKeys] = useState<string[]>([]);
@@ -126,6 +168,10 @@ export function Workspace() {
   const textRef = useRef(text);
   const compiledRef = useRef(compiled);
   const clipboardRef = useRef<Clipboard | null>(null);
+  const [isolation, setIsolation] = useState<string[]>([]);
+  const isolationRef = useRef(isolation);
+  isolationRef.current = isolation;
+  const isolatedId = isolation.at(-1) ?? null;
   useEffect(() => {
     selectionRef.current = selection;
     textRef.current = text;
@@ -144,10 +190,48 @@ export function Workspace() {
     window.dispatchEvent(new Event(EXPORT_CAMERAS_EVENT));
   }, []);
 
-  const handleSelect = useCallback((key: string | null, options?: { shift?: boolean }) => {
+  const enterIsolation = useCallback((occurrenceId: string) => {
+    setIsolation((stack) => {
+      if (stack.at(-1) === occurrenceId) return stack;
+      const existing = stack.indexOf(occurrenceId);
+      if (existing >= 0) return stack.slice(0, existing + 1);
+      return [...stack, occurrenceId];
+    });
+  }, []);
+
+  const popIsolation = useCallback(() => {
+    setIsolation((stack) => (stack.length === 0 ? stack : stack.slice(0, -1)));
+  }, []);
+
+  const exitIsolation = useCallback(() => {
+    setIsolation((stack) => (stack.length === 0 ? stack : []));
+  }, []);
+
+  const jumpIsolation = useCallback((index: number) => {
+    setIsolation((stack) => (index < 0 ? [] : stack.slice(0, index + 1)));
+  }, []);
+
+  const retargetIsolation = useCallback((from: string, to: string) => {
+    if (from === to) return;
+    setIsolation((stack) => (stack.includes(from) ? stack.map((id) => (id === from ? to : id)) : stack));
+  }, []);
+
+  useEffect(() => {
+    const live = compiled.scene;
+    if (!live || isolation.length === 0) return;
+    const next: string[] = [];
+    for (const id of isolation) {
+      if (!findSceneComponent(live.components, id)) break;
+      next.push(id);
+    }
+    if (next.length !== isolation.length) setIsolation(next);
+  }, [compiled.scene, isolation]);
+
+  const handleSelect = useCallback((key: string | null, options?: { shift?: boolean; member?: boolean }) => {
     setHoveredKeys([]);
     const current = selectionRef.current;
-    const next = key === null ? EMPTY_SELECTION : selectMember(current, key, Boolean(options?.shift));
+    const next =
+      key === null ? EMPTY_SELECTION : selectMember(current, key, Boolean(options?.shift), componentIdOfSelection(key) === null);
     const unchangedSingle =
       next.mode === "single" &&
       current.mode === "single" &&
@@ -159,20 +243,10 @@ export function Workspace() {
     setStoredSelection(next);
   }, []);
 
-  const handleSelectKeys = useCallback((keys: string[], mode?: Selection["mode"]) => {
+  const handleMarqueeSelect = useCallback((keys: string[], options?: { member?: boolean }) => {
     setHoveredKeys([]);
     const current = selectionRef.current;
-    const next = selectKeys(current, keys, mode);
-    if (next === current) return;
-    setActiveConnectionKey(null);
-    selectionRef.current = next;
-    setStoredSelection(next);
-  }, []);
-
-  const handleMarqueeSelect = useCallback((keys: string[]) => {
-    setHoveredKeys([]);
-    const current = selectionRef.current;
-    const next = selectAdded(current, keys);
+    const next = selectMarquee(current, keys, Boolean(options?.member));
     if (next === current) return;
     setActiveConnectionKey(null);
     selectionRef.current = next;
@@ -182,41 +256,75 @@ export function Workspace() {
   const componentCount = compiled.document?.components.length ?? 0;
   const errorCount = compiled.diagnostics.filter((item) => item.severity === "error").length;
 
-  const handleDeleteMembers = useCallback(
-    (memberIds: string[]) => {
-      if (!compiled.document || memberIds.length === 0) return;
+  const clearSelection = useCallback(() => {
+    setHoveredKeys([]);
+    setActiveConnectionKey(null);
+    selectionRef.current = EMPTY_SELECTION;
+    setStoredSelection(EMPTY_SELECTION);
+  }, []);
+
+  const handleDeletePlacements = useCallback(
+    (keys: string[]) => {
+      if (keys.length === 0) return;
       try {
-        const seen = new Set<string>();
+        const placements = keys
+          .map((key) => parseInstanceKey(key))
+          .sort((a, b) => b.placementIndex - a.placementIndex);
         let next = text;
-        for (const memberId of memberIds) {
-          if (seen.has(memberId)) continue;
-          seen.add(memberId);
-          next = deleteMember(next, memberId);
+        for (const placement of placements) {
+          next = deleteMemberPlacement(next, placement.componentId, placement.placementIndex);
         }
         commit(next);
-        setHoveredKeys([]);
-        setActiveConnectionKey(null);
-        selectionRef.current = EMPTY_SELECTION;
-        setStoredSelection(EMPTY_SELECTION);
+        clearSelection();
       } catch {
         // Leave the YAML alone if the AST cannot be updated.
       }
     },
-    [commit, compiled.document, text],
+    [clearSelection, commit, text],
+  );
+
+  const handleDeleteComponents = useCallback(
+    (occurrenceIds: string[]) => {
+      if (occurrenceIds.length === 0) return;
+      try {
+        const nested = occurrenceIds
+          .flatMap((id) => {
+            const parsed = parseNestedOccurrence(id);
+            return parsed ? [{ id, index: parsed.index }] : [];
+          })
+          .sort((a, b) => b.index - a.index);
+        const roots = occurrenceIds.filter((id) => parseNestedOccurrence(id) === null);
+        let next = text;
+        for (const item of nested) next = deleteComponentOccurrence(next, item.id);
+        for (const id of roots) next = deleteComponentOccurrence(next, id);
+        commit(next);
+        clearSelection();
+      } catch {
+        // Leave the YAML alone if the AST cannot be updated.
+      }
+    },
+    [clearSelection, commit, text],
   );
 
   const handlePlaceMember = useCallback(
     (input: NewMemberInput, position: Vec3) => {
       let componentId: string | undefined;
+      let local = position;
       const selected = selectionRef.current.keys.at(-1);
-      if (selected && compiled.document) {
-        try {
-          const parsed = parseInstanceKey(selected);
-          if (compiled.document.components.some((component) => component.id === parsed.componentId)) {
-            componentId = parsed.componentId;
-          }
-        } catch {
-          componentId = undefined;
+      const scene = compiled.scene;
+      const editing = isolationRef.current.at(-1);
+      if (editing && scene) {
+        const occurrence = findSceneComponent(scene.components, editing);
+        if (occurrence) {
+          componentId = occurrence.templateId;
+          local = position;
+        }
+      } else if (selected && scene) {
+        const occurrenceId = componentIdOfSelection(selected) ?? safeComponentId(selected);
+        const occurrence = occurrenceId ? findSceneComponent(scene.components, occurrenceId) : undefined;
+        if (occurrence) {
+          componentId = occurrence.templateId;
+          local = unapplyPose(position, occurrence.worldPosition, occurrence.worldRotation);
         }
       }
       try {
@@ -227,19 +335,20 @@ export function Workspace() {
           size: input.size,
           cuts: input.cuts,
           componentId,
-          position,
+          newComponent: !componentId,
+          position: local,
           rotation: [0, 0, 0],
         });
         commit(next);
-        const added = compileDocument(next).scene?.components
-          .flatMap((component) => component.members)
-          .find((member) => !before.has(member.memberId));
+        const added = sceneMembers(compileDocument(next).scene?.components ?? []).find(
+          (member) => !before.has(member.memberId),
+        );
         if (added) handleSelect(added.key);
       } catch {
         // Leave the YAML alone if the member cannot be added.
       }
     },
-    [commit, compiled.document, handleSelect, text],
+    [commit, compiled.document, compiled.scene, handleSelect, text],
   );
 
   const handleResizeMember = useCallback((update: { memberId: string; axis: 0 | 1 | 2; side: "start" | "end"; inches: number }): string | null => {
@@ -269,10 +378,13 @@ export function Workspace() {
   );
 
   const handleChangeComponentPose = useCallback(
-    (update: ComponentPoseUpdate) => {
-      if (!compiled.document) return;
+    (updates: ComponentPoseUpdate[]) => {
+      if (!compiled.document || updates.length === 0) return;
       try {
-        const next = setComponentPose(text, update.componentId, update.position, update.rotation);
+        let next = text;
+        for (const update of updates) {
+          next = setComponentPose(next, update.componentId, update.position, update.rotation);
+        }
         if (next !== text) commit(next);
       } catch {
         // Leave the YAML alone if the AST cannot be updated.
@@ -301,6 +413,7 @@ export function Workspace() {
     setStoredSelection(EMPTY_SELECTION);
     setHoveredKeys([]);
     setActiveConnectionKey(null);
+    setIsolation([]);
   }, [reset, setPreferences]);
 
   useEffect(() => {
@@ -324,10 +437,15 @@ export function Workspace() {
       if (key === "a" && !event.shiftKey && !event.altKey) {
         event.preventDefault();
         event.stopPropagation();
-        const keys =
-          compiledRef.current.scene?.components.flatMap((component) =>
-            component.members.map((member) => member.key),
-          ) ?? [];
+        const keys: string[] = [];
+        const scene = compiledRef.current.scene;
+        const editing = isolationRef.current.at(-1);
+        const root = scene && editing ? findSceneComponent(scene.components, editing) : undefined;
+        if (scene) {
+          walkSceneComponents(root ? [root] : scene.components, (component) => {
+            keys.push(...component.members.map((member) => member.key));
+          });
+        }
         const next = selectAll(keys);
         selectionRef.current = next;
         setStoredSelection(next);
@@ -340,27 +458,49 @@ export function Workspace() {
         if (selection && !selection.isCollapsed && selection.toString().trim()) return;
         const keys = selectionRef.current.keys;
         const scene = compiledRef.current.scene;
-        const document = compiledRef.current.document;
         if (keys.length === 0 || !scene) return;
-        const instances = scene.components
-          .flatMap((component) => component.members)
-          .filter((member) => keys.includes(member.key));
+        const linkedComponent = linkedCopyComponent(keys, scene);
+        const componentIds = linkedComponent ? [linkedComponent.id] : [];
+        if (linkedComponent) {
+          const boxes = componentIds.flatMap((id) => {
+            const component = findSceneComponent(scene.components, id);
+            return component ? membersUnder(component).map((member) => member.worldBounds) : [];
+          });
+          const span = unionAabb(boxes);
+          if (!span) return;
+          event.preventDefault();
+          clipboardRef.current = {
+            kind: "components",
+            worldSpanX: span.max[0] - span.min[0],
+            items: componentIds.flatMap((id) => {
+              const component = findSceneComponent(scene.components, id);
+              if (!component) return [];
+              return [{
+                occurrenceId: id,
+                position: [component.position[0], component.position[1], component.position[2]],
+                rotation: [component.rotation[0], component.rotation[1], component.rotation[2]],
+              }];
+            }),
+          };
+          return;
+        }
+        const memberKeys = new Set(keys.flatMap((key) => {
+          const id = componentIdOfSelection(key);
+          const component = id ? findSceneComponent(scene.components, id) : undefined;
+          return component ? membersUnder(component).map((member) => member.key) : [key];
+        }));
+        const instances = sceneMembers(scene.components).filter((member) => memberKeys.has(member.key));
         const span = unionAabb(instances.map((instance) => instance.worldBounds));
         if (instances.length === 0 || !span) return;
         event.preventDefault();
         clipboardRef.current = {
+          kind: "members",
           worldSpanX: span.max[0] - span.min[0],
           items: instances.map((instance) => {
-            const { componentId, memberId, placementIndex } = parseInstanceKey(instance.key);
-            const placements = document?.components.find((entry) => entry.id === componentId)?.members ?? [];
-            let occurrence = 0;
-            for (let index = 0; index < placementIndex && index < placements.length; index += 1) {
-              if (placements[index].id === memberId) occurrence += 1;
-            }
+            const { componentId, placementIndex } = parseInstanceKey(instance.key);
             return {
-              memberId,
-              componentId,
-              occurrence,
+              occurrenceId: componentId,
+              placementIndex,
               position: [instance.position[0], instance.position[1], instance.position[2]],
               rotation: [instance.rotation[0], instance.rotation[1], instance.rotation[2]],
             };
@@ -371,30 +511,50 @@ export function Workspace() {
       if (key === "v" && !event.shiftKey && !event.altKey) {
         const copied = clipboardRef.current;
         const scene = compiledRef.current.scene;
-        const document = compiledRef.current.document;
-        if (!copied || copied.items.length === 0 || !scene || !document) return;
+        if (!copied || copied.items.length === 0 || !scene) return;
         event.preventDefault();
         try {
-          const before = new Set(document.members.map((member) => member.id));
-          const items = copied.items.flatMap((item) => {
-            const component = scene.components.find((entry) => entry.id === item.componentId);
-            if (!component) return [];
-            const delta = localShiftForWorldX(component.rotation, copied.worldSpanX + 1);
+          if (copied.kind === "components") {
+            let next = textRef.current;
+            const created: string[] = [];
+            for (const item of copied.items) {
+              const owner = findSceneComponent(scene.components, item.occurrenceId);
+              const parent = findSceneParent(scene.components, item.occurrenceId);
+              const delta = localShiftForWorldX(parent ? parent.worldRotation : [0, 0, 0], copied.worldSpanX + 1);
+              const position: Vec3 = [
+                item.position[0] + delta[0],
+                item.position[1] + delta[1],
+                item.position[2] + delta[2],
+              ];
+              if (!owner) continue;
+              const duplicated = duplicateComponentOccurrence(next, item.occurrenceId, position, item.rotation);
+              next = duplicated.text;
+              created.push(componentSelectionKey(duplicated.occurrenceId));
+            }
+            if (next === textRef.current || created.length === 0) return;
+            commit(next);
+            const pasted: Selection = created.length === 1 ? { keys: created, mode: "single" } : { keys: created, mode: "multi" };
+            selectionRef.current = pasted;
+            setStoredSelection(pasted);
+            setActiveConnectionKey(null);
+            return;
+          }
+          let next = textRef.current;
+          const before = new Set(sceneMembers(scene.components).map((member) => member.key));
+          for (const item of copied.items) {
+            const owner = findSceneComponent(scene.components, item.occurrenceId);
+            if (!owner) continue;
+            const delta = localShiftForWorldX(owner.worldRotation, copied.worldSpanX + 1);
             const position: Vec3 = [
               item.position[0] + delta[0],
               item.position[1] + delta[1],
               item.position[2] + delta[2],
             ];
-            return [{ ...item, position }];
-          });
-          if (items.length === 0) return;
-          const next = duplicateMembers(textRef.current, items);
+            next = duplicateMemberPlacement(next, item.occurrenceId, item.placementIndex, position, item.rotation);
+          }
           if (next === textRef.current) return;
           commit(next);
-          const added =
-            compileDocument(next).scene?.components
-              .flatMap((item) => item.members)
-              .filter((member) => !before.has(member.memberId)) ?? [];
+          const added = sceneMembers(compileDocument(next).scene?.components ?? []).filter((member) => !before.has(member.key));
           const pasted: Selection =
             added.length > 1
               ? { keys: added.map((member) => member.key), mode: "multi" }
@@ -405,7 +565,7 @@ export function Workspace() {
           setStoredSelection(pasted);
           setActiveConnectionKey(null);
         } catch {
-          // Leave the YAML alone if the member cannot be copied.
+          // Leave the YAML alone if the selection cannot be copied.
         }
         return;
       }
@@ -416,18 +576,25 @@ export function Workspace() {
         const scene = compiledRef.current.scene;
         if (keys.length === 0 || !scene) return;
         try {
+          const componentIds = keys.flatMap((item) => {
+            const id = componentIdOfSelection(item);
+            return id ? [id] : [];
+          });
+          if (componentIds.length === keys.length) {
+            const grouped = groupComponentsFromSelection(textRef.current, scene, componentIds);
+            if (!grouped || grouped.text === textRef.current) return;
+            commit(grouped.text);
+            const next: Selection = { keys: [componentSelectionKey(grouped.occurrenceId)], mode: "single" };
+            selectionRef.current = next;
+            setStoredSelection(next);
+            setHoveredKeys([]);
+            setActiveConnectionKey(null);
+            return;
+          }
           const grouped = groupFromSelection(textRef.current, scene, keys);
           if (!grouped || grouped.text === textRef.current) return;
           commit(grouped.text);
-          const members =
-            compileDocument(grouped.text).scene?.components.find((component) => component.id === grouped.componentId)
-              ?.members ?? [];
-          const next: Selection =
-            members.length > 1
-              ? { keys: members.map((member) => member.key), mode: "multi" }
-              : members.length === 1
-                ? { keys: [members[0].key], mode: "single" }
-                : EMPTY_SELECTION;
+          const next: Selection = { keys: [componentSelectionKey(grouped.componentId)], mode: "single" };
           selectionRef.current = next;
           setStoredSelection(next);
           setHoveredKeys([]);
@@ -441,10 +608,23 @@ export function Workspace() {
     return () => window.removeEventListener("keydown", onKeyDown, true);
   }, [commit, handleSelect, redo, undo]);
 
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== "Escape" || event.repeat) return;
+      if (isTextField(event.target)) return;
+      if (isolationRef.current.length === 0) return;
+      event.preventDefault();
+      event.stopPropagation();
+      setIsolation((stack) => stack.slice(0, -1));
+    };
+    window.addEventListener("keydown", onKeyDown, true);
+    return () => window.removeEventListener("keydown", onKeyDown, true);
+  }, []);
+
   const buildBounds = useMemo(() => {
     const scene = compiled.scene;
     if (!scene) return null;
-    return unionAabb(scene.components.flatMap((component) => component.members.map((part) => part.worldBounds)));
+    return unionAabb(sceneMembers(scene.components).map((part) => part.worldBounds));
   }, [compiled.scene]);
   const exportTitle = compiled.scene?.name ?? compiled.document?.name ?? "Untitled";
   const exportDimensions = buildBounds ? overallDimensions(buildBounds) : "Fix the build to measure it.";
@@ -566,11 +746,15 @@ export function Workspace() {
             selectedKeys={selection.keys}
             selectionMode={selection.mode}
             onSelect={handleSelect}
-            onSelectKeys={handleSelectKeys}
             onHover={setHoveredKeys}
             activeConnectionKey={activeConnectionKey}
             onActiveConnection={setActiveConnectionKey}
             boreDiameter={preferences.boreDiameter}
+            isolation={isolation}
+            onEnterIsolation={enterIsolation}
+            onExitIsolation={exitIsolation}
+            onJumpIsolation={jumpIsolation}
+            onRetargetIsolation={retargetIsolation}
           />
         </Panel>
         <Separator className="w-1.5 bg-[#3d2a18] hover:bg-[#d97706]" />
@@ -582,7 +766,8 @@ export function Workspace() {
             hoveredKeys={hoveredKeys}
             onSelect={handleSelect}
             onMarqueeSelect={handleMarqueeSelect}
-            onDeleteMembers={handleDeleteMembers}
+            onDeletePlacements={handleDeletePlacements}
+            onDeleteComponents={handleDeleteComponents}
             onChangePoses={handleChangePoses}
             onChangeComponentPose={handleChangeComponentPose}
             activeConnection={
@@ -602,6 +787,8 @@ export function Workspace() {
             members={compiled.document?.members}
             onResizeMember={handleResizeMember}
             exportApiRef={exportApiRef}
+            isolatedId={isolatedId}
+            onEnterIsolation={enterIsolation}
           />
         </Panel>
         <Separator className="w-1.5 bg-[#3d2a18] hover:bg-[#d97706]" />
@@ -650,12 +837,52 @@ export function Workspace() {
   );
 }
 
+function safeComponentId(key: string): string | undefined {
+  try {
+    return parseInstanceKey(key).componentId;
+  } catch {
+    return undefined;
+  }
+}
+
+function groupComponentsFromSelection(text: string, scene: SceneModel, occurrenceIds: string[]) {
+  if (occurrenceIds.length === 0) return null;
+  const parents = occurrenceIds.map((id) => findSceneParent(scene.components, id));
+  if (parents.some((parent) => parent === undefined)) return null;
+  const parentId = parents[0]?.id ?? null;
+  if (!parents.every((parent) => (parent?.id ?? null) === parentId)) return null;
+  const boxes = occurrenceIds.flatMap((id) => {
+    const component = findSceneComponent(scene.components, id);
+    return component ? membersUnder(component).map((member) => member.worldBounds) : [];
+  });
+  const origin = groupOrigin(boxes);
+  if (!origin) return null;
+  const parent = parents[0] ?? null;
+  const groupPosition = parent
+    ? localPoseFromWorld(origin, [0, 0, 0], parent.worldPosition, parent.worldRotation).position
+    : origin;
+  const items = occurrenceIds.flatMap((id) => {
+    const component = findSceneComponent(scene.components, id);
+    if (!component) return [];
+    const pose = localPoseFromWorld(component.worldPosition, component.worldRotation, origin, [0, 0, 0]);
+    const nested = parseNestedOccurrence(id);
+    return [{
+      templateId: component.templateId,
+      rootId: nested ? undefined : id,
+      nested: nested ?? undefined,
+      position: pose.position,
+      rotation: pose.rotation,
+    }];
+  });
+  return groupOccurrences(text, items, groupPosition, parent?.id ?? null);
+}
+
 function groupFromSelection(text: string, scene: SceneModel, keys: string[]) {
   const selected = new Set(keys);
   const byKey = new Map<string, { part: SceneMemberInstance; component: SceneComponent }>();
-  for (const component of scene.components) {
+  walkSceneComponents(scene.components, (component) => {
     for (const part of component.members) byKey.set(part.key, { part, component });
-  }
+  });
   const ordered = keys.flatMap((key) => {
     const hit = byKey.get(key);
     return hit ? [hit] : [];
@@ -670,21 +897,22 @@ function groupFromSelection(text: string, scene: SceneModel, keys: string[]) {
   const items = ordered.map(({ part, component }) => {
     const world = worldPlacementPose(
       { position: part.position, rotation: part.rotation },
-      { position: component.position, rotation: component.rotation },
+      { position: component.worldPosition, rotation: component.worldRotation },
     );
-    const { componentId, placementIndex } = parseInstanceKey(part.key);
+    const { placementIndex } = parseInstanceKey(part.key);
+    const componentId = component.templateId;
     if (entire) {
       return {
         componentId,
         placementIndex,
-        position: placementAfterReseat(world.position, origin, component.rotation),
+        position: placementAfterReseat(world.position, origin, component.worldRotation),
         rotation: part.rotation,
       };
     }
     const local = placementInNewGroup(world, origin);
     return { componentId, placementIndex, position: local.position, rotation: local.rotation };
   });
-  return groupMembers(text, items, origin, entire && sole ? sole.id : undefined);
+  return groupMembers(text, items, origin, entire && sole && sole.id === sole.templateId ? sole.id : undefined);
 }
 
 function isTextField(target: EventTarget | null): boolean {

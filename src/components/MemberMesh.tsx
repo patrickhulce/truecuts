@@ -100,7 +100,8 @@ type MemberMeshProps = {
   boreDiameter?: number;
   /** Red edges and hazard stripes on members not fastened to the assembly. */
   showUnattached?: boolean;
-  onSelect?: (key: string, options?: { shift: boolean }) => void;
+  onSelect?: (key: string, options?: { shift: boolean; member: boolean }) => void;
+  onDoubleClick?: (key: string) => void;
 };
 
 export function MemberMesh({
@@ -115,6 +116,7 @@ export function MemberMesh({
   boreDiameter = DEFAULT_PREFERENCES.boreDiameter,
   showUnattached = true,
   onSelect,
+  onDoubleClick,
 }: MemberMeshProps) {
   const drilledBores = useMemo(
     () =>
@@ -194,7 +196,15 @@ export function MemberMesh({
           ? undefined
           : (event) => {
               event.stopPropagation();
-              onSelect?.(instance.key, { shift: event.shiftKey });
+              onSelect?.(instance.key, { shift: event.shiftKey, member: !(event.metaKey || event.ctrlKey) });
+            }
+      }
+      onDoubleClick={
+        !interactive || isolate
+          ? undefined
+          : (event) => {
+              event.stopPropagation();
+              onDoubleClick?.(instance.key);
             }
       }
     >

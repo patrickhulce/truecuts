@@ -4,8 +4,8 @@ import { useState, type ReactNode } from "react";
 import type { CompileResult } from "@/lib/compile";
 import { formatDocumentYaml } from "@/lib/edit";
 import { parseInstanceKey } from "@/lib/fasteners";
-import type { SelectionMode } from "@/lib/selection";
-import type { SceneModel } from "@/lib/scene";
+import { componentSelectionKey, type SelectionMode } from "@/lib/selection";
+import { findSceneComponent, sceneMembers, type SceneModel } from "@/lib/scene";
 import { formatInches } from "@/lib/units";
 import { DiagnosticsPanel } from "./DiagnosticsPanel";
 import { PartsBrowser } from "./PartsBrowser";
@@ -21,11 +21,15 @@ type EditorPanelProps = {
   selectedKeys: string[];
   selectionMode: SelectionMode;
   onSelect: (key: string | null, options?: { shift?: boolean }) => void;
-  onSelectKeys: (keys: string[], mode?: SelectionMode) => void;
   onHover: (keys: string[]) => void;
   activeConnectionKey: string | null;
   onActiveConnection: (key: string | null) => void;
   boreDiameter: number;
+  isolation: string[];
+  onEnterIsolation: (occurrenceId: string) => void;
+  onExitIsolation: () => void;
+  onJumpIsolation: (index: number) => void;
+  onRetargetIsolation: (from: string, to: string) => void;
 };
 
 function debugBoreLines(scene: SceneModel | undefined, connectionKey: string | null): string[] | null {
@@ -33,7 +37,7 @@ function debugBoreLines(scene: SceneModel | undefined, connectionKey: string | n
   const connection = scene.connections.find((item) => item.key === connectionKey);
   if (!connection) return null;
   const labels = new Map(
-    scene.components.flatMap((component) => component.members).map((member) => [member.key, member.label]),
+    sceneMembers(scene.components).map((member) => [member.key, member.label]),
   );
   return connection.bores.map((derived) => {
     const label = labels.get(derived.instanceKey) ?? parseInstanceKey(derived.instanceKey).memberId;
@@ -50,17 +54,21 @@ export function EditorPanel({
   selectedKeys,
   selectionMode,
   onSelect,
-  onSelectKeys,
   onHover,
   activeConnectionKey,
   onActiveConnection,
   boreDiameter,
+  isolation,
+  onEnterIsolation,
+  onExitIsolation,
+  onJumpIsolation,
+  onRetargetIsolation,
 }: EditorPanelProps) {
   const [tab, setTab] = useState<Tab>("build");
 
   function openComponent(id: string) {
-    const component = compiled.scene?.components.find((item) => item.id === id);
-    onSelectKeys(component?.members.map((member) => member.key) ?? [], "multi");
+    const component = compiled.scene ? findSceneComponent(compiled.scene.components, id) : undefined;
+    if (component) onSelect(componentSelectionKey(component.id));
   }
 
   function selectTab(next: Tab) {
@@ -91,11 +99,15 @@ export function EditorPanel({
             selectedKeys={selectedKeys}
             selectionMode={selectionMode}
             onSelect={onSelect}
-            onSelectKeys={onSelectKeys}
             onHover={onHover}
             onActiveConnection={onActiveConnection}
             onOpenComponent={openComponent}
             boreDiameter={boreDiameter}
+            isolation={isolation}
+            onEnterIsolation={onEnterIsolation}
+            onExitIsolation={onExitIsolation}
+            onJumpIsolation={onJumpIsolation}
+            onRetargetIsolation={onRetargetIsolation}
           />
         ) : (
           <div className="min-h-0 flex-1">

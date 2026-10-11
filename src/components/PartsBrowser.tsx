@@ -4,12 +4,32 @@ import { useEffect, useRef, useState, type KeyboardEvent, type ReactNode } from 
 import { fitsTConnector, getCatalogPart } from "@/lib/catalog";
 import { connectionKey, connectionNailReach, detailNeighborKeys, type SceneConnection } from "@/lib/connections";
 import { fittingHardware, hardwareKindLabel, isHardwareKind } from "@/lib/hardware-fastener";
-import { addConnection, promoteExplicitFasteners, setConnectionFastener, setMemberDimension, setPlacementPose } from "@/lib/edit";
+import {
+  addConnection,
+  duplicateComponentOccurrence,
+  duplicateMemberPlacement,
+  unlinkComponent,
+  unlinkMemberPlacement,
+  promoteExplicitFasteners,
+  setConnectionFastener,
+  setMemberDimension,
+  setPlacementPose,
+} from "@/lib/edit";
 import { parseInstanceKey } from "@/lib/fasteners";
 import type { ResolvedBore, ResolvedConnectionFastener, ResolvedCut, ResolvedDocument, ResolvedMember } from "@/lib/schema";
-import { nearInstanceKeys, originCorner, positionForOriginCorner, unionAabb, type SceneContacts } from "@/lib/geometry";
-import type { SelectionMode } from "@/lib/selection";
-import type { SceneFastener, SceneModel, SceneMemberInstance } from "@/lib/scene";
+import { add, localShiftForWorldX, nearInstanceKeys, originCorner, positionForOriginCorner, unionAabb, type SceneContacts } from "@/lib/geometry";
+import { canSelectComponent, componentIdOfSelection, componentSelectionKey, linkedCopyComponent, type SelectionMode } from "@/lib/selection";
+import {
+  findSceneComponent,
+  findSceneParent,
+  membersUnder,
+  sceneMembers,
+  walkSceneComponents,
+  type SceneComponent,
+  type SceneFastener,
+  type SceneModel,
+  type SceneMemberInstance,
+} from "@/lib/scene";
 import { formatInches, parseDimension, parseOffset } from "@/lib/units";
 import { ConnectionEditor } from "./ConnectionEditor";
 import { FastenerIcon } from "./FastenerIcon";
@@ -23,11 +43,15 @@ type PartsBrowserProps = {
   selectedKeys: string[];
   selectionMode: SelectionMode;
   onSelect: (key: string | null, options?: { shift?: boolean }) => void;
-  onSelectKeys: (keys: string[], mode?: SelectionMode) => void;
   onHover: (keys: string[]) => void;
   onActiveConnection: (key: string | null) => void;
   onOpenComponent: (componentId: string) => void;
   boreDiameter: number;
+  isolation: string[];
+  onEnterIsolation: (occurrenceId: string) => void;
+  onExitIsolation: () => void;
+  onJumpIsolation: (index: number) => void;
+  onRetargetIsolation: (from: string, to: string) => void;
 };
 
 const AXIS_NAME = ["length (L)", "width (W)", "thickness (T)"] as const;
@@ -54,7 +78,23 @@ function formatCut(cut: ResolvedCut): string {
 }
 
 function instanceMap(scene: SceneModel): Map<string, SceneMemberInstance> {
-  return new Map(scene.components.flatMap((component) => component.members).map((member) => [member.key, member]));
+  return new Map(sceneMembers(scene.components).map((member) => [member.key, member]));
+}
+
+function templateOccurrences(scene: SceneModel, templateId: string): number {
+  let count = 0;
+  walkSceneComponents(scene.components, (component) => {
+    if (component.templateId === templateId) count += 1;
+  });
+  return count;
+}
+
+function memberPlacements(scene: SceneModel, memberId: string): number {
+  let count = 0;
+  walkSceneComponents(scene.components, (component) => {
+    count += component.members.filter((member) => member.memberId === memberId).length;
+  });
+  return count;
 }
 
 function memberLabel(instanceKey: string, byKey: Map<string, SceneMemberInstance>): string {
@@ -94,7 +134,7 @@ function groupFasteners(scene: SceneModel): {
 }
 
 function unusedMembers(document: ResolvedDocument, scene: SceneModel): ResolvedMember[] {
-  const used = new Set(scene.components.flatMap((component) => component.members.map((member) => member.memberId)));
+  const used = new Set(sceneMembers(scene.components).map((member) => member.memberId));
   return document.members.filter((member) => !used.has(member.id));
 }
 
@@ -208,7 +248,7 @@ function iconKind(subtype: string): "screw" | "nail" | "glue" | "bolt" | "connec
 
 function occurrenceOf(scene: SceneModel, key: string): number {
   const { componentId, memberId } = parseInstanceKey(key);
-  const component = scene.components.find((item) => item.id === componentId);
+  const component = findSceneComponent(scene.components, componentId);
   if (!component) return 0;
   let seen = 0;
   for (const member of component.members) {
@@ -229,7 +269,7 @@ function allowsTConnector(connection: SceneConnection, byKey: Map<string, SceneM
 function hardwareFor(connection: SceneConnection, scene: SceneModel, document: ResolvedDocument) {
   const posed = [];
   for (const key of connection.memberKeys) {
-    const component = scene.components.find((item) => item.members.some((member) => member.key === key));
+    const component = findSceneComponent(scene.components, parseInstanceKey(key).componentId);
     const part = component?.members.find((member) => member.key === key);
     const definition = document.members.find((member) => member.id === part?.memberId);
     if (!component || !part || !definition) continue;
@@ -238,8 +278,8 @@ function hardwareFor(connection: SceneConnection, scene: SceneModel, document: R
       faces: part.faces,
       position: part.position,
       rotation: part.rotation,
-      componentPosition: component.position,
-      componentRotation: component.rotation,
+      componentPosition: component.worldPosition,
+      componentRotation: component.worldRotation,
       stockSize: definition.size,
       stockId: part.stockId,
     });
@@ -250,7 +290,7 @@ function hardwareFor(connection: SceneConnection, scene: SceneModel, document: R
 function nailReachFor(connection: SceneConnection, scene: SceneModel): number | undefined {
   const posed = [];
   for (const key of connection.memberKeys) {
-    const component = scene.components.find((item) => item.members.some((member) => member.key === key));
+    const component = findSceneComponent(scene.components, parseInstanceKey(key).componentId);
     const part = component?.members.find((member) => member.key === key);
     if (!component || !part) continue;
     posed.push({
@@ -258,8 +298,8 @@ function nailReachFor(connection: SceneConnection, scene: SceneModel): number | 
       faces: part.faces,
       position: part.position,
       rotation: part.rotation,
-      componentPosition: component.position,
-      componentRotation: component.rotation,
+      componentPosition: component.worldPosition,
+      componentRotation: component.worldRotation,
     });
   }
   return connectionNailReach(scene.contacts, posed);
@@ -273,11 +313,15 @@ export function PartsBrowser({
   selectedKeys,
   selectionMode,
   onSelect,
-  onSelectKeys,
   onHover,
   onActiveConnection,
   onOpenComponent,
   boreDiameter,
+  isolation,
+  onEnterIsolation,
+  onExitIsolation,
+  onJumpIsolation,
+  onRetargetIsolation,
 }: PartsBrowserProps) {
   const [collapsedIds, setCollapsedIds] = useState<ReadonlySet<string>>(() => new Set());
   useEffect(() => () => onHover([]), [onHover]);
@@ -300,10 +344,20 @@ export function PartsBrowser({
   }
 
   const byKey = instanceMap(scene);
+  const isolatedId = isolation.at(-1) ?? null;
+  const isolatedRoot = isolatedId ? findSceneComponent(scene.components, isolatedId) : undefined;
+  const crumbs = isolation.flatMap((id) => {
+    const component = findSceneComponent(scene.components, id);
+    return component ? [{ id, label: component.label }] : [];
+  });
+  const selectedComponentId =
+    selectionMode === "single" && selectedKeys.length === 1 ? componentIdOfSelection(selectedKeys[0] ?? "") : null;
+  const selectedComponent = selectedComponentId ? findSceneComponent(scene.components, selectedComponentId) : undefined;
+  const summaryComponent = selectedComponent && selectedComponent.id !== isolatedId ? selectedComponent : undefined;
   const selected =
     selectionMode === "single" && selectedKeys.length === 1 ? (byKey.get(selectedKeys[0] ?? "") ?? null) : null;
-  if (selected) {
-    return (
+  const detail =
+    selected ? (
       <PartDetail
         key={selected.key}
         instance={selected}
@@ -325,20 +379,54 @@ export function PartsBrowser({
         onHover={onHover}
         onOpenComponent={onOpenComponent}
         boreDiameter={boreDiameter}
+        onRetarget={onRetargetIsolation}
       />
-    );
-  }
+    ) : null;
 
   const { local, assembly } = groupFasteners(scene);
   const unused = unusedMembers(document, scene);
   const selectedSet = new Set(selectedKeys);
   const picked = selectedKeys.flatMap((key) => {
+    const occurrenceId = componentIdOfSelection(key);
+    if (occurrenceId) {
+      const component = findSceneComponent(scene.components, occurrenceId);
+      return component ? membersUnder(component) : [];
+    }
     const instance = byKey.get(key);
     return instance ? [instance] : [];
   });
+  const roots = isolatedRoot ? [isolatedRoot] : scene.components;
+  const revealedIds = revealIds(scene, summaryComponent?.id ?? null);
 
   return (
-    <div className="min-h-0 flex-1 overflow-auto pb-6">
+    <div className="flex min-h-0 flex-1 flex-col">
+      {isolatedRoot ? (
+        <IsolationBar
+          documentName={document.name}
+          crumbs={crumbs}
+          note={arrangementNote(isolatedRoot, scene)}
+          onDone={onExitIsolation}
+          onJump={onJumpIsolation}
+        />
+      ) : null}
+      <div className="min-h-0 flex-1 overflow-auto pb-6">
+      {detail ?? (
+        <>
+      {summaryComponent ? (
+        <ComponentSummary
+          component={summaryComponent}
+          scene={scene}
+          text={text}
+          onCommit={onCommit}
+          onBack={() => {
+            onHover([]);
+            onSelect(null);
+          }}
+          onSelect={onSelect}
+          onEdit={() => onEnterIsolation(summaryComponent.id)}
+          onRetarget={onRetargetIsolation}
+        />
+      ) : null}
       {selectionMode === "multi" && picked.length > 0 ? (
         <MultiSummary
           scene={scene}
@@ -348,84 +436,24 @@ export function PartsBrowser({
           onHover={onHover}
         />
       ) : null}
-      {scene.components.map((component) => {
-        const fasteners = local.get(component.id) ?? [];
-        const memberKeys = component.members.map((part) => part.key);
-        const groupSelected = memberKeys.length > 0 && memberKeys.every((key) => selectedSet.has(key));
-        const expanded = !collapsedIds.has(component.id);
-        const count = component.members.length;
-        return (
-          <section key={component.id} className="border-b border-[#3d2a18]/80" onMouseLeave={() => onHover([])}>
-            <div className="flex items-stretch pt-2">
-              <button
-                type="button"
-                aria-expanded={expanded}
-                aria-label={expanded ? `Collapse ${component.label}` : `Expand ${component.label}`}
-                onClick={() => toggleCollapsed(component.id)}
-                className="grid w-7 shrink-0 cursor-pointer place-items-center text-[#8a7355] hover:text-[#f59e0b]"
-              >
-                <ChevronIcon expanded={expanded} />
-              </button>
-              <button
-                type="button"
-                aria-pressed={groupSelected}
-                onClick={() => onSelectKeys(memberKeys, "multi")}
-                onMouseEnter={() => onHover(memberKeys)}
-                className={`flex min-w-0 flex-1 cursor-pointer flex-col items-start gap-0.5 py-1.5 pr-3 text-left hover:bg-[#2a1d12] ${
-                  groupSelected ? "bg-[#3d2a18]" : ""
-                }`}
-              >
-                <span className="font-[family-name:var(--font-display)] text-sm text-[#f59e0b]">{component.label}</span>
-                <span className="text-[11px] text-[#8a7355]">
-                  {component.id} · {count} {count === 1 ? "member" : "members"}
-                </span>
-              </button>
-            </div>
-            {expanded ? (
-              <>
-                {count === 0 ? (
-                  <EmptyRow>No members</EmptyRow>
-                ) : (
-                  <ul>
-                    {component.members.map((part) => (
-                      <li key={part.key}>
-                        <button
-                          type="button"
-                          aria-pressed={selectedSet.has(part.key)}
-                          onClick={(event) => onSelect(part.key, { shift: event.shiftKey })}
-                          onMouseEnter={() => onHover([part.key])}
-                          className={`flex w-full cursor-pointer flex-col items-start gap-0.5 py-1.5 pl-8 pr-3 text-left hover:bg-[#2a1d12] ${
-                            selectedSet.has(part.key) ? "bg-[#3d2a18]" : ""
-                          }`}
-                        >
-                          <span className="text-sm text-[#d6c3a3]">{part.label}</span>
-                          <span className="text-[11px] text-[#8a7355]">
-                            {part.memberId} · {part.stockLabel} · {formatFinished(part.finished)}
-                          </span>
-                          {part.bores.length > 0 ? (
-                            <span className="text-[11px] text-[#a89070]">{part.bores.map(formatBore).join("; ")}</span>
-                          ) : null}
-                        </button>
-                      </li>
-                    ))}
-                  </ul>
-                )}
-                {fasteners.length > 0 ? (
-                  <div className="pl-5">
-                    <SectionLabel>Fasteners</SectionLabel>
-                    <ul>
-                      {fasteners.map((fastener) => (
-                        <FastenerRow key={fastener.key} fastener={fastener} byKey={byKey} />
-                      ))}
-                    </ul>
-                  </div>
-                ) : null}
-              </>
-            ) : null}
-          </section>
-        );
-      })}
-      {assembly.length > 0 ? (
+      {roots.map((component) => (
+        <ComponentBranch
+          key={component.id}
+          component={component}
+          depth={0}
+          local={local}
+          byKey={byKey}
+          scene={scene}
+          selectedSet={selectedSet}
+          collapsedIds={collapsedIds}
+          revealedIds={revealedIds}
+          onToggle={toggleCollapsed}
+          onSelect={onSelect}
+          onHover={onHover}
+          onEnterIsolation={onEnterIsolation}
+        />
+      ))}
+      {!isolatedRoot && assembly.length > 0 ? (
         <section className="border-b border-[#3d2a18]/80">
           <h2 className="px-3 pb-1 pt-4 font-[family-name:var(--font-display)] text-sm text-[#f59e0b]">
             Assembly fasteners
@@ -437,7 +465,7 @@ export function PartsBrowser({
           </ul>
         </section>
       ) : null}
-      {unused.length > 0 ? (
+      {!isolatedRoot && unused.length > 0 ? (
         <section>
           <h2 className="px-3 pb-1 pt-4 font-[family-name:var(--font-display)] text-sm text-[#f59e0b]">
             Unused members
@@ -470,6 +498,74 @@ export function PartsBrowser({
           </ul>
         </section>
       ) : null}
+        </>
+      )}
+      </div>
+    </div>
+  );
+}
+
+function revealIds(scene: SceneModel, occurrenceId: string | null): ReadonlySet<string> {
+  const open = new Set<string>();
+  let id = occurrenceId;
+  while (id) {
+    open.add(id);
+    id = findSceneParent(scene.components, id)?.id ?? null;
+  }
+  return open;
+}
+
+function arrangementNote(component: SceneComponent, scene: SceneModel): string {
+  const shared = templateOccurrences(scene, component.templateId);
+  const noun = component.label.toLowerCase();
+  return shared > 1 ? `Edits ${shared} ${noun}s.` : `One ${noun}.`;
+}
+
+function IsolationBar({
+  documentName,
+  crumbs,
+  note,
+  onDone,
+  onJump,
+}: {
+  documentName: string;
+  crumbs: { id: string; label: string }[];
+  note: string;
+  onDone: () => void;
+  onJump: (index: number) => void;
+}) {
+  return (
+    <div className="flex items-start justify-between gap-3 border-b border-[#3d2a18] bg-[#241a10] px-3 py-2">
+      <div className="min-w-0">
+        <nav aria-label="Edited component" className="flex flex-wrap items-center gap-1 text-xs text-[#a89070]">
+          <button type="button" onClick={onDone} className="cursor-pointer hover:text-[#f59e0b]">
+            {documentName}
+          </button>
+          {crumbs.map((crumb, index) => {
+            const current = index === crumbs.length - 1;
+            return (
+              <span key={crumb.id} className="flex items-center gap-1">
+                <span aria-hidden="true">/</span>
+                {current ? (
+                  <span className="text-[#f59e0b]">{crumb.label}</span>
+                ) : (
+                  <button type="button" onClick={() => onJump(index)} className="cursor-pointer hover:text-[#f59e0b]">
+                    {crumb.label}
+                  </button>
+                )}
+              </span>
+            );
+          })}
+        </nav>
+        <p className="mt-1 text-sm text-[#d6c3a3]">{note}</p>
+      </div>
+      <button
+        type="button"
+        onClick={onDone}
+        className="shrink-0 cursor-pointer rounded border border-[#3d2a18] px-2 py-1 text-xs text-[#d6c3a3] hover:text-[#f59e0b]"
+      >
+        Done
+      </button>
     </div>
   );
 }
@@ -535,6 +631,226 @@ function MultiSummary({
   );
 }
 
+function ComponentBranch({
+  component,
+  depth,
+  local,
+  byKey,
+  scene,
+  selectedSet,
+  collapsedIds,
+  revealedIds,
+  onToggle,
+  onSelect,
+  onHover,
+  onEnterIsolation,
+}: {
+  component: SceneComponent;
+  depth: number;
+  local: Map<string, SceneFastener[]>;
+  byKey: Map<string, SceneMemberInstance>;
+  scene: SceneModel;
+  selectedSet: Set<string>;
+  collapsedIds: ReadonlySet<string>;
+  revealedIds: ReadonlySet<string>;
+  onToggle: (id: string) => void;
+  onSelect: (key: string, options?: { shift?: boolean }) => void;
+  onHover: (keys: string[]) => void;
+  onEnterIsolation: (occurrenceId: string) => void;
+}) {
+  const key = componentSelectionKey(component.id);
+  const fasteners = local.get(component.id) ?? [];
+  const selected = selectedSet.has(key);
+  const expanded = revealedIds.has(component.id) || !collapsedIds.has(component.id);
+  const shared = templateOccurrences(scene, component.templateId);
+  const summary = [
+    component.templateId === component.id ? component.id : `${component.id} · ${component.templateId}`,
+    component.members.length > 0 ? `${component.members.length} ${component.members.length === 1 ? "member" : "members"}` : "",
+    component.children.length > 0
+      ? `${component.children.length} ${component.children.length === 1 ? "component" : "components"}`
+      : "",
+    shared > 1 ? `${shared} ${component.label.toLowerCase()}s` : "",
+  ]
+    .filter(Boolean)
+    .join(" · ");
+  return (
+    <section className="border-b border-[#3d2a18]/80" onMouseLeave={() => onHover([])}>
+      <div className="flex items-stretch pt-2">
+        <button
+          type="button"
+          aria-expanded={expanded}
+          aria-label={expanded ? `Collapse ${component.label}` : `Expand ${component.label}`}
+          onClick={() => onToggle(component.id)}
+          className="grid w-7 shrink-0 cursor-pointer place-items-center text-[#8a7355] hover:text-[#f59e0b]"
+          style={{ marginLeft: depth * 12 }}
+        >
+          <ChevronIcon expanded={expanded} />
+        </button>
+        <button
+          type="button"
+          aria-pressed={selected}
+          onClick={(event) => canSelectComponent(component) ? onSelect(key, { shift: event.shiftKey }) : onToggle(component.id)}
+          onDoubleClick={() => { if (canSelectComponent(component)) onEnterIsolation(component.id); }}
+          onMouseEnter={() => onHover(canSelectComponent(component) ? [key] : [])}
+          className={`flex min-w-0 flex-1 cursor-pointer flex-col items-start gap-0.5 py-1.5 pr-3 text-left hover:bg-[#2a1d12] ${
+            selected ? "bg-[#3d2a18]" : ""
+          }`}
+        >
+          <span className="font-[family-name:var(--font-display)] text-sm text-[#f59e0b]">{component.label}</span>
+          <span className="text-[11px] text-[#8a7355]">{summary}</span>
+        </button>
+      </div>
+      {expanded ? (
+        <>
+          {component.members.length === 0 && component.children.length === 0 ? <EmptyRow>Empty</EmptyRow> : null}
+          {component.members.length > 0 ? (
+            <ul>
+              {component.members.map((part) => (
+                <li key={part.key}>
+                  <button
+                    type="button"
+                    aria-pressed={selectedSet.has(part.key)}
+                    onClick={(event) => onSelect((event.metaKey || event.ctrlKey) && canSelectComponent(component) ? key : part.key, { shift: event.shiftKey })}
+                    onMouseEnter={() => onHover([part.key])}
+                    className={`flex w-full cursor-pointer flex-col items-start gap-0.5 py-1.5 pr-3 text-left hover:bg-[#2a1d12] ${
+                      selectedSet.has(part.key) ? "bg-[#3d2a18]" : ""
+                    }`}
+                    style={{ paddingLeft: 32 + depth * 12 }}
+                  >
+                    <span className="text-sm text-[#d6c3a3]">{part.label}</span>
+                    <span className="text-[11px] text-[#8a7355]">
+                      {part.memberId} · {part.stockLabel} · {formatFinished(part.finished)}
+                    </span>
+                    {part.bores.length > 0 ? (
+                      <span className="text-[11px] text-[#a89070]">{part.bores.map(formatBore).join("; ")}</span>
+                    ) : null}
+                  </button>
+                </li>
+              ))}
+            </ul>
+          ) : null}
+          {component.children.map((child) => (
+            <ComponentBranch
+              key={child.id}
+              component={child}
+              depth={depth + 1}
+              local={local}
+              byKey={byKey}
+              scene={scene}
+              selectedSet={selectedSet}
+              collapsedIds={collapsedIds}
+              revealedIds={revealedIds}
+              onToggle={onToggle}
+              onSelect={onSelect}
+              onHover={onHover}
+              onEnterIsolation={onEnterIsolation}
+            />
+          ))}
+          {fasteners.length > 0 ? (
+            <div className="pl-5">
+              <SectionLabel>Fasteners</SectionLabel>
+              <ul>
+                {fasteners.map((fastener) => (
+                  <FastenerRow key={fastener.key} fastener={fastener} byKey={byKey} />
+                ))}
+              </ul>
+            </div>
+          ) : null}
+        </>
+      ) : null}
+    </section>
+  );
+}
+
+function ComponentSummary({
+  component,
+  scene,
+  text,
+  onCommit,
+  onBack,
+  onSelect,
+  onEdit,
+  onRetarget,
+}: {
+  component: SceneComponent;
+  scene: SceneModel;
+  text: string;
+  onCommit: (text: string) => void;
+  onBack: () => void;
+  onSelect: (key: string | null) => void;
+  onEdit: () => void;
+  onRetarget: (from: string, to: string) => void;
+}) {
+  const shared = templateOccurrences(scene, component.templateId);
+
+  function duplicate() {
+    const bounds = unionAabb(membersUnder(component).map((member) => member.worldBounds));
+    const span = bounds ? bounds.max[0] - bounds.min[0] + 1 : 12;
+    const parent = findSceneParent(scene.components, component.id);
+    const delta = localShiftForWorldX(parent ? parent.worldRotation : [0, 0, 0], span);
+    try {
+      if (!linkedCopyComponent([componentSelectionKey(component.id)], scene)) {
+        let next = text;
+        for (const member of membersUnder(component)) {
+          const ref = parseInstanceKey(member.key);
+          const owner = findSceneComponent(scene.components, ref.componentId)!;
+          const shift = localShiftForWorldX(owner.worldRotation, span);
+          next = duplicateMemberPlacement(next, ref.componentId, ref.placementIndex, add(member.position, shift), member.rotation);
+        }
+        onCommit(next);
+        return;
+      }
+      const next = duplicateComponentOccurrence(text, component.id, add(component.position, delta), component.rotation);
+      onCommit(next.text);
+      onSelect(componentSelectionKey(next.occurrenceId));
+    } catch {
+      // Leave the YAML alone if the copy cannot be written.
+    }
+  }
+
+  function unique() {
+    try {
+      const next = unlinkComponent(text, component.id);
+      onCommit(next.text);
+      onRetarget(component.id, next.occurrenceId);
+      onSelect(componentSelectionKey(next.occurrenceId));
+    } catch {
+      // Leave the YAML alone if the copy cannot be written.
+    }
+  }
+
+  return (
+    <section className="border-b border-[#3d2a18] bg-[#241a10]">
+      <div className="flex items-center gap-2 px-3 py-2">
+        <button type="button" onClick={onBack} className="cursor-pointer text-xs text-[#d6c3a3] hover:text-[#f59e0b]">
+          Back
+        </button>
+      </div>
+      <div className="px-3 pb-3">
+        <h2 className="font-[family-name:var(--font-display)] text-lg text-[#f59e0b]">{component.label}</h2>
+        <p className="mt-1 text-xs text-[#a89070]">{component.id}</p>
+        {component.templateId !== component.id ? (
+          <p className="mt-1 text-xs text-[#a89070]">template {component.templateId}</p>
+        ) : null}
+        <p className="mt-2 text-sm text-[#d6c3a3]">{arrangementNote(component, scene)}</p>
+        <div className="mt-3 flex gap-2">
+          <button type="button" onClick={onEdit} className="cursor-pointer rounded border border-[#3d2a18] px-2 py-1 text-xs text-[#d6c3a3] hover:text-[#f59e0b]">
+            Edit
+          </button>
+          <button type="button" onClick={duplicate} className="cursor-pointer rounded border border-[#3d2a18] px-2 py-1 text-xs text-[#d6c3a3] hover:text-[#f59e0b]">
+            Duplicate
+          </button>
+          {shared > 1 || membersUnder(component).some((member) => memberPlacements(scene, member.memberId) > 1) ? (
+            <button type="button" onClick={unique} title="Unlink this component and its members from other copies" className="cursor-pointer rounded border border-[#f59e0b] px-2 py-1 text-xs text-[#f59e0b] hover:bg-[#3d2a18]">
+              Unlink
+            </button>
+          ) : null}
+        </div>
+      </div>
+    </section>
+  );
+}
+
 function PartDetail({
   instance,
   definition,
@@ -550,6 +866,7 @@ function PartDetail({
   onHover,
   onOpenComponent,
   boreDiameter,
+  onRetarget,
 }: {
   instance: SceneMemberInstance;
   definition?: ResolvedMember;
@@ -565,6 +882,7 @@ function PartDetail({
   onHover: (keys: string[]) => void;
   onOpenComponent: (componentId: string) => void;
   boreDiameter: number;
+  onRetarget: (from: string, to: string) => void;
 }) {
   const [activeKey, setActiveKey] = useState<string | null>(null);
   const textRef = useRef(text);
@@ -687,7 +1005,57 @@ function PartDetail({
               <dd className="text-[#d6c3a3]">{instance.memberId}</dd>
               <dt>stock</dt>
               <dd className="text-[#d6c3a3]">{instance.stockLabel}</dd>
+              {memberPlacements(scene, instance.memberId) > 1 ? (
+                <>
+                  <dt>shared</dt>
+                  <dd className="text-[#d6c3a3]">
+                    Edits {memberPlacements(scene, instance.memberId)} placements
+                    <button
+                      type="button"
+                      title="Unlink this member so its edits affect only this copy"
+                      className="ml-2 cursor-pointer rounded border border-[#f59e0b] px-2 py-1 text-xs text-[#f59e0b] hover:bg-[#3d2a18]"
+                      onClick={() => {
+                        const { componentId, placementIndex } = parseInstanceKey(instance.key);
+                        try {
+                          const next = unlinkMemberPlacement(textRef.current, componentId, placementIndex);
+                          commitNext(next.text);
+                          onRetarget(componentId, next.occurrenceId);
+                          onSelect(next.key);
+                        } catch {
+                          // Leave the document intact if the member cannot be unlinked.
+                        }
+                      }}
+                    >Unlink</button>
+                  </dd>
+                </>
+              ) : null}
             </dl>
+          </div>
+          <div className="px-3 pt-3">
+            <button
+              type="button"
+              onClick={() => {
+                const { componentId, placementIndex } = parseInstanceKey(instance.key);
+                const owner = findSceneComponent(scene.components, componentId);
+                const delta = localShiftForWorldX(owner?.worldRotation ?? [0, 0, 0], instance.finished.length + 1);
+                try {
+                  commitNext(
+                    duplicateMemberPlacement(
+                      textRef.current,
+                      componentId,
+                      placementIndex,
+                      add(instance.position, delta),
+                      instance.rotation,
+                    ),
+                  );
+                } catch {
+                  // Leave the YAML alone if the placement cannot be copied.
+                }
+              }}
+              className="cursor-pointer rounded border border-[#3d2a18] px-2 py-1 text-xs text-[#d6c3a3] hover:text-[#f59e0b]"
+            >
+              Duplicate member
+            </button>
           </div>
 
           <SectionLabel>Dimensions</SectionLabel>
@@ -1011,7 +1379,7 @@ function ComponentOrigin({
   onOpen: (componentId: string) => void;
 }) {
   const { componentId } = parseInstanceKey(instanceKey);
-  const component = scene.components.find((item) => item.id === componentId);
+  const component = findSceneComponent(scene.components, componentId);
   if (!component) return null;
   const [x, y, z] = component.position;
   const [rx, ry, rz] = component.rotation;

@@ -45,6 +45,25 @@ describe("migrateDocumentYaml", () => {
     expect(result.document?.components[0].members.map((member) => member.id)).toEqual(["a-1", "b-1"]);
     expect(result.document?.components[0].fasteners[0].members[0].id).toBe("a-1");
     expect(result.document?.fasteners[0].members[1].id).toBe("b-1");
+    expect(result.document?.version).toBe(2);
+    expect(result.document?.components[0].position).toEqual([0, 0, 0]);
+  });
+
+  it("writes an omitted version 1 position so the component stays placed", () => {
+    const next = migrateDocumentYaml(`version: 1
+name: Bare
+members:
+  - { label: A, stock: 2x4x8 }
+components:
+  - label: Box
+    members:
+      - { id: a-1 }
+`);
+    expect(next).toMatch(/^version: 2/m);
+    expect(next).toContain("position:");
+    const result = compileDocument(next);
+    expect(result.diagnostics.filter((item) => item.severity === "error")).toEqual([]);
+    expect(result.scene?.components.map((component) => component.id)).toEqual(["box-1"]);
   });
 
   it("leaves current documents unchanged", () => {

@@ -1,6 +1,6 @@
 import { getCatalogPart, getFastenerSubtype, type FastenerSubtype } from "./catalog";
 import { applyPose, dot, len, normalize, rotateEulerXYZ, type Vec3 } from "./geometry";
-import type { ResolvedComponent, ResolvedDocument, ResolvedFastener, ResolvedPlacement } from "./schema";
+import type { ResolvedFastener, ResolvedPlacement } from "./schema";
 
 export type SceneFastenerMember = {
   instanceKey: string;
@@ -56,8 +56,8 @@ export function parseInstanceKey(key: string): {
   memberId: string;
   placementIndex: number;
 } {
-  const slash = key.indexOf("/");
   const hash = key.lastIndexOf("#");
+  const slash = key.lastIndexOf("/", hash);
   if (slash <= 0 || hash <= slash + 1 || hash === key.length - 1) {
     throw new Error(`Invalid instance key "${key}"`);
   }
@@ -70,6 +70,28 @@ export function parseInstanceKey(key: string): {
     memberId: key.slice(slash + 1, hash),
     placementIndex,
   };
+}
+
+/** Definition id for an occurrence. A root id is unchanged; `bench-1/trestle-1#0` is `trestle-1`. */
+export function templateIdFromOccurrence(occurrenceId: string): string {
+  const slash = occurrenceId.lastIndexOf("/");
+  const step = slash < 0 ? occurrenceId : occurrenceId.slice(slash + 1);
+  const hash = step.lastIndexOf("#");
+  return hash < 0 ? step : step.slice(0, hash);
+}
+
+/** Parent occurrence, template id, and sibling index for a nested occurrence. Null for a root id. */
+export function parseNestedOccurrence(
+  occurrenceId: string,
+): { parentId: string; templateId: string; index: number } | null {
+  const slash = occurrenceId.lastIndexOf("/");
+  if (slash <= 0) return null;
+  const step = occurrenceId.slice(slash + 1);
+  const hash = step.lastIndexOf("#");
+  if (hash <= 0 || hash === step.length - 1) return null;
+  const index = Number(step.slice(hash + 1));
+  if (!Number.isInteger(index) || index < 0) return null;
+  return { parentId: occurrenceId.slice(0, slash), templateId: step.slice(0, hash), index };
 }
 
 /** 0-based occurrence of `memberId` in the component → index in `component.members`. */
@@ -89,21 +111,21 @@ export function placementIndexFor(
 
 export function worldPoint(
   local: Vec3,
-  placement: ResolvedPlacement,
-  component: Pick<ResolvedComponent, "position" | "rotation">,
+  placement: Pick<ResolvedPlacement, "position" | "rotation">,
+  component: { position: Vec3; rotation: Vec3 },
 ): Vec3 {
   return applyPose(applyPose(local, placement.position, placement.rotation), component.position, component.rotation);
 }
 
 export function worldDirection(
   local: Vec3,
-  placement: ResolvedPlacement,
-  component: Pick<ResolvedComponent, "position" | "rotation">,
+  placement: Pick<ResolvedPlacement, "position" | "rotation">,
+  component: { position: Vec3; rotation: Vec3 },
 ): Vec3 {
   return rotateEulerXYZ(rotateEulerXYZ(local, placement.rotation), component.rotation);
 }
 
-function cliqueEdges(keys: string[]): Array<[string, string]> {
+export function cliqueEdges(keys: string[]): Array<[string, string]> {
   const edges: Array<[string, string]> = [];
   for (let i = 0; i < keys.length; i++) {
     for (let j = i + 1; j < keys.length; j++) {
@@ -135,15 +157,17 @@ export function fastenedFromSeed(nodes: string[], edges: Array<[string, string]>
   return fastened;
 }
 
-type ResolveContext = {
-  componentById: Map<string, ResolvedComponent>;
+export type FastenerSite = {
+  instanceKey: string;
+  point: Vec3;
+  direction?: Vec3;
 };
 
-function resolveOne(
+export function realizeFastener(
   fastener: ResolvedFastener,
   path: Array<string | number>,
   key: string,
-  ctx: ResolveContext,
+  locate: (member: ResolvedFastener["members"][number], index: number) => FastenerSite | undefined,
   issues: FastenerIssue[],
 ): { scene: SceneFastener; memberKeys: string[] } | undefined {
   const catalog = getCatalogPart(fastener.stock);
@@ -161,17 +185,8 @@ function resolveOne(
   const memberKeys: string[] = [];
 
   for (const [mIndex, member] of fastener.members.entries()) {
-    const component = ctx.componentById.get(member.component);
-    if (!component) {
-      issues.push({
-        message: `Unknown component "${member.component}"`,
-        path: [...path, "members", mIndex, "component"],
-        severity: "error",
-      });
-      continue;
-    }
-    const placementIndex = placementIndexFor(component, member.id, member.index);
-    if (placementIndex === undefined) {
+    const site = locate(member, mIndex);
+    if (!site) {
       issues.push({
         message: `Member "${member.id}" is not placed in component "${member.component}"`,
         path: [...path, "members", mIndex, "id"],
@@ -179,14 +194,8 @@ function resolveOne(
       });
       continue;
     }
-    const placement = component.members[placementIndex];
-    const keyForMember = instanceKey(component.id, member.id, placementIndex);
-    const point = worldPoint(member.at, placement, component);
-    const direction = member.direction
-      ? normalize(worldDirection(member.direction, placement, component))
-      : undefined;
-    members.push({ instanceKey: keyForMember, point, direction });
-    memberKeys.push(keyForMember);
+    members.push({ instanceKey: site.instanceKey, point: site.point, direction: site.direction });
+    memberKeys.push(site.instanceKey);
   }
 
   if (members.length !== fastener.members.length) {
@@ -247,38 +256,3 @@ function resolveOne(
   };
 }
 
-export function resolveFasteners(document: ResolvedDocument): {
-  fasteners: SceneFastener[];
-  edges: Array<[string, string]>;
-  issues: FastenerIssue[];
-} {
-  const issues: FastenerIssue[] = [];
-  const fasteners: SceneFastener[] = [];
-  const edges: Array<[string, string]> = [];
-  const componentById = new Map(document.components.map((component) => [component.id, component]));
-  const ctx: ResolveContext = { componentById };
-
-  for (const [cIndex, component] of document.components.entries()) {
-    for (const [fIndex, fastener] of component.fasteners.entries()) {
-      const resolved = resolveOne(
-        fastener,
-        ["components", cIndex, "fasteners", fIndex],
-        `${component.id}/fastener#${fIndex}`,
-        ctx,
-        issues,
-      );
-      if (!resolved) continue;
-      fasteners.push(resolved.scene);
-      edges.push(...cliqueEdges(resolved.memberKeys));
-    }
-  }
-
-  for (const [fIndex, fastener] of document.fasteners.entries()) {
-    const resolved = resolveOne(fastener, ["fasteners", fIndex], `fastener#${fIndex}`, ctx, issues);
-    if (!resolved) continue;
-    fasteners.push(resolved.scene);
-    edges.push(...cliqueEdges(resolved.memberKeys));
-  }
-
-  return { fasteners, edges, issues };
-}

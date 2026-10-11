@@ -7,7 +7,7 @@ export type SampleBuild = {
   yaml: string;
 };
 
-export const BLANK_YAML = `version: 1
+export const BLANK_YAML = `version: 2
 name: Untitled
 
 members: []
@@ -15,25 +15,10 @@ members: []
 components: []
 `;
 
-const SAWHORSE_YAML = `version: 1
+const SAWHORSE_YAML = `version: 2
 name: Sawhorse
 
 members:
-  - label: Leg
-    stock: 2x4x8
-    cuts:
-      - { axis: 0, angle: 90, at: 32 }
-
-  - label: Leg
-    stock: 2x4x8
-    cuts:
-      - { axis: 0, angle: 90, at: 32 }
-
-  - label: Leg
-    stock: 2x4x8
-    cuts:
-      - { axis: 0, angle: 90, at: 32 }
-
   - label: Leg
     stock: 2x4x8
     cuts:
@@ -50,13 +35,13 @@ components:
     rotation: [ 0, 0, 0 ]
     members:
       - { id: leg-1, position: [ 2, 0, 0 ], rotation: [ 90, 90, 0 ] }
-      - { id: leg-2, position: [ 30, 0, 0 ], rotation: [ 90, 90, 0 ] }
-      - { id: leg-3, position: [ 2, 0, 4 ], rotation: [ 90, 90, 0 ] }
-      - { id: leg-4, position: [ 30, 0, 4 ], rotation: [ 90, 90, 0 ] }
+      - { id: leg-1, position: [ 30, 0, 0 ], rotation: [ 90, 90, 0 ] }
+      - { id: leg-1, position: [ 2, 0, 4 ], rotation: [ 90, 90, 0 ] }
+      - { id: leg-1, position: [ 30, 0, 4 ], rotation: [ 90, 90, 0 ] }
       - { id: top-1, position: [ 0, 32, -1 ], rotation: [ 0, 0, 0 ] }
 `;
 
-const BOOKSHELF_YAML = `version: 1
+const BOOKSHELF_YAML = `version: 2
 name: Bookshelf
 
 members:
@@ -64,21 +49,6 @@ members:
     stock: 2x4x8
     cuts:
       - { axis: 0, angle: 90, at: 36 }
-
-  - label: Side
-    stock: 2x4x8
-    cuts:
-      - { axis: 0, angle: 90, at: 36 }
-
-  - label: Shelf
-    stock: 2x4x8
-    cuts:
-      - { axis: 0, angle: 90, at: 24 }
-
-  - label: Shelf
-    stock: 2x4x8
-    cuts:
-      - { axis: 0, angle: 90, at: 24 }
 
   - label: Shelf
     stock: 2x4x8
@@ -91,13 +61,13 @@ components:
     rotation: [ 0, 0, 0 ]
     members:
       - { id: side-1, position: [ 0, 0, 0 ], rotation: [ 90, 90, 0 ] }
-      - { id: side-2, position: [ 27.5, 0, 0 ], rotation: [ 90, 90, 0 ] }
+      - { id: side-1, position: [ 27.5, 0, 0 ], rotation: [ 90, 90, 0 ] }
       - { id: shelf-1, position: [ 3.5, 6, 0 ], rotation: [ 90, 0, 0 ] }
-      - { id: shelf-2, position: [ 3.5, 18, 0 ], rotation: [ 90, 0, 0 ] }
-      - { id: shelf-3, position: [ 3.5, 30, 0 ], rotation: [ 90, 0, 0 ] }
+      - { id: shelf-1, position: [ 3.5, 18, 0 ], rotation: [ 90, 0, 0 ] }
+      - { id: shelf-1, position: [ 3.5, 30, 0 ], rotation: [ 90, 0, 0 ] }
 `;
 
-const POST_AND_BEAM_YAML = `version: 1
+const POST_AND_BEAM_YAML = `version: 2
 name: Post and Beam
 
 members:

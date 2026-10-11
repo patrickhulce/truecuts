@@ -1,4 +1,5 @@
 import { isNode, LineCounter, parseDocument } from "yaml";
+import { migrateDocumentYaml } from "./migrate";
 import { buildScene, type SceneModel } from "./scene";
 import { validateDocument, type ResolvedDocument } from "./schema";
 
@@ -35,8 +36,9 @@ function locate(
 }
 
 export function compileDocument(text: string): CompileResult {
+  const source = migrateDocumentYaml(text);
   const lineCounter = new LineCounter();
-  const yamlDoc = parseDocument(text, { lineCounter, prettyErrors: true });
+  const yamlDoc = parseDocument(source, { lineCounter, prettyErrors: true });
   const diagnostics: Diagnostic[] = [];
 
   for (const error of yamlDoc.errors) {

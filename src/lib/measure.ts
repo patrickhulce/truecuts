@@ -1,5 +1,5 @@
 import { add, applyPose, dot, len, NEAR_REACH, scale, sub, type Vec3 } from "./geometry";
-import type { SceneModel } from "./scene";
+import { walkSceneComponents, type SceneModel } from "./scene";
 
 const PARALLEL = 1e-8;
 
@@ -46,11 +46,12 @@ export function sceneMeasureTargets(
 ): { corners: Vec3[]; edges: MeasureEdge[] } {
   const corners: Vec3[] = [];
   const edges: MeasureEdge[] = [];
-  for (const component of scene.components) {
+  walkSceneComponents(scene.components, (component) => {
     for (const member of component.members) {
       const offset = worldOffsets.get(member.key) ?? [0, 0, 0];
       const { min, max } = member.bounds;
-      const world = (local: Vec3) => toWorld(local, member, component, offset);
+      const world = (local: Vec3) =>
+        toWorld(local, member, { position: component.worldPosition, rotation: component.worldRotation }, offset);
       const xs = [min[0], max[0]];
       const ys = [min[1], max[1]];
       const zs = [min[2], max[2]];
@@ -69,7 +70,7 @@ export function sceneMeasureTargets(
         for (const y of ys) edges.push({ a: world([x, y, min[2]]), b: world([x, y, max[2]]) });
       }
     }
-  }
+  });
   return { corners, edges };
 }
 

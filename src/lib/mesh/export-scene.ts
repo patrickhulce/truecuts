@@ -1,6 +1,6 @@
 import * as THREE from "three";
 import { degToRad } from "@/lib/geometry";
-import type { SceneModel } from "@/lib/scene";
+import { walkSceneComponents, type SceneComponent, type SceneModel } from "@/lib/scene";
 import { fastenerQuaternion, fastenerSolid, type FastenerPiece } from "./fastener-solids";
 import { drilledMemberGeometry, facesToGeometry } from "./subtract-holes";
 
@@ -8,8 +8,37 @@ import { drilledMemberGeometry, facesToGeometry } from "./subtract-holes";
 export const INCHES_TO_METERS = 0.0254;
 
 export function sceneHasExportableSolids(scene: SceneModel): boolean {
-  if (scene.components.some((component) => component.members.length > 0)) return true;
+  let hasMember = false;
+  walkSceneComponents(scene.components, (component) => {
+    if (component.members.length > 0) hasMember = true;
+  });
+  if (hasMember) return true;
   return scene.fasteners.some((fastener) => fastenerSolid(fastener) !== null);
+}
+
+function addComponentGroup(parent: THREE.Object3D, component: SceneComponent, names: Map<string, number>): void {
+  const group = new THREE.Group();
+  group.name = uniqueName(component.label, names);
+  group.position.set(component.position[0], component.position[1], component.position[2]);
+  group.rotation.set(
+    degToRad(component.rotation[0]),
+    degToRad(component.rotation[1]),
+    degToRad(component.rotation[2]),
+  );
+  const memberNames = new Map<string, number>();
+  for (const member of component.members) {
+    const drilled = drilledMemberGeometry(member.faces, [...member.bores, ...member.derivedBores]);
+    const mesh = new THREE.Mesh(
+      drilled.geometry,
+      new THREE.MeshStandardMaterial({ color: member.color, roughness: 0.8, metalness: 0 }),
+    );
+    mesh.name = uniqueName(member.label, memberNames);
+    mesh.position.set(member.position[0], member.position[1], member.position[2]);
+    mesh.rotation.set(degToRad(member.rotation[0]), degToRad(member.rotation[1]), degToRad(member.rotation[2]));
+    group.add(mesh);
+  }
+  for (const child of component.children) addComponentGroup(group, child, names);
+  parent.add(group);
 }
 
 /** Assembled build in meters. The caller owns the geometries and materials. */
@@ -20,30 +49,7 @@ export function buildExportObject(scene: SceneModel): THREE.Group {
   root.userData = { sourceUnits: "inches", units: "meters" };
 
   const componentNames = new Map<string, number>();
-  for (const component of scene.components) {
-    const group = new THREE.Group();
-    group.name = uniqueName(component.label, componentNames);
-    group.position.set(component.position[0], component.position[1], component.position[2]);
-    group.rotation.set(
-      degToRad(component.rotation[0]),
-      degToRad(component.rotation[1]),
-      degToRad(component.rotation[2]),
-    );
-
-    const memberNames = new Map<string, number>();
-    for (const member of component.members) {
-      const drilled = drilledMemberGeometry(member.faces, [...member.bores, ...member.derivedBores]);
-      const mesh = new THREE.Mesh(
-        drilled.geometry,
-        new THREE.MeshStandardMaterial({ color: member.color, roughness: 0.8, metalness: 0 }),
-      );
-      mesh.name = uniqueName(member.label, memberNames);
-      mesh.position.set(member.position[0], member.position[1], member.position[2]);
-      mesh.rotation.set(degToRad(member.rotation[0]), degToRad(member.rotation[1]), degToRad(member.rotation[2]));
-      group.add(mesh);
-    }
-    root.add(group);
-  }
+  for (const component of scene.components) addComponentGroup(root, component, componentNames);
 
   const fastenerNames = new Map<string, number>();
   for (const fastener of scene.fasteners) {

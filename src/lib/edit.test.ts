@@ -7,11 +7,18 @@ import {
   addConnection,
   addMember,
   defaultConnectionFastener,
+  deleteComponentOccurrence,
   deleteMember,
+  deleteMemberPlacement,
   duplicateMember,
+  duplicateMemberPlacement,
   duplicateMembers,
   EditError,
   groupMembers,
+  groupOccurrences,
+  makeComponentUnique,
+  unlinkComponent,
+  unlinkMemberPlacement,
   parseCatalogDrag,
   promoteExplicitFasteners,
   roundDegrees,
@@ -30,6 +37,7 @@ import {
   snapRotation,
 } from "./edit";
 import { instanceKey, parseInstanceKey } from "./fasteners";
+import { sceneMembers } from "./scene";
 
 const GLUE_THREE = `version: 1
 name: Glue three
@@ -1149,5 +1157,207 @@ components: [ { label: Build, position: [0, 0, 0], rotation: [0, 0, 0], members:
   it("keeps a leading comment", () => {
     const raw = `# keep me\nversion: 1\nname: Box\nmembers: []\ncomponents: []\n`;
     expect(formatDocumentYaml(raw)).toContain("# keep me");
+  });
+});
+
+const SHARED_LEG = `version: 2
+name: Trestle
+members:
+  - label: Leg
+    stock: 2x4x8
+components:
+  - label: Trestle
+    position: [0, 0, 0]
+    members:
+      - { id: leg-1, position: [0, 0, 0], rotation: [90, 90, 0] }
+      - { id: leg-1, position: [36.5, 0, 0], rotation: [90, 90, 0] }
+`;
+
+const NESTED_BENCH = `version: 2
+name: Bench
+members:
+  - label: Leg
+    stock: 2x4x8
+components:
+  - label: Trestle
+    members:
+      - { id: leg-1, position: [0, 0, 0] }
+  - label: Bench
+    position: [0, 0, 0]
+    components:
+      - { component: trestle-1, position: [0, 0, 0] }
+      - { component: trestle-1, position: [0, 0, 10] }
+`;
+
+describe("shared placements", () => {
+  it("duplicates a member with an independent definition", () => {
+    const next = duplicateMemberPlacement(SHARED_LEG, "trestle-1", 0, [4, 0, 0], [0, 0, 0]);
+    const result = compileDocument(next);
+    expect(result.document?.members.map((member) => member.id)).toEqual(["leg-1", "leg-2"]);
+    expect(result.document?.components[0].members).toHaveLength(3);
+    expect(result.document?.components[0].members.map((member) => member.id)).toEqual(["leg-1", "leg-1", "leg-2"]);
+    const edited = compileDocument(setMemberDimension(next, "leg-2", 0, 48));
+    expect(sceneMembers(edited.scene!.components).map((member) => member.finished.length)).toEqual([96, 96, 48]);
+  });
+
+  it("copies a member out of a shared nested component without repeating it in its siblings", () => {
+    const next = duplicateMemberPlacement(NESTED_BENCH, "bench-1/trestle-1#1", 0, [4, 0, 0], [0, 0, 0]);
+    const result = compileDocument(next);
+    expect(result.diagnostics.filter((item) => item.severity === "error")).toEqual([]);
+    const members = sceneMembers(result.scene!.components);
+    expect(members).toHaveLength(3);
+    expect(members.filter((member) => member.memberId === "leg-1")).toHaveLength(2);
+    expect(members.find((member) => member.memberId === "leg-2")?.worldBounds.min).toEqual([4, 0, 10]);
+  });
+
+  it("unlinks one member without changing the other placements", () => {
+    const next = unlinkMemberPlacement(SHARED_LEG, "trestle-1", 0);
+    const edited = compileDocument(setMemberDimension(next.text, "leg-2", 0, 48));
+    expect(edited.diagnostics.filter((item) => item.severity === "error")).toEqual([]);
+    expect(sceneMembers(edited.scene!.components).map((member) => member.finished.length)).toEqual([48, 96]);
+    expect(sceneMembers(edited.scene!.components)[0].key).toBe(next.key);
+  });
+
+  it("unlinks nested components and their member definitions", () => {
+    const next = unlinkComponent(NESTED_BENCH, "bench-1/trestle-1#1");
+    const result = compileDocument(next.text);
+    expect(result.diagnostics.filter((item) => item.severity === "error")).toEqual([]);
+    const members = sceneMembers(result.scene!.components);
+    expect(members.map((member) => member.memberId)).toEqual(["leg-1", "leg-2"]);
+    const edited = compileDocument(setMemberDimension(next.text, "leg-2", 0, 48));
+    expect(sceneMembers(edited.scene!.components).map((member) => member.finished.length)).toEqual([96, 48]);
+  });
+
+  it("unlinks a whole component recursively", () => {
+    const next = unlinkComponent(NESTED_BENCH, "bench-1");
+    const result = compileDocument(next.text);
+    expect(result.diagnostics.filter((item) => item.severity === "error")).toEqual([]);
+    expect(sceneMembers(result.scene!.components).every((member) => member.memberId !== "leg-1")).toBe(true);
+    expect(result.scene!.components[0].children.every((child) => child.templateId !== "trestle-1")).toBe(true);
+  });
+
+  it("keeps connections attached when unlinking a repeated member", () => {
+    const connected = addConnection(SHARED_LEG, [
+      { componentId: "trestle-1", id: "leg-1", index: 0 },
+      { componentId: "trestle-1", id: "leg-1", index: 1 },
+    ]);
+    const next = unlinkMemberPlacement(connected, "trestle-1", 0);
+    const result = compileDocument(next.text);
+    expect(result.diagnostics.filter((item) => item.severity === "error")).toEqual([]);
+    expect(result.scene!.connections[0].memberKeys).toEqual([
+      next.key, "trestle-1/leg-1#1",
+    ]);
+  });
+
+  it("preserves parent connections when unlinking nested members or components", () => {
+    const connected = `${NESTED_BENCH}    connections:
+      - members:
+          - { component: trestle-1, id: leg-1, index: 0 }
+          - { component: trestle-1, id: leg-1, index: 1 }
+        fasteners: [{ kind: none }]
+`;
+    for (const next of [unlinkMemberPlacement(connected, "bench-1/trestle-1#0", 0), unlinkComponent(connected, "bench-1/trestle-1#0")]) {
+      const result = compileDocument(next.text);
+      expect(result.diagnostics.filter((item) => item.severity === "error")).toEqual([]);
+      expect(result.scene!.connections).toHaveLength(1);
+      expect(result.scene!.connections[0].memberKeys).toContain(`${next.occurrenceId}/leg-2#0`);
+    }
+  });
+
+  it("unlinks a nested member in one of two linked parents without editing the other parent", () => {
+    const pair = `${NESTED_BENCH}  - { component: bench-1, position: [100, 0, 0] }
+`;
+    const next = unlinkMemberPlacement(pair, "bench-2/trestle-1#1", 0);
+    const result = compileDocument(next.text);
+    expect(result.diagnostics.filter((item) => item.severity === "error")).toEqual([]);
+    const members = sceneMembers(result.scene!.components);
+    expect(members).toHaveLength(4);
+    expect(members.filter((member) => member.memberId === "leg-2")).toHaveLength(1);
+    expect(members.find((member) => member.key === next.key)?.worldBounds.min).toEqual([100, 0, 10]);
+  });
+
+  it("removes one placement and keeps the member while another remains", () => {
+    const next = deleteMemberPlacement(SHARED_LEG, "trestle-1", 0);
+    const result = compileDocument(next);
+    expect(result.document?.members).toHaveLength(1);
+    expect(result.document?.components[0].members).toHaveLength(1);
+    expect(result.document?.components[0].members[0].position).toEqual([36.5, 0, 0]);
+  });
+
+  it("removes the member definition when its last placement goes", () => {
+    const once = deleteMemberPlacement(SHARED_LEG, "trestle-1", 1);
+    const next = deleteMemberPlacement(once, "trestle-1", 0);
+    const result = compileDocument(next);
+    expect(result.document?.members).toEqual([]);
+    expect(result.document?.components[0].members).toEqual([]);
+  });
+
+  it("writes a nested component pose", () => {
+    const next = setComponentPose(NESTED_BENCH, "bench-1/trestle-1#1", [1, 2, 3], [0, 90, 0]);
+    const bench = compileDocument(next).scene!.components[0];
+    expect(bench.children[1].position).toEqual([1, 2, 3]);
+    expect(bench.children[1].rotation).toEqual([0, 90, 0]);
+    expect(bench.children[0].position).toEqual([0, 0, 0]);
+  });
+
+  it("deletes one nested occurrence", () => {
+    const next = deleteComponentOccurrence(NESTED_BENCH, "bench-1/trestle-1#0");
+    const bench = compileDocument(next).scene!.components[0];
+    expect(bench.children).toHaveLength(1);
+    expect(bench.children[0].position).toEqual([0, 0, 10]);
+  });
+
+  it("leaves the only occurrence unchanged", () => {
+    expect(makeComponentUnique(SHARED_LEG, "trestle-1")).toEqual({
+      text: SHARED_LEG,
+      occurrenceId: "trestle-1",
+    });
+  });
+
+  it("forks one shared root and keeps the other on the original template", () => {
+    const pair = `${SHARED_LEG.trimEnd()}
+  - { component: trestle-1, position: [24, 0, 0] }
+`;
+    const unique = makeComponentUnique(pair, "trestle-1");
+    const result = compileDocument(unique.text);
+    expect(result.diagnostics.filter((item) => item.severity === "error")).toEqual([]);
+    expect(result.document?.members).toHaveLength(1);
+    const roots = result.scene!.components;
+    expect(roots).toHaveLength(2);
+    expect(new Set(roots.map((component) => component.templateId)).size).toBe(2);
+    expect(roots.some((component) => component.templateId === "trestle-1")).toBe(true);
+    expect(roots.some((component) => component.id === unique.occurrenceId)).toBe(true);
+  });
+
+  it("groups root occurrences into one placed component", () => {
+    const pair = `version: 2
+name: Pair
+members:
+  - { label: A, stock: 2x4x8 }
+  - { label: B, stock: 2x4x8 }
+components:
+  - label: Left
+    position: [0, 0, 0]
+    members:
+      - { id: a-1, position: [0, 0, 0] }
+  - label: Right
+    position: [10, 0, 0]
+    members:
+      - { id: b-1, position: [0, 0, 0] }
+`;
+    const grouped = groupOccurrences(
+      pair,
+      [
+        { templateId: "left-1", rootId: "left-1", position: [0, 0, 0], rotation: [0, 0, 0] },
+        { templateId: "right-1", rootId: "right-1", position: [10, 0, 0], rotation: [0, 0, 0] },
+      ],
+      [0, 0, 0],
+      null,
+    );
+    const scene = compileDocument(grouped.text).scene!;
+    expect(scene.components).toHaveLength(1);
+    expect(scene.components[0].id).toBe(grouped.occurrenceId);
+    expect(scene.components[0].children.map((child) => child.templateId)).toEqual(["left-1", "right-1"]);
+    expect(sceneMembers(scene.components)).toHaveLength(2);
   });
 });

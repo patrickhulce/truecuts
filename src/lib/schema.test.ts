@@ -772,4 +772,84 @@ describe("validateDocument", () => {
     });
     expect(issues.some((issue) => issue.message.includes("must be one of the connection members"))).toBe(true);
   });
+
+  it("places a version 1 component that omits position and leaves a version 2 template unplaced", () => {
+    const members = [{ label: "Leg", stock: "2x4x8" }];
+    const components = [{ label: "Trestle", members: [{ id: "leg-1" }] }];
+    const v1 = validateDocument({ version: 1, name: "Old", members, components });
+    expect(v1.issues).toEqual([]);
+    expect(v1.document?.components[0].position).toEqual([0, 0, 0]);
+
+    const v2 = validateDocument({ version: 2, name: "New", members, components });
+    expect(v2.issues).toEqual([]);
+    expect(v2.document?.components[0].position).toBeNull();
+  });
+
+  it("resolves a member inside a nested component and rejects a cycle", () => {
+    const nested = validateDocument({
+      version: 2,
+      name: "Nested",
+      members: [{ label: "Leg", stock: "2x4x8" }],
+      components: [
+        {
+          label: "Trestle",
+          members: [
+            { id: "leg-1", position: [0, 0, 0] },
+            { id: "leg-1", position: [10, 0, 0] },
+          ],
+        },
+        {
+          label: "Bench",
+          components: [
+            { component: "trestle-1", position: [0, 0, 0] },
+            { component: "trestle-1", position: [0, 0, 24] },
+          ],
+          connections: [
+            {
+              members: [
+                { component: "trestle-1", index: 1, id: "leg-1", placement: 0 },
+                { component: "trestle-1", index: 1, id: "leg-1", placement: 1 },
+              ],
+              fasteners: [{ kind: "glue", stock: "wood-glue" }],
+            },
+          ],
+          position: [0, 0, 0],
+        },
+      ],
+    });
+    expect(nested.issues).toEqual([]);
+    expect(nested.document?.components[1].connections[0].members[1]).toEqual({
+      component: "trestle-1",
+      id: "leg-1",
+      index: 1,
+      nest: 1,
+    });
+
+    const cycle = validateDocument({
+      version: 2,
+      name: "Cycle",
+      members: [],
+      components: [
+        { label: "A", components: [{ component: "b-1" }] },
+        { label: "B", components: [{ component: "a-1" }] },
+      ],
+    });
+    expect(cycle.document).toBeUndefined();
+    expect(cycle.issues.some((issue) => issue.message.includes("contains itself"))).toBe(true);
+  });
+
+  it("gives a root copy the next id from the template label", () => {
+    const { document, issues } = validateDocument({
+      version: 2,
+      name: "Copy",
+      members: [{ label: "Top", stock: "2x4x8" }],
+      components: [
+        { label: "Bench", members: [{ id: "top-1" }], position: [0, 0, 0] },
+        { component: "bench-1", position: [48, 0, 0] },
+      ],
+    });
+    expect(issues).toEqual([]);
+    expect(document?.components.map((component) => component.id)).toEqual(["bench-1", "bench-2"]);
+    expect(document?.components[1]).toMatchObject({ of: "bench-1", position: [48, 0, 0] });
+  });
 });

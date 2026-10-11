@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { getCatalogPart, getFastenerSubtype, resolveStockSize, stockGeometry, type Vec3 } from "./catalog";
 import { FACE_IDS, placeBore, type FaceId, type PlacedBore } from "./geometry/faces";
-import { assignIds, isValidId } from "./identity";
+import { claimId, isValidId } from "./identity";
 import { parseAt, parseDimension, type DimensionInput } from "./units";
 
 export type Axis = 0 | 1 | 2;
@@ -67,6 +67,8 @@ const ExplicitMemberSchema = z.object({
   component: z.string().min(1).optional(),
   id: z.string().min(1),
   index: z.number().int().nonnegative().optional(),
+  /** Member occurrence inside a nested component. `index` is then the component occurrence. */
+  placement: z.number().int().nonnegative().optional(),
   at: Vec3InputSchema,
   direction: Vec3InputSchema.optional(),
 });
@@ -80,6 +82,8 @@ const ConnectionMemberSchema = z.object({
   component: z.string().min(1).optional(),
   id: z.string().min(1),
   index: z.number().int().nonnegative().optional(),
+  /** Member occurrence inside a nested component. `index` is then the component occurrence. */
+  placement: z.number().int().nonnegative().optional(),
 });
 
 const ScrewVariantSchema = z.discriminatedUnion("kind", [
@@ -148,18 +152,52 @@ const ConnectionSchema = z.object({
   fasteners: z.array(ConnectionFastenerSchema).min(1),
 });
 
-const ComponentSchema = z.object({
-  id: z.string().optional(),
-  label: z.string().min(1),
-  members: z.array(PlacementSchema).default([]),
-  fasteners: z.array(ExplicitFastenerSchema).default([]),
-  connections: z.array(ConnectionSchema).default([]),
+const NestedComponentSchema = z.object({
+  component: z.string().min(1),
   position: Vec3InputSchema.optional(),
   rotation: Vec3InputSchema.optional(),
 });
 
+const ComponentSchema = z
+  .object({
+    id: z.string().optional(),
+    label: z.string().min(1).optional(),
+    /** Set on a root copy of another component. The copy has no body of its own. */
+    component: z.string().min(1).optional(),
+    members: z.array(PlacementSchema).default([]),
+    components: z.array(NestedComponentSchema).default([]),
+    fasteners: z.array(ExplicitFastenerSchema).default([]),
+    connections: z.array(ConnectionSchema).default([]),
+    position: Vec3InputSchema.optional(),
+    rotation: Vec3InputSchema.optional(),
+  })
+  .superRefine((component, ctx) => {
+    const copy = component.component !== undefined;
+    const definition = component.label !== undefined;
+    if (copy === definition) {
+      ctx.addIssue({
+        code: "custom",
+        message: copy
+          ? "A component cannot have both `label` and `component`"
+          : "A component needs a `label`, or `component` to place another component",
+      });
+    }
+    if (
+      copy &&
+      (component.members.length > 0 ||
+        component.components.length > 0 ||
+        component.fasteners.length > 0 ||
+        component.connections.length > 0)
+    ) {
+      ctx.addIssue({
+        code: "custom",
+        message: "A root copy only has `component`, `position`, and `rotation`",
+      });
+    }
+  });
+
 export const DocumentSchema = z.object({
-  version: z.literal(1),
+  version: z.union([z.literal(1), z.literal(2)]),
   name: z.string().min(1),
   members: z.array(MemberSchema).default([]),
   components: z.array(ComponentSchema).default([]),
@@ -207,10 +245,13 @@ export type ResolvedPlacement = {
   rotation: [number, number, number];
 };
 
-export type ResolvedFastenerMember = {
+export type ResolvedComponentPlacement = {
   component: string;
-  id: string;
-  index: number;
+  position: [number, number, number];
+  rotation: [number, number, number];
+};
+
+export type ResolvedFastenerMember = ResolvedConnectionMember & {
   at: [number, number, number];
   direction?: [number, number, number];
 };
@@ -250,9 +291,16 @@ export type ResolvedConnectionFastener =
   | { kind: "none" };
 
 export type ResolvedConnectionMember = {
+  /** Component definition that places the member. */
   component: string;
   id: string;
+  /** Occurrence of `id` in that component. */
   index: number;
+  /**
+   * Occurrence of `component` in the joint's owner, when the member sits in a
+   * nested component. Absent when the member is placed directly on the owner.
+   */
+  nest?: number;
 };
 
 export type ResolvedConnection = {
@@ -263,15 +311,19 @@ export type ResolvedConnection = {
 export type ResolvedComponent = {
   id: string;
   label: string;
+  /** Template id when this entry is a root copy. Null for a definition. */
+  of: string | null;
   members: ResolvedPlacement[];
+  components: ResolvedComponentPlacement[];
   fasteners: ResolvedFastener[];
   connections: ResolvedConnection[];
-  position: [number, number, number];
+  /** Null when a definition is not placed at the root. */
+  position: [number, number, number] | null;
   rotation: [number, number, number];
 };
 
 export type ResolvedDocument = {
-  version: 1;
+  version: 1 | 2;
   name: string;
   members: ResolvedMember[];
   components: ResolvedComponent[];
@@ -356,28 +408,74 @@ type MemberRefOptions = {
   impliedComponentId?: string;
   requireComponent: boolean;
   memberIds: Set<string>;
-  componentById: Map<string, { id: string; members: { id: string }[] }>;
+  componentById: Map<string, { id: string; members: { id: string }[]; components: { component: string }[] }>;
+  /** Nested placements of the component that owns this joint. */
+  nested?: { component: string }[];
   /** Noun used in error text, e.g. "Fastener" or "Connection". */
   owner: string;
 };
 
 function resolveMemberRef(
-  member: { component?: string; id: string; index?: number },
+  member: { component?: string; id: string; index?: number; placement?: number },
   path: Array<string | number>,
   options: MemberRefOptions,
   issues: ValidationIssue[],
 ): ResolvedConnectionMember | undefined {
-  if (options.requireComponent) {
-    if (!member.component) {
+  if (!options.memberIds.has(member.id)) {
+    issues.push({
+      message: `Unknown member "${member.id}". ${options.owner} members reference member ids, not labels.`,
+      path: [...path, "id"],
+    });
+    return undefined;
+  }
+
+  if (!options.requireComponent && member.component) {
+    if (member.component === options.impliedComponentId) {
       issues.push({
-        message: `Document-level ${options.owner.toLowerCase()} members must include \`component\``,
+        message: `Component-level ${options.owner.toLowerCase()} members must not include \`component\` (it is implied)`,
         path: [...path, "component"],
       });
       return undefined;
     }
-  } else if (member.component) {
+    const nestId = member.component;
+    const nestIndex = member.index ?? 0;
+    const nests = (options.nested ?? []).filter((placement) => placement.component === nestId);
+    if (nests.length === 0) {
+      issues.push({
+        message: `Component "${nestId}" is not placed in this component`,
+        path: [...path, "component"],
+      });
+      return undefined;
+    }
+    if (nestIndex >= nests.length) {
+      issues.push({
+        message: `Placement index ${nestIndex} is out of range for component "${nestId}" (${nests.length} placement${nests.length === 1 ? "" : "s"})`,
+        path: [...path, "index"],
+      });
+      return undefined;
+    }
+    const template = options.componentById.get(nestId);
+    if (!template || template.id !== nestId) {
+      issues.push({
+        message: `Unknown component "${nestId}"`,
+        path: [...path, "component"],
+      });
+      return undefined;
+    }
+    return placedMember(member, template, path, options, issues, nestIndex);
+  }
+
+  if (member.placement !== undefined) {
     issues.push({
-      message: `Component-level ${options.owner.toLowerCase()} members must not include \`component\` (it is implied)`,
+      message: "`placement` is only for a member inside a nested component",
+      path: [...path, "placement"],
+    });
+    return undefined;
+  }
+
+  if (options.requireComponent && !member.component) {
+    issues.push({
+      message: `Document-level ${options.owner.toLowerCase()} members must include \`component\``,
       path: [...path, "component"],
     });
     return undefined;
@@ -401,33 +499,36 @@ function resolveMemberRef(
     return undefined;
   }
 
-  if (!options.memberIds.has(member.id)) {
-    issues.push({
-      message: `Unknown member "${member.id}". ${options.owner} members reference member ids, not labels.`,
-      path: [...path, "id"],
-    });
-    return undefined;
-  }
+  return placedMember(member, component, path, options, issues);
+}
 
+function placedMember(
+  member: { id: string; index?: number; placement?: number },
+  component: { id: string; members: { id: string }[] },
+  path: Array<string | number>,
+  options: MemberRefOptions,
+  issues: ValidationIssue[],
+  nest?: number,
+): ResolvedConnectionMember | undefined {
   const placed = occurrenceCount(component.members, member.id);
   if (placed === 0) {
     issues.push({
-      message: `Member "${member.id}" is not placed in component "${componentId}"`,
+      message: `Member "${member.id}" is not placed in component "${component.id}"`,
       path: [...path, "id"],
     });
     return undefined;
   }
-
-  const index = member.index ?? 0;
+  const index = nest === undefined ? (member.index ?? 0) : (member.placement ?? 0);
   if (index >= placed) {
     issues.push({
-      message: `Placement index ${index} is out of range for member "${member.id}" in "${componentId}" (${placed} placement${placed === 1 ? "" : "s"})`,
-      path: [...path, "index"],
+      message: `Placement index ${index} is out of range for member "${member.id}" in "${component.id}" (${placed} placement${placed === 1 ? "" : "s"})`,
+      path: [...path, nest === undefined ? "index" : "placement"],
     });
     return undefined;
   }
-
-  return { component: componentId, id: member.id, index };
+  return nest === undefined
+    ? { component: component.id, id: member.id, index }
+    : { component: component.id, id: member.id, index, nest };
 }
 
 function parseMeasure(
@@ -789,21 +890,50 @@ export function validateDocument(input: unknown): {
   if (issues.length > 0) return { issues };
 
   let identifiedMembers: (RawMember & { id: string })[];
-  let identifiedComponents: (RawComponent & { id: string })[];
+  let identifiedComponents: Array<RawComponent & { id: string; label: string; of: string | null }>;
   try {
-    const assigned = assignIds([...raw.members, ...raw.components]);
-    identifiedMembers = assigned.slice(0, raw.members.length) as (RawMember & { id: string })[];
-    identifiedComponents = assigned.slice(raw.members.length) as (RawComponent & { id: string })[];
+    const used = new Set<string>();
+    for (const member of raw.members) {
+      if (member.id) claimId(member.label, member.id, used, new Map());
+    }
+    for (const component of raw.components) {
+      if (!component.id) continue;
+      claimId(component.label ?? component.component ?? "component", component.id, used, new Map());
+    }
+    const nextIndex = new Map<string, number>();
+    identifiedMembers = raw.members.map((member) =>
+      member.id
+        ? { ...member, id: member.id }
+        : { ...member, id: claimId(member.label, undefined, used, nextIndex) },
+    );
+    const defined = new Map<string, string>();
+    identifiedComponents = [];
+    for (const component of raw.components) {
+      if (component.label) {
+        const id = component.id || claimId(component.label, undefined, used, nextIndex);
+        defined.set(id, component.label);
+        identifiedComponents.push({ ...component, id, label: component.label, of: null });
+        continue;
+      }
+      const templateId = component.component ?? "";
+      const templateLabel = defined.get(templateId);
+      if (!templateLabel) {
+        throw new Error(
+          `Unknown component "${templateId}". A root copy must name a component defined earlier in the file.`,
+        );
+      }
+      const id = component.id || claimId(templateLabel, undefined, used, nextIndex);
+      identifiedComponents.push({ ...component, id, label: templateLabel, of: templateId });
+    }
   } catch (error) {
     issues.push({
       message: error instanceof Error ? error.message : String(error),
-      path: ["members"],
+      path: ["components"],
     });
     return { issues };
   }
 
   const memberIds = new Set(identifiedMembers.map((member) => member.id));
-  const componentById = new Map(identifiedComponents.map((component) => [component.id, component]));
 
   const members: ResolvedMember[] = [];
   for (const [index, member] of identifiedMembers.entries()) {
@@ -858,6 +988,28 @@ export function validateDocument(input: unknown): {
 
   const components: ResolvedComponent[] = [];
   for (const [cIndex, component] of identifiedComponents.entries()) {
+    if (component.of) {
+      try {
+        components.push({
+          id: component.id,
+          label: component.label,
+          of: component.of,
+          members: [],
+          components: [],
+          fasteners: [],
+          connections: [],
+          position: parseVec3(component.position),
+          rotation: parseVec3(component.rotation),
+        });
+      } catch (error) {
+        issues.push({
+          message: error instanceof Error ? error.message : String(error),
+          path: ["components", cIndex],
+        });
+      }
+      continue;
+    }
+
     const placements: ResolvedPlacement[] = [];
     for (const [pIndex, placement] of component.members.entries()) {
       if (!memberIds.has(placement.id)) {
@@ -881,51 +1033,127 @@ export function validateDocument(input: unknown): {
       }
     }
 
+    const nested: ResolvedComponentPlacement[] = [];
+    for (const [nIndex, placement] of component.components.entries()) {
+      const target = identifiedComponents.find((entry) => entry.id === placement.component && !entry.of);
+      if (!target) {
+        issues.push({
+          message: `Unknown component "${placement.component}". Nested placements reference a component definition.`,
+          path: ["components", cIndex, "components", nIndex, "component"],
+        });
+        continue;
+      }
+      try {
+        nested.push({
+          component: placement.component,
+          position: parseVec3(placement.position),
+          rotation: parseVec3(placement.rotation),
+        });
+      } catch (error) {
+        issues.push({
+          message: error instanceof Error ? error.message : String(error),
+          path: ["components", cIndex, "components", nIndex],
+        });
+      }
+    }
+
+    let position: [number, number, number] | null = null;
+    try {
+      if (component.position) position = parseVec3(component.position);
+      else if (raw.version === 1) position = [0, 0, 0];
+    } catch (error) {
+      issues.push({
+        message: error instanceof Error ? error.message : String(error),
+        path: ["components", cIndex, "position"],
+      });
+    }
+    let rotation: [number, number, number] = [0, 0, 0];
+    try {
+      rotation = parseVec3(component.rotation);
+    } catch (error) {
+      issues.push({
+        message: error instanceof Error ? error.message : String(error),
+        path: ["components", cIndex, "rotation"],
+      });
+    }
+
+    components.push({
+      id: component.id,
+      label: component.label,
+      of: null,
+      members: placements,
+      components: nested,
+      fasteners: [],
+      connections: [],
+      position,
+      rotation,
+    });
+  }
+
+  const definitionIds = new Set(components.filter((component) => !component.of).map((component) => component.id));
+  const visiting = new Set<string>();
+  const visitComponent = (id: string, trail: string[]): boolean => {
+    if (visiting.has(id)) {
+      issues.push({
+        message: `Component "${id}" contains itself (${[...trail, id].join(" → ")})`,
+        path: ["components"],
+      });
+      return true;
+    }
+    const component = components.find((entry) => entry.id === id);
+    if (!component) return false;
+    visiting.add(id);
+    for (const child of component.components) {
+      if (visitComponent(child.component, [...trail, id])) return true;
+    }
+    visiting.delete(id);
+    return false;
+  };
+  for (const id of definitionIds) {
+    if (visitComponent(id, [])) break;
+  }
+
+  const componentById = new Map(
+    components.map((component) => {
+      const body = component.of ? components.find((entry) => entry.id === component.of) : component;
+      return [
+        component.id,
+        {
+          id: component.id,
+          members: body?.members ?? [],
+          components: body?.components ?? [],
+        },
+      ] as const;
+    }),
+  );
+
+  for (const [cIndex, component] of components.entries()) {
+    if (component.of) continue;
     const refOptions = (requireComponent: boolean): MemberRefOptions => ({
       impliedComponentId: requireComponent ? undefined : component.id,
       requireComponent,
       memberIds,
       componentById,
+      nested: component.components,
       owner: "Fastener",
     });
-
-    const fasteners: ResolvedFastener[] = [];
-    for (const [fIndex, fastener] of component.fasteners.entries()) {
+    for (const [fIndex, fastener] of identifiedComponents[cIndex].fasteners.entries()) {
       const resolved = resolveExplicitFastener(
         fastener,
         ["components", cIndex, "fasteners", fIndex],
         refOptions(false),
         issues,
       );
-      if (resolved) fasteners.push(resolved);
+      if (resolved) component.fasteners.push(resolved);
     }
-
-    const connections: ResolvedConnection[] = [];
-    for (const [nIndex, connection] of component.connections.entries()) {
+    for (const [nIndex, connection] of identifiedComponents[cIndex].connections.entries()) {
       const resolved = resolveConnection(
         connection,
         ["components", cIndex, "connections", nIndex],
         { ...refOptions(false), owner: "Connection" },
         issues,
       );
-      if (resolved) connections.push(resolved);
-    }
-
-    try {
-      components.push({
-        id: component.id,
-        label: component.label,
-        members: placements,
-        fasteners,
-        connections,
-        position: parseVec3(component.position),
-        rotation: parseVec3(component.rotation),
-      });
-    } catch (error) {
-      issues.push({
-        message: error instanceof Error ? error.message : String(error),
-        path: ["components", cIndex],
-      });
+      if (resolved) component.connections.push(resolved);
     }
   }
 
@@ -952,7 +1180,7 @@ export function validateDocument(input: unknown): {
 
   return {
     document: {
-      version: 1,
+      version: raw.version,
       name: raw.name,
       members,
       components,

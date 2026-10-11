@@ -1,4 +1,4 @@
-import { isMap, isSeq, parseDocument, type YAMLMap } from "yaml";
+import { isMap, isScalar, isSeq, parseDocument, type YAMLMap } from "yaml";
 import { formatDocumentYaml } from "./edit";
 
 function renameKey(map: YAMLMap, from: string, to: string): boolean {
@@ -57,6 +57,22 @@ export function migrateDocumentYaml(text: string): string {
     }
   }
   if (renameFastenerMembers(root.get("fasteners", true))) changed = true;
+
+  const version = root.get("version", true);
+  if (isScalar(version) && version.toJSON() === 1) {
+    (version as unknown as { value: number }).value = 2;
+    changed = true;
+    const placed = root.get("components", true);
+    if (isSeq(placed)) {
+      for (const component of placed.items) {
+        if (!isMap(component) || component.has("position")) continue;
+        component.set("position", doc.createNode([0, 0, 0]));
+        const position = component.get("position", true);
+        if (isSeq(position)) position.flow = true;
+        changed = true;
+      }
+    }
+  }
 
   return changed ? formatDocumentYaml(doc.toString()) : text;
 }

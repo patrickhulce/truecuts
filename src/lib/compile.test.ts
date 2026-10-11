@@ -3,7 +3,14 @@ import { describe, expect, it } from "vitest";
 import { compileDocument } from "./compile";
 import { DEMO_YAML } from "./demo";
 import { applyPose, type Vec3 } from "./geometry";
-import { computeExplodeOffsets, type SceneComponent, type SceneMemberInstance, type SceneModel } from "./scene";
+import {
+  computeExplodeOffsets,
+  sceneMembers,
+  walkSceneComponents,
+  type SceneComponent,
+  type SceneMemberInstance,
+  type SceneModel,
+} from "./scene";
 
 const UNDERSIDE_ORIGINS: Record<string, { position: Vec3; side: "left" | "right" }> = {
   "corner-bracket-1": { position: [3.5, 26.5, 1.5], side: "left" },
@@ -61,16 +68,11 @@ describe("compileDocument", () => {
   it("compiles the demo YAML into a scene", () => {
     const result = compileDocument(DEMO_YAML);
     expect(result.diagnostics.filter((item) => item.severity === "error")).toEqual([]);
-    expect(result.document?.members).toHaveLength(19);
+    expect(result.document?.members).toHaveLength(14);
     expect(result.document?.members.map((part) => part.id)).toEqual([
       "leg-1",
-      "leg-2",
-      "leg-3",
-      "leg-4",
       "long-apron-1",
-      "long-apron-2",
       "short-apron-1",
-      "short-apron-2",
       "brace-1",
       "top-1",
       "shelf-board-1",
@@ -84,18 +86,19 @@ describe("compileDocument", () => {
       "beam-saddle-1",
     ]);
     expect(result.scene?.components).toHaveLength(3);
-    expect(result.scene?.components[0].members).toHaveLength(17);
+    expect(result.scene?.components[0].id).toBe("bench-1");
+    expect(result.scene?.components[0].children).toHaveLength(2);
+    expect(result.scene?.components[0].members).toHaveLength(13);
+    expect(sceneMembers(result.scene!.components).filter((part) => part.memberId === "leg-1")).toHaveLength(4);
     expect(result.scene?.fasteners.length).toBeGreaterThan(0);
     expect(result.diagnostics.filter((item) => item.severity === "warning")).toEqual([]);
 
     const components = result.scene!.components;
-    const byId = new Map(components.flatMap((component) => component.members).map((part) => [part.memberId, part]));
+    const byId = new Map(sceneMembers(components).map((part) => [part.memberId, part]));
     const byKey = new Map<string, { component: SceneComponent; part: SceneMemberInstance }>();
-    for (const component of components) {
-      for (const part of component.members) {
-        byKey.set(part.key, { component, part });
-      }
-    }
+    walkSceneComponents(components, (component) => {
+      for (const part of component.members) byKey.set(part.key, { component, part });
+    });
 
     expect(byId.get("leg-1")?.fastened).toBe(true);
     expect(byId.get("long-apron-1")?.fastened).toBe(true);
@@ -121,7 +124,7 @@ describe("compileDocument", () => {
     expect(byId.get("beam-saddle-1")?.fastened).toBe(true);
     expect(byId.get("beam-saddle-1")?.finished.thickness).toBeCloseTo(2, 4);
 
-    const leg1 = byId.get("leg-1");
+    const leg1 = byKey.get("bench-1/trestle-1#0/leg-1#0")?.part;
     expect(leg1?.worldCenter[0]).toBeCloseTo(1.75, 5);
     expect(leg1?.worldCenter[1]).toBeCloseTo(15, 5);
     expect(leg1?.worldCenter[2]).toBeCloseTo(0.75, 5);
@@ -236,6 +239,33 @@ components:
     expect(rod?.finished.length).toBeCloseTo(8, 4);
   });
 
+  it("places one member definition in two nested components at different world poses", () => {
+    const result = compileDocument(`version: 2
+name: Nested
+members:
+  - label: Leg
+    stock: 2x4x8
+    cuts:
+      - { axis: 0, angle: 90, at: 30 }
+components:
+  - label: Trestle
+    members:
+      - { id: leg-1, position: [0, 0, 0], rotation: [90, 90, 0] }
+  - label: Bench
+    components:
+      - { component: trestle-1, position: [0, 0, 0] }
+      - { component: trestle-1, position: [0, 0, 24] }
+    position: [0, 0, 0]
+`);
+    expect(result.diagnostics.filter((item) => item.severity === "error")).toEqual([]);
+    const bench = result.scene!.components[0];
+    expect(bench.children).toHaveLength(2);
+    expect(bench.members).toHaveLength(0);
+    expect(bench.children[0].members[0].key).toBe("bench-1/trestle-1#0/leg-1#0");
+    expect(bench.children[0].members[0].worldCenter[2]).toBeCloseTo(bench.children[1].members[0].worldCenter[2] - 24, 4);
+    expect(result.scene!.components.some((component) => component.id === "trestle-1")).toBe(false);
+  });
+
   it("reports YAML parse errors with line numbers", () => {
     const result = compileDocument("version: [\n");
     expect(result.scene).toBeUndefined();
@@ -254,9 +284,14 @@ function explodeFixture(
     components: [
       {
         id: "assembly",
+        templateId: "assembly",
         label: "Assembly",
+        index: 0,
         position: [0, 0, 0],
         rotation: [0, 0, 0],
+        worldPosition: [0, 0, 0],
+        worldRotation: [0, 0, 0],
+        children: [],
         members: parts.map((part) => ({
           key: part.key,
           memberId: part.key,
@@ -296,14 +331,15 @@ describe("computeExplodeOffsets", () => {
   it("slides floor-resting demo members sideways", () => {
     const scene = compileDocument(DEMO_YAML).scene!;
     const offsets = computeExplodeOffsets(scene, 1);
-    const byId = new Map(scene.components.flatMap((component) => component.members).map((part) => [part.memberId, part]));
-    for (const id of ["leg-1", "spare-block-1"]) {
-      const part = byId.get(id)!;
+    const parts = sceneMembers(scene.components);
+    const byKey = new Map(parts.map((part) => [part.key, part]));
+    for (const key of ["bench-1/trestle-1#0/leg-1#0", "spare-1/spare-block-1#0"]) {
+      const part = byKey.get(key)!;
       const offset = offsets.get(part.key)!;
-      expect(part.worldBounds.min[1], id).toBeCloseTo(0, 4);
-      expect(offset[1], id).toBe(0);
-      expect(offset[0], id).not.toBeCloseTo(0, 4);
-      expect(offset[2], id).not.toBeCloseTo(0, 4);
+      expect(part.worldBounds.min[1], key).toBeCloseTo(0, 4);
+      expect(offset[1], key).toBe(0);
+      expect(offset[0], key).not.toBeCloseTo(0, 4);
+      expect(offset[2], key).not.toBeCloseTo(0, 4);
     }
   });
 
@@ -311,7 +347,7 @@ describe("computeExplodeOffsets", () => {
     const scene = compileDocument(DEMO_YAML).scene!;
     for (const explode of [0.25, 0.5, 1]) {
       const offsets = computeExplodeOffsets(scene, explode);
-      for (const part of scene.components.flatMap((component) => component.members)) {
+      for (const part of sceneMembers(scene.components)) {
         const offset = offsets.get(part.key)!;
         expect(part.worldBounds.min[1] + offset[1], part.memberId).toBeGreaterThanOrEqual(-1e-5);
       }

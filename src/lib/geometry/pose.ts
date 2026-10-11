@@ -60,6 +60,35 @@ export function composeEulerXYZ(outer: Vec3, inner: Vec3): Vec3 {
   return [eulerDegrees(rx), eulerDegrees(ry), eulerDegrees(rz)];
 }
 
+/** Euler XYZ whose rotation undoes `rotationDeg`. */
+export function invertEulerXYZ(rotationDeg: Vec3): Vec3 {
+  const x = inverseRotateEulerXYZ([1, 0, 0], rotationDeg);
+  const y = inverseRotateEulerXYZ([0, 1, 0], rotationDeg);
+  const z = inverseRotateEulerXYZ([0, 0, 1], rotationDeg);
+  const clamped = Math.min(1, Math.max(-1, z[0]));
+  const ry = Math.asin(clamped);
+  const gimbal = Math.abs(z[0]) >= 0.9999999;
+  const rx = gimbal ? Math.atan2(y[2], y[1]) : Math.atan2(-z[1], z[2]);
+  const rz = gimbal ? 0 : Math.atan2(-y[0], x[0]);
+  return [eulerDegrees(rx), eulerDegrees(ry), eulerDegrees(rz)];
+}
+
+/**
+ * Pose in the parent frame that produces `worldPosition` / `worldRotation`.
+ * `worldRotation` is the composed Euler, parent then local.
+ */
+export function localPoseFromWorld(
+  worldPosition: Vec3,
+  worldRotation: Vec3,
+  parentPosition: Vec3,
+  parentRotation: Vec3,
+): { position: Vec3; rotation: Vec3 } {
+  return {
+    position: unapplyPose(worldPosition, parentPosition, parentRotation),
+    rotation: composeEulerXYZ(invertEulerXYZ(parentRotation), worldRotation),
+  };
+}
+
 /** Inverse of `rotateEulerXYZ` (undo Rx, then Ry, then Rz). */
 export function inverseRotateEulerXYZ(v: Vec3, rotationDeg: Vec3): Vec3 {
   const rx = degToRad(rotationDeg[0]);

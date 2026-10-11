@@ -931,7 +931,7 @@ function expandOne(
 ): { fasteners: SceneFastener[]; edges: Array<[string, string]>; bores: DerivedBore[]; scene: SceneConnection } | undefined {
   const members: ConnectionSolid[] = [];
   for (const [mIndex, member] of connection.members.entries()) {
-    const solid = findSolid(solids, member);
+    const solid = findSolid(solids, member, componentId);
     if (!solid) {
       issues.push({
         message: `Member "${member.id}" is not placed in component "${member.component}"`,
@@ -984,10 +984,20 @@ function expandOne(
   };
 }
 
-function findSolid(solids: ConnectionSolid[], member: ResolvedConnectionMember): ConnectionSolid | undefined {
+function findSolid(
+  solids: ConnectionSolid[],
+  member: ResolvedConnectionMember,
+  scopeKey: string | null,
+): ConnectionSolid | undefined {
+  const ownerKey =
+    scopeKey === null
+      ? member.component
+      : member.nest === undefined
+        ? scopeKey
+        : `${scopeKey}/${member.component}#${member.nest}`;
   let seen = 0;
   for (const solid of solids) {
-    if (solid.componentId !== member.component || solid.memberId !== member.id) continue;
+    if (solid.componentId !== ownerKey || solid.memberId !== member.id) continue;
     if (seen === member.index) return solid;
     seen += 1;
   }
@@ -998,6 +1008,7 @@ export function expandConnections(
   document: ResolvedDocument,
   solids: ConnectionSolid[],
   contacts: SceneContacts,
+  occurrences?: Array<{ id: string; templateId: string; path: Array<string | number> }>,
 ): {
   fasteners: SceneFastener[];
   edges: Array<[string, string]>;
@@ -1011,15 +1022,22 @@ export function expandConnections(
   const bores: DerivedBore[] = [];
   const connections: SceneConnection[] = [];
 
-  for (const [cIndex, component] of document.components.entries()) {
+  const placed =
+    occurrences ??
+    document.components.flatMap((component, cIndex) =>
+      component.position ? [{ id: component.id, templateId: component.id, path: ["components", cIndex] }] : [],
+    );
+  for (const occurrence of placed) {
+    const component = document.components.find((entry) => entry.id === occurrence.templateId);
+    if (!component) continue;
     for (const [index, connection] of component.connections.entries()) {
       const expanded = expandOne(
         connection,
         index,
-        component.id,
+        occurrence.id,
         solids,
         contacts,
-        ["components", cIndex, "connections", index],
+        [...occurrence.path, "connections", index],
         issues,
       );
       if (!expanded) continue;

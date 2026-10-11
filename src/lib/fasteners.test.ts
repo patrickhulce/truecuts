@@ -57,7 +57,7 @@ describe("worldPoint", () => {
   it("places a point on a standing 2x4", () => {
     const point = worldPoint(
       [28.25, 0.75, 3.5],
-      { id: "leg-1", position: [0, 0, 0], rotation: [90, 90, 0] },
+      { position: [0, 0, 0], rotation: [90, 90, 0] },
       { position: [0, 0, 0], rotation: [0, 0, 0] },
     );
     expect(point[0]).toBeCloseTo(3.5, 6);

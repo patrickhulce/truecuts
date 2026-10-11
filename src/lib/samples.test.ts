@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { getCatalogPart } from "./catalog";
 import { STOCK_FAMILIES } from "./catalog-families";
 import { compileDocument } from "./compile";
+import { sceneMembers } from "./scene";
 import { SAMPLE_BUILDS } from "./samples";
 
 describe("sample builds", () => {
@@ -13,6 +14,13 @@ describe("sample builds", () => {
       expect(result.scene).toBeDefined();
     },
   );
+
+  it("places one sawhorse leg four times", () => {
+    const sawhorse = SAMPLE_BUILDS.find((sample) => sample.id === "sawhorse");
+    const result = compileDocument(sawhorse!.yaml);
+    expect(result.document?.members.filter((member) => member.label === "Leg")).toHaveLength(1);
+    expect(sceneMembers(result.scene!.components).filter((part) => part.memberId === "leg-1")).toHaveLength(4);
+  });
 });
 
 describe("stock families", () => {

@@ -101,7 +101,7 @@ describe("demo contacts", () => {
     expect(patchesFor(contacts, spareKey)).toHaveLength(0);
 
     const shelfKey = posed.find((p) => p.key.includes("shelf-board-1"))!.key;
-    const longApron2 = posed.find((p) => p.key.includes("long-apron-2"))!.key;
+    const longApron2 = posed.find((p) => p.key.endsWith("long-apron-1#1"))!.key;
     const shelfPatches = patchesFor(contacts, shelfKey);
     expect(
       shelfPatches.some(

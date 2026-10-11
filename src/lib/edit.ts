@@ -1,8 +1,9 @@
-import { isMap, isPair, isScalar, isSeq, parseDocument, type Document } from "yaml";
+import { isMap, isPair, isScalar, isSeq, parseDocument, type Document, type YAMLMap } from "yaml";
 import { getCatalogPart, getFastenerSubtype, resolveStockSize, stockGeometry, type AxisName } from "./catalog";
 import { freeAxes, sizeOverride } from "./catalog-families";
-import { assignIds, type Labeled } from "./identity";
-import { add, axisCoord, faceFrame, isFaceId, rotateEulerXYZ, type Vec3 } from "./geometry";
+import { parseNestedOccurrence, templateIdFromOccurrence } from "./fasteners";
+import { assignIds, claimId, type Labeled } from "./identity";
+import { add, axisCoord, faceFrame, isFaceId, rotateEulerXYZ, worldPlacementPose, type Vec3 } from "./geometry";
 import type { RawConnectionFastener } from "./schema";
 import { formatInches, parseDimension } from "./units";
 
@@ -92,24 +93,71 @@ function asLabeled(value: unknown, path: string): Labeled {
 
 function identified(doc: Document): {
   members: (Labeled & { id: string })[];
-  components: (Labeled & { id: string })[];
+  components: (Labeled & { id: string; of: string | null })[];
 } {
   const data = doc.toJS() ?? {};
   const rawMembers = Array.isArray(data.members) ? data.members : [];
   const rawComponents = Array.isArray(data.components) ? data.components : [];
   const labeledMembers = rawMembers.map((member: unknown, index: number) => asLabeled(member, `members[${index}]`));
-  const labeledComponents = rawComponents.map((component: unknown, index: number) =>
-    asLabeled(component, `components[${index}]`),
-  );
+  const copies = rawComponents.map((component: unknown, index: number) => asComponentRecord(component, index));
   try {
-    const assigned = assignIds([...labeledMembers, ...labeledComponents]);
-    return {
-      members: assigned.slice(0, labeledMembers.length),
-      components: assigned.slice(labeledMembers.length),
-    };
+    const used = new Set<string>();
+    for (const member of labeledMembers) {
+      if (member.id) claimId(member.label, member.id, used, new Map());
+    }
+    for (const component of copies) {
+      if (!component.id) continue;
+      claimId(component.label ?? component.component ?? "component", component.id, used, new Map());
+    }
+    const nextIndex = new Map<string, number>();
+    const members = labeledMembers.map((member: Labeled & { id?: string }) =>
+      member.id
+        ? { ...member, id: member.id }
+        : { ...member, id: claimId(member.label, undefined, used, nextIndex) },
+    );
+    const defined = new Map<string, string>();
+    const components: (Labeled & { id: string; of: string | null })[] = [];
+    for (const component of copies) {
+      if (component.label) {
+        const id = component.id || claimId(component.label, undefined, used, nextIndex);
+        defined.set(id, component.label);
+        components.push({ label: component.label, id, of: null });
+        continue;
+      }
+      const templateId = component.component ?? "";
+      const templateLabel = defined.get(templateId);
+      if (!templateLabel) {
+        throw new Error(
+          `Unknown component "${templateId}". A root copy must name a component defined earlier in the file.`,
+        );
+      }
+      const id = component.id || claimId(templateLabel, undefined, used, nextIndex);
+      components.push({ label: templateLabel, id, of: templateId });
+    }
+    return { members, components };
   } catch (error) {
     throw new EditError(error instanceof Error ? error.message : String(error));
   }
+}
+
+function asComponentRecord(
+  value: unknown,
+  index: number,
+): { label?: string; id?: string; component?: string } {
+  if (!value || typeof value !== "object") {
+    throw new EditError(`Expected a mapping at components[${index}]`);
+  }
+  const record = value as { label?: unknown; id?: unknown; component?: unknown };
+  const label = typeof record.label === "string" && record.label.length > 0 ? record.label : undefined;
+  const component = typeof record.component === "string" && record.component.length > 0 ? record.component : undefined;
+  if (!label && !component) {
+    throw new EditError(`Component ${index + 1} needs a label or a component id`);
+  }
+  return {
+    label,
+    id: typeof record.id === "string" && record.id.length > 0 ? record.id : undefined,
+    component,
+  };
 }
 
 /**
@@ -246,8 +294,10 @@ export type NewMemberInput = {
   /** Free axes of parameterized stock, in L, W, then T order. */
   size?: number[];
   cuts?: MemberCutInput[];
-  /** Place into this component. Omitted uses the first component, or creates a Build. */
+  /** Place into this component definition. Omitted uses the first component, or creates a Build. */
   componentId?: string;
+  /** Create a new root component for this member even when the document already has components. */
+  newComponent?: boolean;
   position?: Vec3;
   rotation?: Vec3;
 };
@@ -346,7 +396,7 @@ export function addMember(text: string, input: NewMemberInput): string {
   const newId = members[members.length - 1]?.id;
   if (!newId) throw new EditError("Could not assign a member id");
 
-  if (seqLength(doc, ["components"]) === 0) {
+  if (input.newComponent || seqLength(doc, ["components"]) === 0) {
     const component = doc.createNode({
       label: "Build",
       position: [0, 0, 0],
@@ -369,9 +419,9 @@ export function addMember(text: string, input: NewMemberInput): string {
       }
     }
     ensureSeq(doc, ["components"]);
-    doc.setIn(["components", 0], component);
+    doc.setIn(["components", seqLength(doc, ["components"])], component);
   } else {
-    const cIndex = input.componentId ? componentIndex(doc, input.componentId) : 0;
+    const cIndex = input.componentId ? bodyIndex(doc, input.componentId) : 0;
     ensureSeq(doc, ["components", cIndex, "members"]);
     const placementIndex = seqLength(doc, ["components", cIndex, "members"]);
     doc.setIn(
@@ -427,14 +477,10 @@ export function setPlacementPose(
   rotation: Vec3,
 ): string {
   const doc = parseEditDocument(text);
-  const { components } = identified(doc);
-  const cIndex = components.findIndex((component) => component.id === componentId);
-  if (cIndex < 0) {
-    throw new EditError(`Unknown component "${componentId}"`);
-  }
+  const cIndex = bodyIndex(doc, componentId);
   if (placementIndex < 0 || placementIndex >= seqLength(doc, ["components", cIndex, "members"])) {
     throw new EditError(
-      `Placement index ${placementIndex} is out of range in component "${componentId}"`,
+      `Placement index ${placementIndex} is out of range in component "${templateIdFromOccurrence(componentId)}"`,
     );
   }
   const base = ["components", cIndex, "members", placementIndex] as Array<string | number>;
@@ -443,13 +489,451 @@ export function setPlacementPose(
   return stringifyDocument(doc);
 }
 
-/** Write a component's world position (inches) and XYZ euler rotation (degrees). */
+/**
+ * Write one occurrence's pose in its parent frame.
+ * A root id writes that document entry. A nested id `parent/template#n` writes that placement.
+ */
 export function setComponentPose(text: string, componentId: string, position: Vec3, rotation: Vec3): string {
   const doc = parseEditDocument(text);
-  const cIndex = componentIndex(doc, componentId);
-  setVec3(doc, ["components", cIndex, "position"], position, 4);
-  setVec3(doc, ["components", cIndex, "rotation"], rotation, 1);
+  const nested = parseNestedOccurrence(componentId);
+  if (!nested) {
+    const cIndex = componentIndex(doc, componentId);
+    setVec3(doc, ["components", cIndex, "position"], position, 4);
+    setVec3(doc, ["components", cIndex, "rotation"], rotation, 1);
+    return stringifyDocument(doc);
+  }
+  const parentBody = bodyIndex(doc, nested.parentId);
+  const listPath = ["components", parentBody, "components"] as Array<string | number>;
+  const found = nestedPlacementIndex(doc, listPath, nested.templateId, nested.index);
+  if (found === undefined) {
+    throw new EditError(`Component "${nested.templateId}" placement ${nested.index} is not in "${nested.parentId}"`);
+  }
+  setVec3(doc, [...listPath, found, "position"], position, 4);
+  setVec3(doc, [...listPath, found, "rotation"], rotation, 1);
   return stringifyDocument(doc);
+}
+
+/** Duplicate an independent definition. Shared arrangements receive a standalone copy. */
+export function duplicateMemberPlacement(
+  text: string,
+  occurrenceId: string,
+  placementIndex: number,
+  position: Vec3,
+  rotation: Vec3,
+): string {
+  const doc = parseEditDocument(text);
+  pinAssignedIds(doc);
+  const cIndex = bodyIndex(doc, occurrenceId);
+  const membersPath = ["components", cIndex, "members"] as Array<string | number>;
+  const memberId = doc.getIn([...membersPath, placementIndex, "id"]);
+  if (typeof memberId !== "string" || memberId.length === 0) {
+    throw new EditError(`Placement ${placementIndex} is missing a member id`);
+  }
+  let destination = identified(doc).components[cIndex].id;
+  if (occurrenceIsShared(doc, occurrenceId)) {
+    const pose = occurrencePose(doc, occurrenceId);
+    const index = seqLength(doc, ["components"]);
+    doc.setIn(["components", index], doc.createNode({ label: "Copy", ...pose, members: [] }));
+    destination = identified(doc).components[index].id;
+  }
+  placeMemberCopy(doc, memberId, destination, position, rotation);
+  return stringifyDocument(doc);
+}
+
+function occurrenceIsShared(doc: Document, id: string): boolean {
+  const nested = parseNestedOccurrence(id);
+  return (
+    occurrenceCount(doc, nested ? nested.templateId : templateIdOf(doc, id)) > 1 ||
+    (nested !== null && occurrenceIsShared(doc, nested.parentId))
+  );
+}
+
+function occurrencePose(doc: Document, id: string): { position: Vec3; rotation: Vec3 } {
+  const nested = parseNestedOccurrence(id);
+  let path: Array<string | number>;
+  if (nested) {
+    const list = ["components", bodyIndex(doc, nested.parentId), "components"];
+    const index = nestedPlacementIndex(doc, list, nested.templateId, nested.index);
+    if (index === undefined) throw new EditError(`Unknown component occurrence "${id}"`);
+    path = [...list, index];
+  } else {
+    path = ["components", componentIndex(doc, id)];
+  }
+  const pose = {
+    position: storedVec3(doc, [...path, "position"]) ?? [0, 0, 0] as Vec3,
+    rotation: storedVec3(doc, [...path, "rotation"]) ?? [0, 0, 0] as Vec3,
+  };
+  return nested ? worldPlacementPose(pose, occurrencePose(doc, nested.parentId)) : pose;
+}
+
+/** Remove one member placement. The definition is removed only when nothing still places it. */
+export function deleteMemberPlacement(text: string, occurrenceId: string, placementIndex: number): string {
+  const doc = parseEditDocument(text);
+  pinAssignedIds(doc);
+  const cIndex = bodyIndex(doc, occurrenceId);
+  const membersPath = ["components", cIndex, "members"] as Array<string | number>;
+  const memberId = doc.getIn([...membersPath, placementIndex, "id"]);
+  if (typeof memberId !== "string" || memberId.length === 0) {
+    throw new EditError(`Placement ${placementIndex} is missing a member id`);
+  }
+  let occurrence = 0;
+  for (let index = 0; index < placementIndex; index += 1) {
+    if (doc.getIn([...membersPath, index, "id"]) === memberId) occurrence += 1;
+  }
+  doc.deleteIn([...membersPath, placementIndex]);
+  const { components } = identified(doc);
+  const templateId = components[cIndex]?.id;
+  if (!templateId) throw new EditError(`Unknown component "${occurrenceId}"`);
+  adjustMemberOccurrence(doc, components, templateId, memberId, occurrence);
+  if (!memberIsPlaced(doc, memberId)) {
+    const memberIndex = identified(doc).members.findIndex((member) => member.id === memberId);
+    if (memberIndex >= 0) {
+      stripFastenerSeq(doc, ["fasteners"], memberId);
+      stripConnectionSeq(doc, ["connections"], memberId);
+      const count = seqLength(doc, ["components"]);
+      for (let index = 0; index < count; index += 1) {
+        stripFastenerSeq(doc, ["components", index, "fasteners"], memberId);
+        stripConnectionSeq(doc, ["components", index, "connections"], memberId);
+      }
+      doc.deleteIn(["members", memberIndex]);
+    }
+  }
+  return stringifyDocument(doc);
+}
+
+/** Remove one component occurrence. A placed definition stays in the file and loses its position. */
+export function deleteComponentOccurrence(text: string, occurrenceId: string): string {
+  const doc = parseEditDocument(text);
+  pinAssignedIds(doc);
+  const nested = parseNestedOccurrence(occurrenceId);
+  if (nested) {
+    const parentBody = bodyIndex(doc, nested.parentId);
+    const listPath = ["components", parentBody, "components"] as Array<string | number>;
+    const found = nestedPlacementIndex(doc, listPath, nested.templateId, nested.index);
+    if (found === undefined) {
+      throw new EditError(`Component "${nested.templateId}" placement ${nested.index} is not in "${nested.parentId}"`);
+    }
+    doc.deleteIn([...listPath, found]);
+    adjustNestOccurrence(doc, parentBody, nested.templateId, nested.index);
+    return stringifyDocument(doc);
+  }
+  const { components } = identified(doc);
+  const index = components.findIndex((component) => component.id === occurrenceId);
+  const entry = components[index];
+  if (!entry) throw new EditError(`Unknown component "${occurrenceId}"`);
+  if (entry.of) {
+    doc.deleteIn(["components", index]);
+    stripJointsNaming(doc, occurrenceId);
+    return stringifyDocument(doc);
+  }
+  const node = doc.getIn(["components", index], true);
+  if (isMap(node) && node.has("position")) node.delete("position");
+  return stringifyDocument(doc);
+}
+
+/** Another placement of the same component template. Nested copies are added on the parent template. */
+export function duplicateComponentOccurrence(
+  text: string,
+  occurrenceId: string,
+  position: Vec3,
+  rotation: Vec3,
+): { text: string; occurrenceId: string } {
+  const doc = parseEditDocument(text);
+  pinAssignedIds(doc);
+  const nested = parseNestedOccurrence(occurrenceId);
+  if (!nested) {
+    const { components } = identified(doc);
+    const entry = components.find((component) => component.id === occurrenceId);
+    if (!entry) throw new EditError(`Unknown component "${occurrenceId}"`);
+    const templateId = entry.of ?? entry.id;
+    const next = seqLength(doc, ["components"]);
+    const node = doc.createNode({
+      component: templateId,
+      position: roundVec(position, 4),
+      rotation: roundVec(rotation, 1),
+    });
+    flowSequences(node, new Set(["position", "rotation"]));
+    doc.setIn(["components", next], node);
+    const created = identified(doc).components[next]?.id;
+    if (!created) throw new EditError("Could not assign a component id");
+    return { text: stringifyDocument(doc), occurrenceId: created };
+  }
+  const parentBody = bodyIndex(doc, nested.parentId);
+  const listPath = ["components", parentBody, "components"] as Array<string | number>;
+  ensureSeq(doc, listPath);
+  const next = seqLength(doc, listPath);
+  const node = doc.createNode({
+    component: nested.templateId,
+    position: roundVec(position, 4),
+    rotation: roundVec(rotation, 1),
+  });
+  flowSequences(node, new Set(["position", "rotation"]));
+  doc.setIn([...listPath, next], node);
+  let count = 0;
+  for (let index = 0; index < seqLength(doc, listPath); index += 1) {
+    if (doc.getIn([...listPath, index, "component"]) === nested.templateId) count += 1;
+  }
+  return {
+    text: stringifyDocument(doc),
+    occurrenceId: `${nested.parentId}/${nested.templateId}#${count - 1}`,
+  };
+}
+
+/**
+ * Copy the arrangement and point this occurrence at the copy.
+ * Members and nested components inside the copy stay shared. The only occurrence is left unchanged.
+ */
+export function makeComponentUnique(text: string, occurrenceId: string): { text: string; occurrenceId: string } {
+  const doc = parseEditDocument(text);
+  pinAssignedIds(doc);
+  const nested = parseNestedOccurrence(occurrenceId);
+  const templateId = nested ? nested.templateId : templateIdOf(doc, occurrenceId);
+  if (occurrenceCount(doc, templateId) < 2) return { text, occurrenceId };
+  const cloneId = appendTemplateClone(doc, templateId);
+  if (nested) {
+    const parentBody = bodyIndex(doc, nested.parentId);
+    const listPath = ["components", parentBody, "components"] as Array<string | number>;
+    const found = nestedPlacementIndex(doc, listPath, nested.templateId, nested.index);
+    if (found === undefined) throw new EditError(`Component "${nested.templateId}" is not placed in "${nested.parentId}"`);
+    doc.setIn([...listPath, found, "component"], cloneId);
+    return {
+      text: stringifyDocument(doc),
+      occurrenceId: `${nested.parentId}/${cloneId}#0`,
+    };
+  }
+  const { components } = identified(doc);
+  const entry = components.find((component) => component.id === occurrenceId);
+  if (!entry) throw new EditError(`Unknown component "${occurrenceId}"`);
+  if (entry.of) {
+    const index = components.findIndex((component) => component.id === occurrenceId);
+    doc.setIn(["components", index, "component"], cloneId);
+    // Root references must follow their definitions in the document.
+    const entries = doc.getIn(["components"]);
+    if (isSeq(entries)) {
+      const clone = entries.items.pop();
+      entries.items.splice(index, 0, clone);
+    }
+    return { text: stringifyDocument(doc), occurrenceId };
+  }
+  const index = components.findIndex((component) => component.id === occurrenceId);
+  const position = storedVec3(doc, ["components", index, "position"]) ?? [0, 0, 0];
+  const rotation = storedVec3(doc, ["components", index, "rotation"]) ?? [0, 0, 0];
+  const node = doc.getIn(["components", index], true);
+  if (isMap(node) && node.has("position")) node.delete("position");
+  const copy = duplicateComponentOccurrence(stringifyDocument(doc), cloneId, position, rotation);
+  return copy;
+}
+
+/** Isolate ancestors too, so unlinking a nested occurrence cannot alter its siblings. */
+function uniqueOccurrencePath(text: string, occurrenceId: string): { text: string; occurrenceId: string } {
+  const nested = parseNestedOccurrence(occurrenceId);
+  if (nested) {
+    const parent = uniqueOccurrencePath(text, nested.parentId);
+    text = parent.text;
+    occurrenceId = `${parent.occurrenceId}/${nested.templateId}#${nested.index}`;
+  }
+  const unique = makeComponentUnique(text, occurrenceId);
+  if (unique.occurrenceId === occurrenceId) return unique;
+  const doc = parseEditDocument(unique.text);
+  const nextNested = parseNestedOccurrence(unique.occurrenceId);
+  visitOccurrenceReferences(doc, occurrenceId, (ref) => {
+    ref.set("component", nextNested ? nextNested.templateId : unique.occurrenceId);
+    if (nextNested) ref.delete("index");
+  });
+  const previousNested = parseNestedOccurrence(occurrenceId);
+  if (previousNested) {
+    visitJointReferences(doc, ["components", bodyIndex(doc, previousNested.parentId)], (ref) => {
+      if (ref.get("component") !== previousNested.templateId) return;
+      const index = Number(ref.get("index") ?? 0);
+      if (index > previousNested.index) ref.set("index", index - 1);
+    });
+  }
+  return { text: stringifyDocument(doc), occurrenceId: unique.occurrenceId };
+}
+
+function visitJointReferences(doc: Document, prefix: Array<string | number>, visit: (ref: YAMLMap) => void) {
+  for (const field of ["connections", "fasteners"]) {
+    const joints = doc.getIn([...prefix, field]);
+    if (!isSeq(joints)) continue;
+    for (const joint of joints.items) {
+      if (!isMap(joint)) continue;
+      const refs = joint.get("members");
+      if (isSeq(refs)) for (const ref of refs.items) if (isMap(ref)) visit(ref);
+    }
+  }
+}
+
+function visitOccurrenceReferences(doc: Document, occurrenceId: string, visit: (ref: YAMLMap) => void) {
+  const nested = parseNestedOccurrence(occurrenceId);
+  visitJointReferences(doc, nested ? ["components", bodyIndex(doc, nested.parentId)] : [], (ref) => {
+    if (ref.get("component") !== (nested ? nested.templateId : occurrenceId)) return;
+    if (nested && Number(ref.get("index") ?? 0) !== nested.index) return;
+    visit(ref);
+  });
+}
+
+/** Sever arrangement, nested component, and member-definition links for this occurrence. */
+export function unlinkComponent(text: string, occurrenceId: string): { text: string; occurrenceId: string } {
+  const unique = uniqueOccurrencePath(text, occurrenceId);
+  const doc = parseEditDocument(unique.text);
+  pinAssignedIds(doc);
+  const memberIds = new Map<string, string>();
+  const templateIds = new Map<string, string>();
+  const clonedBodies: number[] = [];
+  function detachBody(index: number) {
+    clonedBodies.push(index);
+    const membersPath = ["components", index, "members"];
+    for (let n = 0; n < seqLength(doc, membersPath); n++) {
+      const id = doc.getIn([...membersPath, n, "id"]);
+      if (typeof id !== "string") continue;
+      if (!memberIds.has(id)) memberIds.set(id, cloneMemberDefinition(doc, id));
+      doc.setIn([...membersPath, n, "id"], memberIds.get(id));
+    }
+    const children = ["components", index, "components"];
+    for (let n = 0; n < seqLength(doc, children); n++) {
+      const id = doc.getIn([...children, n, "component"]);
+      if (typeof id !== "string") continue;
+      if (!templateIds.has(id)) {
+        const clone = appendTemplateClone(doc, id);
+        templateIds.set(id, clone);
+        detachBody(componentIndex(doc, clone));
+      }
+      doc.setIn([...children, n, "component"], templateIds.get(id));
+    }
+  }
+  detachBody(bodyIndex(doc, unique.occurrenceId));
+  function remap(node: unknown) {
+    if (isSeq(node)) node.items.forEach(remap);
+    if (!isMap(node)) return;
+    for (const field of ["id", "component"] as const) {
+      const value = node.get(field);
+      const map = field === "id" ? memberIds : templateIds;
+      if (typeof value === "string" && map.has(value)) node.set(field, map.get(value));
+    }
+    node.items.forEach((item) => remap(item.value));
+  }
+  for (const index of clonedBodies) {
+    for (const field of ["connections", "fasteners"]) remap(doc.getIn(["components", index, field]));
+  }
+  visitOccurrenceReferences(doc, unique.occurrenceId, (ref) => {
+    const id = ref.get("id");
+    if (typeof id === "string" && memberIds.has(id)) ref.set("id", memberIds.get(id));
+  });
+  return { text: stringifyDocument(doc), occurrenceId: unique.occurrenceId };
+}
+
+/** Unlink this member's definition and isolate its containing occurrence if necessary. */
+export function unlinkMemberPlacement(text: string, occurrenceId: string, placementIndex: number): { text: string; key: string; occurrenceId: string } {
+  const unique = uniqueOccurrencePath(text, occurrenceId);
+  const doc = parseEditDocument(unique.text);
+  pinAssignedIds(doc);
+  const cIndex = bodyIndex(doc, unique.occurrenceId);
+  const path = ["components", cIndex, "members"];
+  const oldId = doc.getIn([...path, placementIndex, "id"]);
+  if (typeof oldId !== "string") throw new EditError("Member is missing");
+  let occurrence = 0;
+  for (let n = 0; n < placementIndex; n++) if (doc.getIn([...path, n, "id"]) === oldId) occurrence++;
+  const id = cloneMemberDefinition(doc, oldId);
+  doc.setIn([...path, placementIndex, "id"], id);
+  function update(ref: YAMLMap, field: "index" | "placement") {
+    if (ref.get("id") !== oldId) return;
+    const index = Number(ref.get(field) ?? 0);
+    if (index === occurrence) {
+      ref.set("id", id);
+      ref.delete(field);
+    } else if (index > occurrence) {
+      ref.set(field, index - 1);
+    }
+  }
+  visitJointReferences(doc, ["components", cIndex], (ref) => {
+    if (!ref.has("component")) update(ref, "index");
+  });
+  const memberIndexField = parseNestedOccurrence(unique.occurrenceId) ? "placement" : "index";
+  visitOccurrenceReferences(doc, unique.occurrenceId, (ref) => update(ref, memberIndexField));
+  return { text: stringifyDocument(doc), occurrenceId: unique.occurrenceId, key: `${unique.occurrenceId}/${id}#${placementIndex}` };
+}
+
+export type GroupOccurrence = {
+  templateId: string;
+  rootId?: string;
+  nested?: { parentId: string; templateId: string; index: number };
+  position: Vec3;
+  rotation: Vec3;
+};
+
+/** Wrap occurrences that share a parent into one new component. The parent keeps a single placement. */
+export function groupOccurrences(
+  text: string,
+  items: GroupOccurrence[],
+  origin: Vec3,
+  parentOccurrenceId: string | null,
+): { text: string; occurrenceId: string } {
+  if (items.length === 0) throw new EditError("Select at least one component to group");
+  const doc = parseEditDocument(text);
+  pinAssignedIds(doc);
+  const group = doc.createNode({
+    label: "Group",
+    components: items.map((item) => ({
+      component: item.templateId,
+      position: roundVec(item.position, 4),
+      rotation: roundVec(item.rotation, 1),
+    })),
+  });
+  flowSequences(group, new Set(["position", "rotation"]));
+  if (isMap(group)) {
+    const nested = group.items.find((item) => isScalar(item.key) && item.key.value === "components");
+    if (nested && isSeq(nested.value)) {
+      for (const placement of nested.value.items) {
+        if (isMap(placement)) placement.flow = true;
+      }
+    }
+  }
+  const groupIndex = seqLength(doc, ["components"]);
+  doc.setIn(["components", groupIndex], group);
+  const groupId = identified(doc).components[groupIndex]?.id;
+  if (!groupId) throw new EditError("Could not assign a component id");
+  pinId(doc, ["components", groupIndex], groupId);
+
+  if (!parentOccurrenceId) {
+    setVec3(doc, ["components", groupIndex, "position"], origin, 4);
+    setVec3(doc, ["components", groupIndex, "rotation"], [0, 0, 0], 1);
+    const { components } = identified(doc);
+    const indexes = items
+      .flatMap((item) => (item.rootId ? [components.findIndex((component) => component.id === item.rootId)] : []))
+      .filter((index) => index >= 0)
+      .sort((a, b) => b - a);
+    for (const index of indexes) {
+      const entry = components[index];
+      if (!entry || entry.id === groupId) continue;
+      if (entry.of) {
+        doc.deleteIn(["components", index]);
+        continue;
+      }
+      const node = doc.getIn(["components", index], true);
+      if (isMap(node) && node.has("position")) node.delete("position");
+    }
+    return { text: stringifyDocument(doc), occurrenceId: groupId };
+  }
+
+  const parentBody = bodyIndex(doc, parentOccurrenceId);
+  const listPath = ["components", parentBody, "components"] as Array<string | number>;
+  const arrayIndexes = items
+    .flatMap((item) => {
+      if (!item.nested) return [];
+      const found = nestedPlacementIndex(doc, listPath, item.nested.templateId, item.nested.index);
+      return found === undefined ? [] : [found];
+    })
+    .sort((a, b) => b - a);
+  for (const index of arrayIndexes) doc.deleteIn([...listPath, index]);
+  ensureSeq(doc, listPath);
+  const placed = doc.createNode({
+    component: groupId,
+    position: roundVec(origin, 4),
+    rotation: [0, 0, 0],
+  });
+  flowSequences(placed, new Set(["position", "rotation"]));
+  doc.setIn([...listPath, seqLength(doc, listPath)], placed);
+  return { text: stringifyDocument(doc), occurrenceId: `${parentOccurrenceId}/${groupId}#0` };
 }
 
 function componentIndex(doc: Document, componentId: string): number {
@@ -457,6 +941,194 @@ function componentIndex(doc: Document, componentId: string): number {
   const cIndex = components.findIndex((component) => component.id === componentId);
   if (cIndex < 0) throw new EditError(`Unknown component "${componentId}"`);
   return cIndex;
+}
+
+function bodyIndex(doc: Document, occurrenceId: string): number {
+  const nested = parseNestedOccurrence(occurrenceId);
+  const id = nested ? nested.templateId : occurrenceId;
+  const { components } = identified(doc);
+  const entry = components.find((component) => component.id === id);
+  if (!entry) throw new EditError(`Unknown component "${id}"`);
+  return componentIndex(doc, entry.of ?? entry.id);
+}
+
+function templateIdOf(doc: Document, occurrenceId: string): string {
+  const { components } = identified(doc);
+  const entry = components.find((component) => component.id === occurrenceId);
+  if (!entry) throw new EditError(`Unknown component "${occurrenceId}"`);
+  return entry.of ?? entry.id;
+}
+
+function nestedPlacementIndex(
+  doc: Document,
+  listPath: Array<string | number>,
+  templateId: string,
+  occurrence: number,
+): number | undefined {
+  const seq = doc.getIn(listPath);
+  if (!isSeq(seq)) return undefined;
+  let seen = 0;
+  for (let index = 0; index < seq.items.length; index += 1) {
+    if (doc.getIn([...listPath, index, "component"]) !== templateId) continue;
+    if (seen === occurrence) return index;
+    seen += 1;
+  }
+  return undefined;
+}
+
+function storedVec3(doc: Document, path: Array<string | number>): Vec3 | null {
+  const node = doc.getIn(path);
+  const value = isSeq(node) ? node.toJSON() : node;
+  if (!Array.isArray(value) || value.length < 3) return null;
+  return value.slice(0, 3).map((item) => asInches(item, "Position")) as Vec3;
+}
+
+function occurrenceCount(doc: Document, templateId: string): number {
+  const { components } = identified(doc);
+  let count = 0;
+  const index = components.findIndex((component) => component.id === templateId);
+  if (index >= 0 && doc.getIn(["components", index, "position"]) !== undefined) count += 1;
+  for (let cIndex = 0; cIndex < components.length; cIndex += 1) {
+    const component = components[cIndex];
+    if (!component) continue;
+    if (component.of === templateId) count += 1;
+    if (component.of) continue;
+    const nested = doc.getIn(["components", cIndex, "components"]);
+    if (!isSeq(nested)) continue;
+    for (let n = 0; n < nested.items.length; n += 1) {
+      if (doc.getIn(["components", cIndex, "components", n, "component"]) === templateId) count += 1;
+    }
+  }
+  return count;
+}
+
+function appendTemplateClone(doc: Document, templateId: string): string {
+  const index = componentIndex(doc, templateId);
+  const node = doc.getIn(["components", index], true);
+  if (!isMap(node)) throw new EditError(`Component "${templateId}" is not a definition`);
+  const copy = node.clone();
+  if (!isMap(copy)) throw new EditError(`Could not copy "${templateId}"`);
+  copy.anchor = undefined;
+  if (copy.has("id")) copy.delete("id");
+  if (copy.has("position")) copy.delete("position");
+  const next = seqLength(doc, ["components"]);
+  doc.setIn(["components", next], copy);
+  const created = identified(doc).components[next]?.id;
+  if (!created) throw new EditError("Could not assign a component id");
+  pinId(doc, ["components", next], created);
+  return created;
+}
+
+function memberIsPlaced(doc: Document, memberId: string): boolean {
+  const count = seqLength(doc, ["components"]);
+  for (let cIndex = 0; cIndex < count; cIndex += 1) {
+    const members = doc.getIn(["components", cIndex, "members"]);
+    if (!isSeq(members)) continue;
+    for (let index = 0; index < members.items.length; index += 1) {
+      if (doc.getIn(["components", cIndex, "members", index, "id"]) === memberId) return true;
+    }
+  }
+  return false;
+}
+
+function writeOccurrence(
+  doc: Document,
+  memberPath: Array<string | number>,
+  field: "index" | "placement",
+  occurrence: number,
+): void {
+  const keyPath = [...memberPath, field];
+  if (occurrence === 0) {
+    if (doc.getIn(keyPath) !== undefined) doc.deleteIn(keyPath);
+    return;
+  }
+  if (doc.getIn(keyPath) !== occurrence) doc.setIn(keyPath, occurrence);
+}
+
+function adjustField(
+  doc: Document,
+  memberPath: Array<string | number>,
+  field: "index" | "placement",
+  removed: number,
+): "drop" | "keep" {
+  const current = doc.getIn([...memberPath, field]);
+  const value = typeof current === "number" ? current : 0;
+  if (value === removed) return "drop";
+  if (value > removed) writeOccurrence(doc, memberPath, field, value - 1);
+  return "keep";
+}
+
+function adjustJointSeq(
+  doc: Document,
+  seqPath: Array<string | number>,
+  decide: (memberPath: Array<string | number>) => "drop" | "keep",
+): void {
+  const seq = doc.getIn(seqPath);
+  if (!isSeq(seq)) return;
+  for (let joint = seq.items.length - 1; joint >= 0; joint -= 1) {
+    const membersPath = [...seqPath, joint, "members"];
+    const members = doc.getIn(membersPath);
+    if (!isSeq(members)) continue;
+    for (let member = members.items.length - 1; member >= 0; member -= 1) {
+      if (decide([...membersPath, member]) === "drop") doc.deleteIn([...membersPath, member]);
+    }
+    const fastenersPath = [...seqPath, joint, "fasteners"];
+    const fasteners = doc.getIn(fastenersPath);
+    if (seqLength(doc, membersPath) < 2 || (fasteners !== undefined && seqLength(doc, fastenersPath) < 1)) {
+      doc.deleteIn([...seqPath, joint]);
+    }
+  }
+}
+
+function adjustMemberOccurrence(
+  doc: Document,
+  components: Array<{ id: string; of: string | null }>,
+  templateId: string,
+  memberId: string,
+  removed: number,
+): void {
+  for (let cIndex = 0; cIndex < components.length; cIndex += 1) {
+    const owner = components[cIndex];
+    if (!owner || owner.of) continue;
+    const direct = owner.id === templateId;
+    for (const seqName of ["fasteners", "connections"] as const) {
+      adjustJointSeq(doc, ["components", cIndex, seqName], (memberPath) => {
+        if (doc.getIn([...memberPath, "id"]) !== memberId) return "keep";
+        const nested = doc.getIn([...memberPath, "component"]);
+        if (nested === undefined && direct) return adjustField(doc, memberPath, "index", removed);
+        if (nested === templateId) return adjustField(doc, memberPath, "placement", removed);
+        return "keep";
+      });
+    }
+  }
+  for (const seqName of ["fasteners", "connections"] as const) {
+    adjustJointSeq(doc, [seqName], (memberPath) => {
+      if (doc.getIn([...memberPath, "id"]) !== memberId) return "keep";
+      const named = doc.getIn([...memberPath, "component"]);
+      if (typeof named !== "string") return "keep";
+      const root = components.find((component) => component.id === named);
+      const rootTemplate = root ? (root.of ?? root.id) : named;
+      if (rootTemplate !== templateId) return "keep";
+      return adjustField(doc, memberPath, "index", removed);
+    });
+  }
+}
+
+function adjustNestOccurrence(doc: Document, parentBody: number, templateId: string, removed: number): void {
+  for (const seqName of ["fasteners", "connections"] as const) {
+    adjustJointSeq(doc, ["components", parentBody, seqName], (memberPath) => {
+      if (doc.getIn([...memberPath, "component"]) !== templateId) return "keep";
+      return adjustField(doc, memberPath, "index", removed);
+    });
+  }
+}
+
+function stripJointsNaming(doc: Document, componentId: string): void {
+  for (const seqName of ["fasteners", "connections"] as const) {
+    adjustJointSeq(doc, [seqName], (memberPath) =>
+      doc.getIn([...memberPath, "component"]) === componentId ? "drop" : "keep",
+    );
+  }
 }
 
 function connectionBase(doc: Document, componentId: string | null): Array<string | number> {
@@ -1179,6 +1851,18 @@ function placeMemberCopy(
   position: Vec3,
   rotation: Vec3,
 ): string {
+  const createdId = cloneMemberDefinition(doc, memberId);
+  const cIndex = componentIndex(doc, componentId);
+  ensureSeq(doc, ["components", cIndex, "members"]);
+  const placementIndex = seqLength(doc, ["components", cIndex, "members"]);
+  doc.setIn(
+    ["components", cIndex, "members", placementIndex],
+    placementNode(doc, createdId, position, rotation),
+  );
+  return createdId;
+}
+
+function cloneMemberDefinition(doc: Document, memberId: string): string {
   pinAssignedIds(doc);
   const { members } = identified(doc);
   const memberIndex = members.findIndex((member) => member.id === memberId);
@@ -1204,13 +1888,7 @@ function placeMemberCopy(
   const created = identified(doc).members.find((member) => !previous.has(member.id));
   if (!created) throw new EditError("Could not assign a member id");
 
-  const cIndex = componentIndex(doc, componentId);
-  ensureSeq(doc, ["components", cIndex, "members"]);
-  const placementIndex = seqLength(doc, ["components", cIndex, "members"]);
-  doc.setIn(
-    ["components", cIndex, "members", placementIndex],
-    placementNode(doc, created.id, position, rotation),
-  );
+  pinId(doc, ["members", nextMemberIndex], created.id);
   return created.id;
 }
 

@@ -4,6 +4,8 @@ import {
   applyPose,
   componentAxisForArrow,
   composeEulerXYZ,
+  invertEulerXYZ,
+  localPoseFromWorld,
   localShiftForWorldX,
   rotateEulerXYZ,
   translateByWorldDelta,
@@ -47,6 +49,34 @@ describe("composeEulerXYZ", () => {
         expect(direct[2], `${outer} then ${inner} on ${sample}`).toBeCloseTo(sequential[2], 5);
       }
     }
+  });
+});
+
+describe("invertEulerXYZ", () => {
+  it("undoes a composed rotation", () => {
+    const rotation: Vec3 = [20, -15, 40];
+    const inverted = invertEulerXYZ(rotation);
+    const composed = composeEulerXYZ(inverted, rotation);
+    expect(composed[0]).toBeCloseTo(0, 5);
+    expect(composed[1]).toBeCloseTo(0, 5);
+    expect(composed[2]).toBeCloseTo(0, 5);
+  });
+});
+
+describe("localPoseFromWorld", () => {
+  it("recovers the pose stored in the parent frame", () => {
+    const parentPosition: Vec3 = [10, 2, -4];
+    const parentRotation: Vec3 = [0, 90, 0];
+    const local = { position: [3, 1, 2] as Vec3, rotation: [15, 0, -10] as Vec3 };
+    const worldPosition = applyPose(local.position, parentPosition, parentRotation);
+    const worldRotation = composeEulerXYZ(parentRotation, local.rotation);
+    const recovered = localPoseFromWorld(worldPosition, worldRotation, parentPosition, parentRotation);
+    expect(recovered.position[0]).toBeCloseTo(local.position[0], 5);
+    expect(recovered.position[1]).toBeCloseTo(local.position[1], 5);
+    expect(recovered.position[2]).toBeCloseTo(local.position[2], 5);
+    expect(recovered.rotation[0]).toBeCloseTo(local.rotation[0], 4);
+    expect(recovered.rotation[1]).toBeCloseTo(local.rotation[1], 4);
+    expect(recovered.rotation[2]).toBeCloseTo(local.rotation[2], 4);
   });
 });
 

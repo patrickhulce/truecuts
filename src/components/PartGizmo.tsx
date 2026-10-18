@@ -4,7 +4,7 @@ import { PivotControls } from "@react-three/drei";
 import { useEffect, useRef } from "react";
 import * as THREE from "three";
 import { snapRotation, snapSteps, snapValue } from "@/lib/edit";
-import { componentAxisForArrow, positionAlongAxis, type Aabb, type Vec3 } from "@/lib/geometry";
+import { positionAlongAxis, type Aabb, type Vec3 } from "@/lib/geometry";
 
 const AXIS_COLORS: [string, string, string] = ["#b45309", "#ca8a04", "#92400e"];
 
@@ -125,6 +125,9 @@ export function PartGizmo({
   ];
   const pad = 0.15 * Math.max(size[0], size[1], size[2]);
   const matrix = matrixFromPose(pose);
+  // Counterrotate only the controls; retain the item's pose and local bounds.
+  // ResizeGizmo has its own item-aligned frame and does not use this transform.
+  const controlRotation = new THREE.Euler().setFromRotationMatrix(matrix.clone().invert(), "XYZ");
 
   useEffect(() => {
     boundsRef.current = bounds;
@@ -184,6 +187,7 @@ export function PartGizmo({
     <PivotControls
       autoTransform={false}
       matrix={matrix}
+      rotation={[controlRotation.x, controlRotation.y, controlRotation.z]}
       anchor={[1, 1, 1]}
       offset={[pad, pad, pad]}
       disableScaling
@@ -198,7 +202,7 @@ export function PartGizmo({
       onDragStart={(info) => {
         modeRef.current = info.component === "Rotator" ? "Rotator" : "Arrow";
         axisRef.current =
-          info.component === "Arrow" ? componentAxisForArrow(info.axis, pose.rotation) : null;
+          info.component === "Arrow" ? info.axis : null;
         startRef.current = pose;
         lastRef.current = pose;
         rawRef.current = pose;

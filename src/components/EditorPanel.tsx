@@ -10,8 +10,9 @@ import { formatInches } from "@/lib/units";
 import { DiagnosticsPanel } from "./DiagnosticsPanel";
 import { PartsBrowser } from "./PartsBrowser";
 import { YamlEditor } from "./YamlEditor";
+import { BuyListTab } from "./BuyListTab";
 
-type Tab = "build" | "yaml";
+type Tab = "build" | "buy-list" | "yaml";
 
 type EditorPanelProps = {
   text: string;
@@ -85,6 +86,9 @@ export function EditorPanel({
         <TabButton id="build" selected={tab === "build"} onSelect={selectTab}>
           Build
         </TabButton>
+        <TabButton id="buy-list" selected={tab === "buy-list"} onSelect={selectTab}>
+          Buy List
+        </TabButton>
         <TabButton id="yaml" selected={tab === "yaml"} onSelect={selectTab}>
           YAML
         </TabButton>
@@ -109,6 +113,8 @@ export function EditorPanel({
             onJumpIsolation={onJumpIsolation}
             onRetargetIsolation={onRetargetIsolation}
           />
+        ) : tab === "buy-list" ? (
+          <BuyListTab scene={compiled.scene} document={compiled.document} />
         ) : (
           <div className="min-h-0 flex-1">
             <YamlEditor value={text} onChange={onChangeText} diagnostics={compiled.diagnostics} />

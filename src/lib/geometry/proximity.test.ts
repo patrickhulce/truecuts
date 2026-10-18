@@ -10,6 +10,7 @@ import {
   placementAfterReseat,
   placementInNewGroup,
   positionAlongAxis,
+  posedAabb,
   positionForOriginCorner,
   snapResizeFace,
   unionAabb,
@@ -150,6 +151,52 @@ describe("boundarySnapDelta", () => {
     const sheet = box(0, 95, 0, 35, 95.75, 96);
     const rail = box(0, 90, 0, 5.5, 95.5, 96);
     expect(boundarySnapDelta(sheet, [rail], 1)).toBeCloseTo(0.5);
+  });
+
+  it("aligns matching ends when parts touch on another axis", () => {
+    const support = box(21.5, 1.5, 0, 23, 9.5, 3.5);
+    const rails = [box(0, 0, 0, 24, 1.5, 3.5), box(0, 9.5, 0, 24, 11, 3.5)];
+    expect(boundarySnapDelta(support, rails, 0)).toBeCloseTo(1);
+    expect(boundarySnapDelta(box(22.5, 1.5, 0, 24, 9.5, 3.5), rails, 0)).toBeNull();
+  });
+
+  it("does not align matching ends when that would leave parts penetrating", () => {
+    const support = box(21.5, 1, 0, 23, 9, 3.5);
+    expect(boundarySnapDelta(support, [box(0, 0, 0, 24, 1.5, 3.5)], 0)).toBeNull();
+  });
+});
+
+describe("end support snap regression", () => {
+  const text = `version: 2
+name: Untitled
+members:
+  - { id: board-2, label: Board, stock: 2x4x8, cuts: [{ axis: 0, angle: 90, at: 8 }] }
+  - { id: board-1, label: Board, stock: 2x4x8, cuts: [{ axis: 0, angle: 90, at: 24 }] }
+  - { id: board-3, label: Board, stock: 2x4x8, cuts: [{ axis: 0, angle: 90, at: 24 }] }
+  - { id: board-4, label: Board, stock: 2x4x8, cuts: [{ axis: 0, angle: 90, at: 8 }] }
+components:
+  - id: build-1
+    label: Build
+    position: [0, 0, -4]
+    rotation: [0, 0, 0]
+    members:
+      - { id: board-2, position: [0, 1.5, 3.5], rotation: [-180, 0, -90] }
+      - { id: board-1, position: [0, 0, 0], rotation: [0, 0, 0] }
+      - { id: board-3, position: [0, 9.5, 0], rotation: [0, 0, 0] }
+      - { id: board-4, position: [23, 1.5, 0], rotation: [0, 0, 90] }
+`;
+
+  it.each([22, 23, 23.5, 24, 24.5, 25])("snaps X=%s to the flush end and stays there", (rawX) => {
+    const result = compileDocument(text);
+    expect(result.diagnostics.filter((item) => item.severity === "error")).toEqual([]);
+    const members = result.scene!.components[0].members;
+    const support = members.find((member) => member.memberId === "board-4")!;
+    const targets = members.filter((member) => member !== support).map((member) => posedAabb(member.bounds, member.position, member.rotation));
+    const position = positionAlongAxis(support.position, 0, rawX, support.bounds, support.rotation, targets, true);
+    expect(position[0]).toBeCloseTo(24);
+    expect(position.slice(1)).toEqual([1.5, 0]);
+    expect(posedAabb(support.bounds, position, support.rotation).max[0]).toBeCloseTo(24);
+    expect(positionAlongAxis(support.position, 0, rawX, support.bounds, support.rotation, targets, false)[0]).toBe(rawX);
   });
 });
 

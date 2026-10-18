@@ -164,7 +164,8 @@ function seatsOutside(moving: Aabb, other: Aabb, axis: 0 | 1 | 2, delta: number)
 
 /**
  * Shift along `axis` that lands `moving` on exactly one nearby boundary.
- * Only an outside seat counts. A shift that leaves the part inside the neighbor is ignored.
+ * Flush matching edges take priority when the boxes already touch on another axis.
+ * Otherwise only an outside seat counts, so snapping cannot bury a part in its neighbor.
  * `0` counts toward ambiguity (a flush face) but is not returned.
  * `null` when there is no shift, or more than one distinct shift within reach.
  * `face` limits the seat to that side of `moving`. Omit it to consider both.
@@ -177,11 +178,25 @@ export function boundarySnapDelta(
   face?: "min" | "max",
 ): number | null {
   const deltas: number[] = [];
+  const alignments: number[] = [];
   const faces =
     face === "min" ? [moving.min[axis]] : face === "max" ? [moving.max[axis]] : [moving.min[axis], moving.max[axis]];
   for (const other of others) {
     const beside = ([0, 1, 2] as const).every((index) => index === axis || overlaps(moving, other, index));
     if (!beside) continue;
+    // A support between rails can align its end with theirs without penetrating:
+    // their Y faces already touch. Requiring an outside seat on X would instead
+    // move that support beyond the rails, or leave it stranded on the inch grid.
+    const separatedOnAnotherAxis = ([0, 1, 2] as const).some((index) =>
+      index !== axis && (moving.max[index] <= other.min[index] + DISTINCT_EPS || other.max[index] <= moving.min[index] + DISTINCT_EPS),
+    );
+    if (separatedOnAnotherAxis) {
+      for (const side of ["min", "max"] as const) {
+        if (face && face !== side) continue;
+        const delta = other[side][axis] - moving[side][axis];
+        if (Math.abs(delta) <= reach) alignments.push(delta);
+      }
+    }
     for (const face of faces) {
       for (const target of [other.min[axis], other.max[axis]]) {
         const delta = target - face;
@@ -192,7 +207,7 @@ export function boundarySnapDelta(
     }
   }
   const distinct: number[] = [];
-  for (const delta of deltas) {
+  for (const delta of alignments.length > 0 ? alignments : deltas) {
     if (!distinct.some((existing) => Math.abs(existing - delta) < DISTINCT_EPS)) distinct.push(delta);
   }
   if (distinct.length !== 1) return null;

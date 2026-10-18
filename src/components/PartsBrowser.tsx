@@ -32,6 +32,7 @@ import {
   type SceneMemberInstance,
 } from "@/lib/scene";
 import { formatInches, parseDimension, parseOffset } from "@/lib/units";
+import { selectionPosition, setSelectionPosition } from "@/lib/selection-position";
 import { ConnectionEditor } from "./ConnectionEditor";
 import { FastenerIcon } from "./FastenerIcon";
 import { MemberThumbnail } from "./MemberThumbnail";
@@ -398,6 +399,9 @@ export function PartsBrowser({
   });
   const roots = isolatedRoot ? [isolatedRoot] : scene.components;
   const revealedIds = revealIds(scene, summaryComponent?.id ?? null);
+  const positionControls = (
+    <SelectionPosition scene={scene} keys={selectedKeys} text={text} onCommit={onCommit} frameId={isolatedId ?? undefined} />
+  );
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
@@ -426,12 +430,14 @@ export function PartsBrowser({
           onSelect={onSelect}
           onEdit={() => onEnterIsolation(summaryComponent.id)}
           onRetarget={onRetargetIsolation}
+          positionControls={positionControls}
         />
       ) : null}
       {selectionMode === "multi" && picked.length > 0 ? (
         <MultiSummary
           scene={scene}
           instances={picked}
+          positionControls={positionControls}
           onClear={() => onSelect(null)}
           onSelect={onSelect}
           onHover={onHover}
@@ -577,12 +583,14 @@ function MultiSummary({
   onClear,
   onSelect,
   onHover,
+  positionControls,
 }: {
   scene: SceneModel;
   instances: SceneMemberInstance[];
   onClear: () => void;
   onSelect: (key: string) => void;
   onHover: (keys: string[]) => void;
+  positionControls: ReactNode;
 }) {
   const span = unionAabb(instances.map((instance) => instance.worldBounds));
   const count = instances.length;
@@ -606,6 +614,7 @@ function MultiSummary({
           </p>
         ) : null}
       </div>
+      {positionControls}
       <ul>
         {instances.map((instance) => {
           const { componentId } = parseInstanceKey(instance.key);
@@ -772,6 +781,7 @@ function ComponentSummary({
   onSelect,
   onEdit,
   onRetarget,
+  positionControls,
 }: {
   component: SceneComponent;
   scene: SceneModel;
@@ -781,6 +791,7 @@ function ComponentSummary({
   onSelect: (key: string | null) => void;
   onEdit: () => void;
   onRetarget: (from: string, to: string) => void;
+  positionControls: ReactNode;
 }) {
   const shared = templateOccurrences(scene, component.templateId);
 
@@ -848,6 +859,7 @@ function ComponentSummary({
           ) : null}
         </div>
       </div>
+      {positionControls}
     </section>
   );
 }
@@ -1273,6 +1285,59 @@ function PartDetail({
         </div>
       ) : null}
     </div>
+  );
+}
+
+function SelectionPosition({ scene, keys, text, onCommit, frameId }: {
+  scene: SceneModel;
+  keys: string[];
+  text: string;
+  onCommit: (text: string) => void;
+  frameId?: string;
+}) {
+  const textRef = useRef(text);
+  useEffect(() => { textRef.current = text; }, [text]);
+  const corner = selectionPosition(scene, keys, frameId);
+  if (!corner) return null;
+  return (
+    <div className="pb-3">
+      <SectionLabel>Position</SectionLabel>
+      <div className="grid grid-cols-[auto_minmax(0,1fr)] items-center gap-x-3 gap-y-1 px-3 text-sm">
+        {([0, 1, 2] as const).map((axis) => (
+          <SelectionPositionAxis
+            key={axis}
+            axis={axis}
+            value={corner[axis]}
+            onSave={(inches) => {
+              try {
+                const next = setSelectionPosition(textRef.current, scene, keys, axis, inches, frameId);
+                if (next !== textRef.current) { textRef.current = next; onCommit(next); }
+                return null;
+              } catch (cause) {
+                return cause instanceof Error ? cause.message : "Could not position selection";
+              }
+            }}
+          />
+        ))}
+      </div>
+      <p className="px-3 pt-1 text-[11px] text-[#8a7355]">
+        X · Y · Z of the selection’s minimum corner in {frameId ? "the edited component" : "the build"}. Y is the bottom. Moves the selection together.
+      </p>
+    </div>
+  );
+}
+
+function SelectionPositionAxis({ axis, value, onSave }: {
+  axis: 0 | 1 | 2;
+  value: number;
+  onSave: (inches: number) => string | null;
+}) {
+  const label = ["X", "Y", "Z"][axis];
+  return (
+    <>
+      <span className="text-[#8a7355]">{label}</span>
+      <EditableDimension label={`Selection position ${label}`} value={value} parse={parseOffset} onSave={onSave} />
+    </>
   );
 }
 

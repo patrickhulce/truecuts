@@ -2226,8 +2226,23 @@ export function groupMembers(
   }
 
   const removedComponentIds = new Set<string>();
+  // An emptied definition may still be the target of a root or nested placement.
+  // Keep it (and any child components) rather than leaving dangling references.
+  const referencedComponentIds = new Set(components.flatMap(component => component.of ? [component.of] : []));
+  for (let index = 0; index < components.length; index++) {
+    const path = ["components", index, "components"];
+    for (let child = 0; child < seqLength(doc, path); child++) {
+      const id = doc.getIn([...path, child, "component"]);
+      if (typeof id === "string") referencedComponentIds.add(id);
+    }
+  }
   for (const [componentId, slots] of slotsByComponent) {
-    if (slots.length > 0 && slots.every((slot) => slot.moved)) removedComponentIds.add(componentId);
+    const index = componentIndexById.get(componentId)!;
+    if (
+      slots.length > 0 && slots.every((slot) => slot.moved) &&
+      !referencedComponentIds.has(componentId) &&
+      seqLength(doc, ["components", index, "components"]) === 0
+    ) removedComponentIds.add(componentId);
   }
 
   let newComponentId = "";

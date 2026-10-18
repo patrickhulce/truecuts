@@ -5,6 +5,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore
 import { Group, Panel, Separator, usePanelRef } from "react-resizable-panels";
 import { useDocument } from "@/hooks/useDocument";
 import { clearBuilds } from "@/lib/builds-storage";
+import { groupFromSelection } from "@/lib/group-selection";
 import { compileDocument } from "@/lib/compile";
 import {
   addMember,
@@ -12,7 +13,6 @@ import {
   deleteMemberPlacement,
   duplicateComponentOccurrence,
   duplicateMemberPlacement,
-  groupMembers,
   groupOccurrences,
   resizeMemberCut,
   setComponentPose,
@@ -23,11 +23,8 @@ import { parseInstanceKey, parseNestedOccurrence } from "@/lib/fasteners";
 import {
   groupOrigin,
   localPoseFromWorld,
-  placementAfterReseat,
-  placementInNewGroup,
   unionAabb,
   unapplyPose,
-  worldPlacementPose,
   type Vec3,
 } from "@/lib/geometry";
 import {
@@ -37,7 +34,6 @@ import {
   sceneMembers,
   walkSceneComponents,
   type SceneComponent,
-  type SceneMemberInstance,
   type SceneModel,
 } from "@/lib/scene";
 import { localShiftForWorldX } from "@/lib/geometry/pose";
@@ -877,43 +873,6 @@ function groupComponentsFromSelection(text: string, scene: SceneModel, occurrenc
   return groupOccurrences(text, items, groupPosition, parent?.id ?? null);
 }
 
-function groupFromSelection(text: string, scene: SceneModel, keys: string[]) {
-  const selected = new Set(keys);
-  const byKey = new Map<string, { part: SceneMemberInstance; component: SceneComponent }>();
-  walkSceneComponents(scene.components, (component) => {
-    for (const part of component.members) byKey.set(part.key, { part, component });
-  });
-  const ordered = keys.flatMap((key) => {
-    const hit = byKey.get(key);
-    return hit ? [hit] : [];
-  });
-  if (ordered.length === 0) return null;
-  const origin = groupOrigin(ordered.map(({ part }) => part.worldBounds));
-  if (!origin) return null;
-  const sole = new Set(ordered.map(({ component }) => component.id)).size === 1 ? ordered[0].component : null;
-  const entire = Boolean(
-    sole && sole.members.length === ordered.length && sole.members.every((member) => selected.has(member.key)),
-  );
-  const items = ordered.map(({ part, component }) => {
-    const world = worldPlacementPose(
-      { position: part.position, rotation: part.rotation },
-      { position: component.worldPosition, rotation: component.worldRotation },
-    );
-    const { placementIndex } = parseInstanceKey(part.key);
-    const componentId = component.templateId;
-    if (entire) {
-      return {
-        componentId,
-        placementIndex,
-        position: placementAfterReseat(world.position, origin, component.worldRotation),
-        rotation: part.rotation,
-      };
-    }
-    const local = placementInNewGroup(world, origin);
-    return { componentId, placementIndex, position: local.position, rotation: local.rotation };
-  });
-  return groupMembers(text, items, origin, entire && sole && sole.id === sole.templateId ? sole.id : undefined);
-}
 
 function isTextField(target: EventTarget | null): boolean {
   const element = target instanceof Element ? target : null;

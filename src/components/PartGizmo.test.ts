@@ -6,6 +6,8 @@ import type { PivotControls } from "@react-three/drei";
 import { PartGizmo } from "./PartGizmo";
 import type { Vec3 } from "@/lib/geometry";
 
+vi.mock("@react-three/fiber", () => ({ useFrame: vi.fn() }));
+
 const captured = vi.hoisted(() => ({ props: null as ComponentProps<typeof PivotControls> | null }));
 vi.mock("@react-three/drei", () => ({
   PivotControls: (props: ComponentProps<typeof PivotControls>) => {

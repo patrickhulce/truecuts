@@ -1,7 +1,9 @@
 "use client";
 
 import { PivotControls } from "@react-three/drei";
-import { useEffect, useRef } from "react";
+import { useFrame } from "@react-three/fiber";
+import { chooseGizmoPlacement } from "@/lib/gizmo-placement";
+import { useEffect, useRef, useState } from "react";
 import * as THREE from "three";
 import { snapRotation, snapSteps, snapValue } from "@/lib/edit";
 import { positionAlongAxis, type Aabb, type Vec3 } from "@/lib/geometry";
@@ -113,6 +115,9 @@ export function PartGizmo({
   const boundsRef = useRef(bounds);
   const targetsRef = useRef(snapTargets);
   const onDraftRef = useRef(onDraft);
+  const pivotRef = useRef<THREE.Group>(null);
+  const [anchor, setAnchor] = useState<Vec3 | null>(null);
+  const anchorRef = useRef<Vec3 | undefined>(undefined);
   const size: Vec3 = [
     Math.max(bounds.max[0] - bounds.min[0], 0.01),
     Math.max(bounds.max[1] - bounds.min[1], 0.01),
@@ -123,11 +128,22 @@ export function PartGizmo({
     (bounds.min[1] + bounds.max[1]) / 2,
     (bounds.min[2] + bounds.max[2]) / 2,
   ];
-  const pad = 0.15 * Math.max(size[0], size[1], size[2]);
   const matrix = matrixFromPose(pose);
   // Counterrotate only the controls; retain the item's pose and local bounds.
   // ResizeGizmo has its own item-aligned frame and does not use this transform.
   const controlRotation = new THREE.Euler().setFromRotationMatrix(matrix.clone().invert(), "XYZ");
+
+  useFrame(({ camera, size }) => {
+    if (modeRef.current || !pivotRef.current?.parent) return;
+    pivotRef.current.parent.updateWorldMatrix(true, false);
+    const world = pivotRef.current.parent.matrixWorld.clone().multiply(matrix);
+    const next = chooseGizmoPlacement(bounds, world, camera, size.width, size.height, anchorRef.current);
+    const previous = anchorRef.current;
+    if (next && previous && next.every((value, axis) => Math.abs(value - previous[axis]) < 1e-5)) return;
+    if (!next && !previous) return;
+    anchorRef.current = next ?? undefined;
+    setAnchor(next);
+  });
 
   useEffect(() => {
     boundsRef.current = bounds;
@@ -185,11 +201,12 @@ export function PartGizmo({
 
   return (
     <PivotControls
+      ref={pivotRef}
       autoTransform={false}
       matrix={matrix}
       rotation={[controlRotation.x, controlRotation.y, controlRotation.z]}
-      anchor={[1, 1, 1]}
-      offset={[pad, pad, pad]}
+      offset={anchor ?? center}
+      visible={anchor !== null}
       disableScaling
       disableSliders
       disableRotations={disableRotations}

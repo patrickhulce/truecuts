@@ -451,7 +451,10 @@ export function Workspace() {
       }
       if (key === "c" && !event.shiftKey && !event.altKey) {
         const selection = window.getSelection();
-        if (selection && !selection.isCollapsed && selection.toString().trim()) return;
+        // CodeMirror can retain a DOM selection after the viewport takes focus.
+        // It must not suppress model copy and leave an older member on our clipboard.
+        const fromViewport = event.target instanceof Element && event.target.closest("[data-model-viewport]") !== null;
+        if (!fromViewport && selection && !selection.isCollapsed && selection.toString().trim()) return;
         const keys = selectionRef.current.keys;
         const scene = compiledRef.current.scene;
         if (keys.length === 0 || !scene) return;

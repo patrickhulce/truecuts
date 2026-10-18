@@ -1179,6 +1179,7 @@ export function Viewport({
   return (
     <div
       ref={rootRef}
+      data-model-viewport
       tabIndex={0}
       className={`relative h-full w-full bg-[#1a120b] outline-none ${dropOver ? "ring-2 ring-[#f59e0b] ring-inset" : ""} ${pan ? "cursor-grab" : ""}`}
       onPointerDown={handlePointerDown}

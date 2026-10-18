@@ -71,9 +71,11 @@ A dimension is a YAML number (inches) or a string:
 | `"3/4\""` | 0.75 |
 | `"6 1/2\""` | 6.5 |
 | `"1'"` | 12 |
-| `"1'-6\""` | 18 |
-| `"1'-6 1/2\""` | 18.5 |
+| `"1' 6\""` | 18 |
+| `"1' 6 1/2\""` | 18.5 |
 | `"34.5\""` | 34.5 |
+
+Dimension text fields and YAML dimension strings accept `+`, `-`, `*`, `/`, and parentheses. Bare numbers are inches; multiplication and division run before addition and subtraction. For example, `5' - 1.5"` evaluates to `4' 10.5"`, and `(2' + 6") / 2` evaluates to `1' 3"`. Feet and inches are separated by a space; a hyphen always means subtraction, even without spaces. Fraction input remains supported; dimensions display decimal inches by default.
 
 Strings that contain `"` must be YAML-quoted. Bare numbers are inches and are preferred in examples.
 
@@ -131,8 +133,10 @@ components:
 - `label` — required.
 - `id` — optional; see Identity.
 - `stock` — catalog id.
+- `paint` — optional six-digit hex color, e.g. `"#336699"`, for plywood and hardboard. Applies to every placement of the member, including thumbnails and exports. The details pane has a color picker, Apply paint, and Remove paint; removing paint restores the stock finish. Unlink a shared member first to paint only that copy.
 - `size` — optional list of 1–3 dimensions for parameterized stock. Values apply to the free axes in L, W, T order, skipping any axis the catalog marks fixed. Omitted free axes use the catalog default. `size` on stock that is not parameterized, a value past the free axes, or a value outside that axis's min/max is an error. A fixed axis (bracket gauge, T-connector stem height) does not change when a free axis does.
 - `cuts` — ordered list of planar cuts, applied in stock-local coordinates. Empty means the full stock piece. Box stock only; hardware geometries reject cuts.
+- `outline` — optional simple polygon of `[L, W]` inch coordinates within the stock, extruded through its thickness. Supports concave saw profiles such as L shapes. Planar `cuts` still apply to this solid. Shared member placements share the profile.
 - `bores` — optional drilled bores on stock faces (default empty). Each bore is cut out of the rendered mesh. Contact and finished volume still use the cut stock before the bores. Connection pilot and clearance bores are computed and are not written here.
 
 ### Cut fields
@@ -301,7 +305,19 @@ Connectivity: fasteners and expanded connections are undirected edges between me
 
 ## Cut semantics
 
-A cut is a plane. The remaining solid is the convex polyhedron on the kept side of that plane (Sutherland–Hodgman clipping plus a cap face). Boxes stay convex under planar cuts; dados and other non-convex features are out of scope for v1.
+A planar cut keeps one side of a plane. Boxes stay convex under planar cuts. Members with a saw `outline` may be concave; their caps are triangulated, including after further planar cuts. Partial-depth dados remain out of scope.
+
+### Saw tool
+
+Select a board or sheet, then click the circular-saw toolbar button. Start a path on the member's edge, click to add corners, and finish on another edge point. Both resulting pieces are immediately filled and labeled: saturated green KEEP and red DISCARD. The smaller piece initially previews as DISCARD; hover over either piece to make it the offcut, then click it to remove it. The labels remain visible when the pointer leaves the member. Each removal is one undoable edit. Repeat to trim more corners; Backspace steps back through an unfinished path, and Escape exits.
+
+The tool cuts through T on the member's local L×W face, including rotated placements. Lines preview as thick dark dots with a light outline, with dot spacing held constant on screen while zooming, and snap to 45° directions, dimension increments, corners, edge midpoints, and boundary intersections. Cmd/Ctrl uses fine dimension increments; Shift bypasses landmark snapping. The drawing tool requires a flat, connected board or sheet without thickness bevels. Resize handles retain their existing item-local axes.
+
+An L-shaped profile, measured from the original stock origin:
+
+```yaml
+outline: [[0, 0], [24, 0], [24, 12], [12, 12], [12, 24], [0, 24]]
+```
 
 ### Square crosscut
 
@@ -490,6 +506,8 @@ components:
 ```
 
 ## Rendering
+
+- The **Buy List** tab beside Build and YAML estimates purchases from all placed instances, including nested component copies. A quick best-fit pass combines compatible lumber cuts across catalog lengths; sheet goods use rectangular packing without rotating the grain. Each purchased board or sheet shows its cut layout. Saw kerf defaults to zero and can be set in inches. Hardware is counted individually and glue is listed as needed. Unplaced definitions are excluded; paint does not split raw-stock purchases. This is a rough material estimate, not price optimization; angled cuts reserve rectangular blanks, lumber rips do not reuse width offcuts, and no end-trim allowance is included.
 
 - Left pane: YAML editor (CodeMirror) with a walnut/amber theme and lint markers on diagnostics.
 - Right pane: react-three-fiber scene — warm hemisphere + shadowed directional light, 1″ grid with 12″ sections, orbit controls, wood-tone materials with CAD edges.

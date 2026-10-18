@@ -8,6 +8,8 @@ import * as THREE from "three";
 import { snapRotation, snapSteps, snapValue } from "@/lib/edit";
 import { positionAlongAxis, type Aabb, type Vec3 } from "@/lib/geometry";
 
+import { DIAGONAL_DIRECTIONS, GIZMO_HANDLE, snapDiagonalPosition } from "@/lib/gizmo-interaction";
+
 const AXIS_COLORS: [string, string, string] = ["#b45309", "#ca8a04", "#92400e"];
 
 export type PartPose = {
@@ -63,11 +65,13 @@ function snapDraft(
   targets: Aabb[],
   boundary: boolean,
   axis: 0 | 1 | 2 | null,
+  diagonal: Vec3 | null,
 ): PartPose {
   const steps = snapSteps(fine);
   if (mode === "Rotator") {
     return { position: start.position, rotation: snapRotation(raw.rotation, steps.deg) };
   }
+  if (diagonal) return { position: snapDiagonalPosition(start.position, raw.position, diagonal, steps.inch), rotation: start.rotation };
   if (axis === null) return { position: start.position, rotation: start.rotation };
   return {
     position: positionAlongAxis(
@@ -105,6 +109,7 @@ export function PartGizmo({
   onCommit,
 }: PartGizmoProps) {
   const modeRef = useRef<"Arrow" | "Rotator" | null>(null);
+  const diagonalRef = useRef<Vec3 | null>(null);
   const axisRef = useRef<0 | 1 | 2 | null>(null);
   const startRef = useRef(pose);
   const lastRef = useRef(pose);
@@ -171,6 +176,7 @@ export function PartGizmo({
         targetsRef.current,
         boundaryRef.current,
         axisRef.current,
+        diagonalRef.current,
       );
       lastRef.current = snapped;
       onDraftRef.current(snapped.position, snapped.rotation);
@@ -199,8 +205,68 @@ export function PartGizmo({
     };
   }, []);
 
+  const handleDrag = (local: THREE.Matrix4) => {
+    const next = poseFromMatrix(local);
+    rawRef.current = next;
+    const drafted =
+      modeRef.current === "Rotator"
+        ? { position: startRef.current.position, rotation: next.rotation }
+        : { position: next.position, rotation: startRef.current.rotation };
+    rawRef.current = drafted;
+    if (modeRef.current !== "Rotator" && axisRef.current === null && !diagonalRef.current) {
+      axisRef.current = draggedAxis(startRef.current.position, next.position);
+    }
+    const snapped = snapDraft(
+      modeRef.current ?? "Arrow",
+      startRef.current,
+      drafted,
+      fineRef.current,
+      boundsRef.current,
+      targetsRef.current,
+      boundaryRef.current,
+      axisRef.current,
+      diagonalRef.current,
+    );
+    lastRef.current = snapped;
+    onDraft(snapped.position, snapped.rotation);
+  };
+  const handleDragEnd = () => {
+    modeRef.current = null;
+    axisRef.current = null;
+    diagonalRef.current = null;
+    rawRef.current = null;
+    onCommit(lastRef.current.position, lastRef.current.rotation);
+  };
+
   return (
+    <>
+      {DIAGONAL_DIRECTIONS.map((direction, index) => {
+        const turn = new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(1, 0, 0), new THREE.Vector3(...direction).normalize());
+        const rotation = new THREE.Euler().setFromRotationMatrix(matrix.clone().invert().multiply(new THREE.Matrix4().makeRotationFromQuaternion(turn)), "XYZ");
+        return <PivotControls
+          key={index}
+          autoTransform={false} matrix={matrix}
+          rotation={[rotation.x, rotation.y, rotation.z]}
+          offset={anchor ?? center} visible={anchor !== null}
+          activeAxes={[true, false, false]}
+          disableRotations disableScaling disableSliders
+          depthTest={false} fixed scale={76} lineWidth={4}
+          axisColors={["#80653a", "#80653a", "#80653a"]} opacity={0.7}
+          hoveredColor="#f59e0b" userData={GIZMO_HANDLE}
+          onDragStart={() => {
+            modeRef.current = "Arrow";
+            diagonalRef.current = direction;
+            axisRef.current = null;
+            startRef.current = pose;
+            lastRef.current = pose;
+            rawRef.current = pose;
+            onDragStart();
+          }}
+          onDrag={handleDrag} onDragEnd={handleDragEnd}
+        />;
+      })}
     <PivotControls
+      userData={GIZMO_HANDLE}
       ref={pivotRef}
       autoTransform={false}
       matrix={matrix}
@@ -217,6 +283,7 @@ export function PartGizmo({
       axisColors={AXIS_COLORS}
       hoveredColor="#f59e0b"
       onDragStart={(info) => {
+        diagonalRef.current = null;
         modeRef.current = info.component === "Rotator" ? "Rotator" : "Arrow";
         axisRef.current =
           info.component === "Arrow" ? info.axis : null;
@@ -225,40 +292,13 @@ export function PartGizmo({
         rawRef.current = pose;
         onDragStart();
       }}
-      onDrag={(local) => {
-        const next = poseFromMatrix(local);
-        rawRef.current = next;
-        const drafted =
-          modeRef.current === "Rotator"
-            ? { position: startRef.current.position, rotation: next.rotation }
-            : { position: next.position, rotation: startRef.current.rotation };
-        rawRef.current = drafted;
-        if (modeRef.current !== "Rotator" && axisRef.current === null) {
-          axisRef.current = draggedAxis(startRef.current.position, next.position);
-        }
-        const snapped = snapDraft(
-          modeRef.current ?? "Arrow",
-          startRef.current,
-          drafted,
-          fineRef.current,
-          boundsRef.current,
-          targetsRef.current,
-          boundaryRef.current,
-          axisRef.current,
-        );
-        lastRef.current = snapped;
-        onDraft(snapped.position, snapped.rotation);
-      }}
-      onDragEnd={() => {
-        modeRef.current = null;
-        axisRef.current = null;
-        rawRef.current = null;
-        onCommit(lastRef.current.position, lastRef.current.rotation);
-      }}
+      onDrag={handleDrag}
+      onDragEnd={handleDragEnd}
     >
       <mesh position={center} visible={false} raycast={() => null}>
         <boxGeometry args={size} />
       </mesh>
     </PivotControls>
+    </>
   );
 }

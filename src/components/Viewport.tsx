@@ -1,9 +1,10 @@
 "use client";
 
 import { GizmoHelper, GizmoViewport, Grid, OrbitControls } from "@react-three/drei";
-import { Canvas, useThree } from "@react-three/fiber";
+import { Canvas, useThree, events as canvasEvents } from "@react-three/fiber";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ComponentRef, type DragEvent as ReactDragEvent, type KeyboardEvent, type PointerEvent, type RefObject } from "react";
 import * as THREE from "three";
+import { prioritizeGizmoHits } from "@/lib/gizmo-interaction";
 import { frameCamera } from "@/lib/camera-frame";
 import { isolateScene } from "@/lib/isolate";
 import {
@@ -1232,6 +1233,7 @@ export function Viewport({
       }}
     >
       <Canvas
+        events={(state) => ({ ...canvasEvents(state), filter: prioritizeGizmoHits })}
         shadows
         frameloop="demand"
         camera={{ position: [90, 55, 90], fov: 35, near: 0.1, far: 4000 }}

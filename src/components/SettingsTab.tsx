@@ -5,6 +5,7 @@ import { applyImport, buildsExportFilename, BuildsFileError, parseBuildsFile, se
 import { replaceAllBuilds } from "@/lib/builds-storage";
 import { compileDocument } from "@/lib/compile";
 import { sceneHasExportableSolids, sceneToGlb } from "@/lib/mesh/export-scene";
+import { DimensionField } from "./DimensionField";
 import { type Preferences } from "@/lib/preferences";
 
 type SettingsTabProps = {
@@ -267,22 +268,6 @@ export function SettingsTab({
 }
 
 function BoreThresholdField({ value, onCommit }: { value: number; onCommit: (value: number) => void }) {
-  const [draft, setDraft] = useState(String(value));
-  const [committed, setCommitted] = useState(value);
-  if (committed !== value) {
-    setCommitted(value);
-    setDraft(String(value));
-  }
-
-  function commit() {
-    const next = Number(draft);
-    if (!Number.isFinite(next) || next < 0) {
-      setDraft(String(value));
-      return;
-    }
-    if (next !== value) onCommit(next);
-  }
-
   return (
     <label className="mt-3 block text-xs text-[#d6c3a3]">
       Bore threshold
@@ -290,20 +275,13 @@ function BoreThresholdField({ value, onCommit }: { value: number; onCommit: (val
         Holes smaller than this diameter are left out of the 3D view. 0 shows every hole.
       </span>
       <span className="mt-1.5 flex items-center gap-1.5">
-        <input
-          type="number"
-          inputMode="decimal"
+        <DimensionField
+          label="Bore threshold"
           min={0}
-          step={0.25}
-          value={draft}
-          onChange={(event) => setDraft(event.target.value)}
-          onBlur={commit}
-          onKeyDown={(event) => {
-            if (event.key === "Enter") event.currentTarget.blur();
-          }}
+          value={value}
+          onCommit={onCommit}
           className="w-20 rounded border border-[#3d2a18] bg-[#1a120b] px-2 py-1 text-sm text-[#d6c3a3]"
         />
-        <span className="text-[11px] text-[#8a7355]">in</span>
       </span>
     </label>
   );

@@ -1,10 +1,11 @@
 "use client";
 
-import { useState, type ReactNode } from "react";
+import { type ReactNode } from "react";
 import { getCatalogPart, getFastenerSubtype, listCatalog } from "@/lib/catalog";
 import { pickNailStock, type SceneConnection } from "@/lib/connections";
 import { emptyHardwareStocks, isHardwareKind, type HardwareKind } from "@/lib/hardware-fastener";
 import { parseInstanceKey } from "@/lib/fasteners";
+import { DimensionField } from "./DimensionField";
 import type {
   ResolvedBoltVariant,
   ResolvedConnectionFastener,
@@ -438,7 +439,6 @@ function VariantOptions({
         <MeasureField
           key={`edge-${variant.edge}`}
           label="Edge"
-          unit="in"
           value={variant.edge}
           min={0}
           onCommit={(edge) => onChange(withEdge(fastener, edge))}
@@ -448,7 +448,6 @@ function VariantOptions({
         <MeasureField
           key={`separation-${variant.separation}`}
           label="Separation"
-          unit="in"
           value={variant.separation}
           min={0}
           exclusive
@@ -489,49 +488,29 @@ function VariantOptions({
 
 function MeasureField({
   label,
-  unit,
   value,
   min,
   exclusive = false,
   onCommit,
 }: {
   label: string;
-  unit?: string;
   value: number;
   min: number;
   exclusive?: boolean;
   onCommit: (value: number) => void;
 }) {
-  const [draft, setDraft] = useState(String(value));
-
-  function commit() {
-    const next = Number(draft);
-    const valid = Number.isFinite(next) && (exclusive ? next > min : next >= min);
-    if (!valid) {
-      setDraft(String(value));
-      return;
-    }
-    if (next !== value) onCommit(next);
-  }
-
   return (
     <label className="text-[10px] uppercase tracking-widest text-[#8a7355]">
       {label}
       <span className="mt-1 flex items-center gap-1.5">
-        <input
-          type="number"
-          inputMode="decimal"
-          step="0.0625"
-          min={exclusive ? undefined : min}
-          value={draft}
-          onChange={(event) => setDraft(event.target.value)}
-          onBlur={commit}
-          onKeyDown={(event) => {
-            if (event.key === "Enter") event.currentTarget.blur();
-          }}
-          className="min-w-0 flex-1 rounded border border-[#3d2a18] bg-[#1a120b] px-2 py-1 text-sm normal-case tracking-normal text-[#d6c3a3]"
+        <DimensionField
+          label={label}
+          min={min}
+          exclusive={exclusive}
+          value={value}
+          onCommit={onCommit}
+          className="w-full rounded border border-[#3d2a18] bg-[#1a120b] px-2 py-1 text-sm normal-case tracking-normal text-[#d6c3a3]"
         />
-        {unit ? <span className="normal-case tracking-normal text-xs text-[#a89070]">{unit}</span> : null}
       </span>
     </label>
   );

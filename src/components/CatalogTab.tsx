@@ -15,6 +15,7 @@ import { addMember, CATALOG_DRAG_MIME, type MemberCutInput, type NewMemberInput 
 import { formatInches, parseDimension } from "@/lib/units";
 import { FastenerIcon } from "./FastenerIcon";
 import { CatalogThumbnail } from "./MemberThumbnail";
+import { DimensionField } from "./DimensionField";
 
 type CatalogTabProps = {
   text: string;
@@ -324,14 +325,13 @@ function StockConfig({
           {axesSpec.map((axis) => (
             <label key={axis.axis} className="text-[11px] text-[#a89070]">
               {axis.axis} ({formatInches(axis.min)}–{formatInches(axis.max)})
-              <input
-                type="number"
+              <DimensionField
+                key={`${part.id}-${axis.axis}`}
+                label={axis.axis}
                 min={axis.min}
                 max={axis.max}
-                step={0.125}
                 value={axes[axis.axis] ?? axis.default}
-                onChange={(event) => {
-                  const value = Number(event.target.value);
+                onCommit={(value) => {
                   setAxes((current) => ({ ...current, [axis.axis]: value }));
                   setAdded(null);
                 }}

@@ -66,7 +66,7 @@ describe("layoutSheet", () => {
 describe("overallDimensions", () => {
   it("prints the world span longest to shortest as L × W × H", () => {
     const bounds: Aabb = { min: [0, 0, 0], max: [96, 3.5, 1.5] };
-    expect(overallDimensions(bounds)).toBe('L 8\' × W 3 1/2" × H 1 1/2"');
+    expect(overallDimensions(bounds)).toBe('L 8\' × W 3.5" × H 1.5"');
     const tall: Aabb = { min: [0, 0, 0], max: [10, 48, 24] };
     expect(overallDimensions(tall)).toBe('L 4\' × W 2\' × H 10"');
   });

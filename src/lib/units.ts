@@ -8,95 +8,121 @@ export class DimensionError extends Error {
   }
 }
 
-const FEET = /^(\d+(?:\.\d+)?)\s*'/;
-const MIXED = /^(\d+(?:\.\d+)?)\s+(\d+)\s*\/\s*(\d+)\s*"?$/;
-const HYPHEN_MIXED = /^(\d+(?:\.\d+)?)-(\d+)\s*\/\s*(\d+)\s*"?$/;
-const FRACTION = /^(\d+)\s*\/\s*(\d+)\s*"?$/;
-const DECIMAL = /^(\d+(?:\.\d+)?)\s*"?$/;
-
-/** Normalize typographic marks so 1′‑6½″ still parses. */
+/** Normalize typographic unit marks and arithmetic operators. */
 function normalizeMarks(value: string): string {
-  return value
-    .trim()
-    .replace(/[′’]/g, "'")
-    .replace(/[″”]/g, '"')
-    .replace(/[–—]/g, "-");
+  return value.trim().replace(/[′’]/g, "'").replace(/[″”]/g, '"')
+    .replace(/[–—−]/g, "-").replace(/×/g, "*").replace(/÷/g, "/");
 }
 
 /**
- * Parse a number of inches, or an imperial dimension string, into inches.
- *
- * Accepted forms: `8`, `8"`, `3/4"`, `6 1/2"`, `1'`, `1'-6"`, `1'-6 1/2"`, `34.5"`.
+ * Evaluate dimension arithmetic in inches. Bare numbers are inches; feet and
+ * inches join with a space. Minus always subtracts, including immediately after feet.
+ * Fractions and mixed numbers are literals; multiplication/division precede addition.
  */
 export function parseDimension(input: number | string): number {
   if (typeof input === "number") {
-    if (!Number.isFinite(input)) {
-      throw new DimensionError("Dimension must be a finite number", String(input));
-    }
+    if (!Number.isFinite(input)) throw new DimensionError("Dimension must be a finite number", String(input));
     return input;
   }
-
-  const raw = normalizeMarks(input);
-  if (!raw) {
-    throw new DimensionError("Empty dimension", input);
-  }
-
-  let rest = raw;
-  let inches = 0;
-
-  const feetMatch = rest.match(FEET);
-  if (feetMatch) {
-    inches += Number.parseFloat(feetMatch[1]) * 12;
-    rest = rest.slice(feetMatch[0].length).replace(/^\s*-?\s*/, "");
-  }
-
-  if (!rest || rest === '"') {
-    return inches;
-  }
-
-  const mixed = rest.match(MIXED);
-  if (mixed) {
-    inches += Number.parseFloat(mixed[1]) + Number.parseInt(mixed[2], 10) / Number.parseInt(mixed[3], 10);
-    return inches;
-  }
-
-  const hyphenMixed = rest.match(HYPHEN_MIXED);
-  if (hyphenMixed) {
-    inches +=
-      Number.parseFloat(hyphenMixed[1]) +
-      Number.parseInt(hyphenMixed[2], 10) / Number.parseInt(hyphenMixed[3], 10);
-    return inches;
-  }
-
-  const fraction = rest.match(FRACTION);
-  if (fraction) {
-    const denom = Number.parseInt(fraction[2], 10);
-    if (denom === 0) {
-      throw new DimensionError("Division by zero in fraction", input);
+  const source = normalizeMarks(input);
+  if (!source) throw new DimensionError("Empty dimension", input);
+  // Bound recursion and work for pasted or imported input.
+  if (source.length > 4096) throw new DimensionError("Dimension expression is too long", input);
+  let cursor = 0;
+  const fail = (message = "Cannot parse dimension"): never => { throw new DimensionError(message, input); };
+  const space = () => { while (/\s/.test(source[cursor] ?? "") && cursor < source.length) cursor++; };
+  const take = (token: string) => {
+    space();
+    if (source[cursor] !== token) return false;
+    cursor++;
+    return true;
+  };
+  const finite = (value: number) => Number.isFinite(value) ? value : fail("Dimension must be a finite number");
+  function number(): number {
+    space();
+    const match = source.slice(cursor).match(/^(?:\d+(?:\.\d*)?|\.\d+)(?:e[+-]?\d+)?/i);
+    if (!match) return fail("Expected a number or dimension");
+    cursor += match[0].length;
+    const whole = Number(match[0]);
+    // A space-separated fraction belongs to the preceding whole number.
+    const mixed = source.slice(cursor).match(/^\s+(\d+)\s*\/\s*(\d+)(?![\d.])/);
+    if (mixed) {
+      cursor += mixed[0].length;
+      const denominator = Number(mixed[2]);
+      if (denominator === 0) return fail("Division by zero");
+      return finite(whole + Number(mixed[1]) / denominator);
     }
-    inches += Number.parseInt(fraction[1], 10) / denom;
-    return inches;
+    return finite(whole);
   }
-
-  const decimal = rest.match(DECIMAL);
-  if (decimal) {
-    inches += Number.parseFloat(decimal[1]);
-    return inches;
+  function literal(): number {
+    let value = number();
+    // Read a simple fraction as one literal so 3/4" and 1/2' carry units.
+    const fraction = source.slice(cursor).match(/^\s*\/\s*(\d+(?:\.\d*)?|\.\d+)\s*(['"])/);
+    if (fraction) {
+      cursor += fraction[0].length;
+      const denominator = Number(fraction[1]);
+      if (denominator === 0) return fail("Division by zero");
+      value /= denominator;
+      if (fraction[2] === '"') return finite(value);
+    } else if (!take("'")) {
+      take('"');
+      return value;
+    }
+    value *= 12;
+    space();
+    if (/^[\d.]/.test(source.slice(cursor))) {
+      let inches = number();
+      const fraction = source.slice(cursor).match(/^\s*\/\s*(\d+)(?![\d.])/);
+      if (fraction) {
+        cursor += fraction[0].length;
+        const denominator = Number(fraction[1]);
+        if (denominator === 0) return fail("Division by zero");
+        inches /= denominator;
+      }
+      take('"');
+      value += inches;
+    }
+    return finite(value);
   }
-
-  throw new DimensionError(`Cannot parse dimension "${input}"`, input);
+  function unary(depth: number): number {
+    if (depth > 64) return fail("Dimension expression is nested too deeply");
+    if (take("+")) return unary(depth + 1);
+    if (take("-")) return -unary(depth + 1);
+    if (take("(")) {
+      const value = expression(depth + 1);
+      if (!take(")")) return fail("Missing closing parenthesis");
+      return value;
+    }
+    return literal();
+  }
+  function product(depth: number): number {
+    let value = unary(depth);
+    while (true) {
+      if (take("*")) value = finite(value * unary(depth));
+      else if (take("/")) {
+        const divisor = unary(depth);
+        if (divisor === 0) return fail("Division by zero");
+        value = finite(value / divisor);
+      } else return value;
+    }
+  }
+  function expression(depth: number): number {
+    let value = product(depth);
+    while (true) {
+      if (take("+")) value = finite(value + product(depth));
+      else if (take("-")) value = finite(value - product(depth));
+      else return value;
+    }
+  }
+  const value = expression(0);
+  space();
+  if (cursor !== source.length) return fail("Unexpected text in dimension");
+  return finite(value);
 }
 
-/** Parse a possibly-negative inch offset: a leading sign plus any parseDimension form. */
+/** Signed offsets use the same arithmetic and unit syntax as dimensions. */
 export function parseOffset(input: number | string): number {
-  if (typeof input === "number") return parseDimension(input);
-  const trimmed = normalizeMarks(input);
-  const sign = trimmed.startsWith("-") ? -1 : 1;
-  const body = trimmed.replace(/^[+-]\s*/, "");
-  if (!body) {
-    throw new DimensionError("Empty dimension", input);
-  }
-  return sign * parseDimension(body);
+  return parseDimension(input);
 }
 
 export type DimensionInput = number | string;
@@ -110,8 +136,16 @@ export function parseAt(
   return parseDimension(at);
 }
 
-/** Pretty-print inches using feet + sixteenths when helpful. */
-export function formatInches(inches: number, denom = 16): string {
+/** Pretty-print feet and decimal inches; pass a denominator to use fractions. */
+export function formatInches(inches: number, denom?: number): string {
+  if (denom === undefined) {
+    const rounded = Math.round(Math.abs(inches) * 10000) / 10000;
+    const feet = Math.floor(rounded / 12);
+    const remainder = Number((rounded - feet * 12).toFixed(4));
+    const sign = inches < 0 && rounded !== 0 ? "-" : "";
+    if (feet === 0) return sign + remainder + '"';
+    return sign + feet + "'" + (remainder === 0 ? "" : " " + remainder + '"');
+  }
   const sign = inches < 0 ? "-" : "";
   const abs = Math.abs(inches);
   const feet = Math.floor(abs / 12 + 1e-9);
@@ -146,5 +180,5 @@ export function formatInches(inches: number, denom = 16): string {
   if (wholeOut === 0 && frac === 0) {
     return `${sign}${feetOut}'`;
   }
-  return `${sign}${feetOut}'-${inchPart}"`;
+  return `${sign}${feetOut}' ${inchPart}"`;
 }

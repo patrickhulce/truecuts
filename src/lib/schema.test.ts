@@ -7,6 +7,26 @@ const base = {
 };
 
 describe("validateDocument", () => {
+  it("evaluates arithmetic in cuts, bores, and placement dimensions", () => {
+    const result = validateDocument({
+      version: 2,
+      name: "Dimension arithmetic",
+      members: [{
+        label: "Board", stock: "2x4x8",
+        cuts: [{ axis: 0, angle: 90, at: `5' - 1.5"` }],
+        bores: [{ face: "LxW@0", at: [`1' / 2`, `1/2" + 1/4"`], diameter: `1/4" / 2`, through: true }],
+      }],
+      components: [{
+        label: "Build", position: [`2' + 6"`, 0, 0],
+        members: [{ id: "board-1", position: [`-1' 6" + 2"`, 0, 0] }],
+      }],
+    });
+    expect(result.issues).toEqual([]);
+    expect(result.document?.members[0].cuts[0].at).toBe(58.5);
+    expect(result.document?.members[0].bores[0]).toMatchObject({ at: [6, 0.75], diameter: 0.125 });
+    expect(result.document?.components[0].position).toEqual([30, 0, 0]);
+    expect(result.document?.components[0].members[0].position).toEqual([-16, 0, 0]);
+  });
   it("derives ids from labels", () => {
     const { document, issues } = validateDocument({
       ...base,

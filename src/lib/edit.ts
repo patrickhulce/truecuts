@@ -6,6 +6,7 @@ import { assignIds, claimId, type Labeled } from "./identity";
 import { add, axisCoord, faceFrame, isFaceId, rotateEulerXYZ, worldPlacementPose, type Vec3 } from "./geometry";
 import type { RawConnectionFastener } from "./schema";
 import { formatInches, parseDimension } from "./units";
+import type { SawPoint } from "./saw";
 
 export class EditError extends Error {
   constructor(message: string) {
@@ -39,7 +40,7 @@ function fitsOnOneLine(node: { flow?: boolean; toString: () => string }): boolea
 /** Block-print components and placements. Keep short vectors, cuts, and fasteners in flow. */
 function styleNode(node: unknown, key: string | null, ancestors: readonly string[]): void {
   if (isSeq(node)) {
-    node.flow = key !== null && FLOW_SEQUENCES.has(key);
+    node.flow = (key !== null && FLOW_SEQUENCES.has(key)) || (key === null && ancestors.at(-1) === "outline");
     const next = key === null ? ancestors : [...ancestors, key];
     for (const child of node.items) styleNode(child, null, next);
     return;
@@ -1385,6 +1386,19 @@ function writeMemberCuts(doc: Document, memberIndex: number, cuts: MemberCutInpu
 }
 
 const YAML_CUTS = "Edit cuts in YAML to change this dimension.";
+
+/** Store a through-thickness saw profile without changing the placement or other cuts. */
+export function setMemberOutline(text: string, memberId: string, outline: SawPoint[]): string {
+  const doc = parseEditDocument(text);
+  const index = identified(doc).members.findIndex((member) => member.id === memberId);
+  if (index < 0) throw new EditError(`Unknown member "${memberId}"`);
+  const stock = doc.getIn(["members", index, "stock"]);
+  const part = typeof stock === "string" ? getCatalogPart(stock) : undefined;
+  if (!part || stockGeometry(part) !== "box") throw new EditError("The saw tool requires a board or sheet.");
+  const points = outline.map(point => point.map(value => Math.abs(value) < 1e-8 ? 0 : value));
+  doc.setIn(["members", index, "outline"], doc.createNode(points));
+  return stringifyDocument(doc);
+}
 
 /** Paint a member, or remove its paint to restore the stock finish. */
 export function setMemberPaint(text: string, memberId: string, color: string | null): string {

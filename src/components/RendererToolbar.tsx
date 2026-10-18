@@ -12,6 +12,9 @@ type RendererToolbarProps = {
   onExplode: (value: number) => void;
   resize: boolean;
   onResize: (value: boolean) => void;
+  saw: boolean;
+  canSaw: boolean;
+  onSaw: (value: boolean) => void;
   measure: boolean;
   onMeasure: (value: boolean) => void;
   showContacts: boolean;
@@ -40,6 +43,9 @@ export function RendererToolbar({
   onExplode,
   resize,
   onResize,
+  saw,
+  canSaw,
+  onSaw,
   measure,
   onMeasure,
   showContacts,
@@ -72,6 +78,9 @@ export function RendererToolbar({
       <div className="my-0.5 h-px w-6 bg-[#3d2a18]" />
       <ToolButton label="Resize (R)" pressed={resize} disabled={!enabled} onClick={() => onResize(!resize)}>
         <Scaling className="h-4 w-4" strokeWidth={1.75} aria-hidden="true" />
+      </ToolButton>
+      <ToolButton label={canSaw ? "Saw — draw a cut" : "Saw — select a board or sheet"} pressed={saw} disabled={!enabled || (!canSaw && !saw)} onClick={() => onSaw(!saw)}>
+        <CircularSawIcon />
       </ToolButton>
       <ToolButton label="Measure (M)" pressed={measure} disabled={!enabled} onClick={() => onMeasure(!measure)}>
         <RulerIcon />
@@ -190,6 +199,16 @@ export function CameraToolbar({
         <House className="h-4 w-4" strokeWidth={1.75} aria-hidden="true" />
       </ToolButton>
     </div>
+  );
+}
+
+function CircularSawIcon() {
+  return (
+    <svg viewBox="0 0 24 24" className="h-5 w-5" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinejoin="round" aria-hidden="true">
+      <path d="M3 15V9a3 3 0 0 1 3-3h5l3 3h3a4 4 0 0 1 4 4v2M6 6V3h6l3 4M2 15h20" />
+      <path d="m7 15-1 3 3-.2.5 3 2.5-1.7 2 2 1-3 3 .4-.5-3" />
+      <path d="M9 15a4 4 0 0 1 8 0" /><circle cx="13" cy="15" r="1" />
+    </svg>
   );
 }
 

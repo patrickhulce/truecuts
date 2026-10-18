@@ -1,4 +1,5 @@
 import { getCatalogPart, stockGeometry, type CatalogPart, type StockGeometry } from "./catalog";
+import { applySawOutline } from "./saw";
 import { expandConnections, rayFaceDistance, type ConnectionSolid, type SceneConnection } from "./connections";
 import {
   cliqueEdges,
@@ -303,6 +304,7 @@ function meshRod(member: ResolvedMember): Polyhedron {
 
 export function meshMember(member: ResolvedMember, stock: CatalogPart): Polyhedron {
   const geometry = stockGeometry(stock);
+  if (member.outline && geometry !== "box") throw new Error("Saw outlines require a board or sheet.");
   if (geometry === "rod") return meshRod(member);
   if (geometry !== "box") {
     const poly = hardwarePolyhedron(member, geometry);
@@ -314,7 +316,9 @@ export function meshMember(member: ResolvedMember, stock: CatalogPart): Polyhedr
   for (const cut of member.cuts) {
     assertCutInBounds(cut, member.size, member.id);
   }
-  const poly = applyCuts(member.size, member.cuts);
+  const poly = member.outline
+    ? applySawOutline(member.size, member.outline, member.cuts)
+    : applyCuts(member.size, member.cuts);
   if (polyhedronVolume(poly) < 1e-6) {
     throw new Error(`Cuts on ${member.id} removed all material`);
   }

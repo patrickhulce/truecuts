@@ -15,6 +15,7 @@ import {
   duplicateMemberPlacement,
   groupOccurrences,
   resizeMemberCut,
+  setMemberOutline,
   setComponentPose,
   setPlacementPose,
   type NewMemberInput,
@@ -785,6 +786,15 @@ export function Workspace() {
             onPlaceMember={handlePlaceMember}
             members={compiled.document?.members}
             onResizeMember={handleResizeMember}
+            onSawMember={(memberId, outline) => {
+              try {
+                const next = setMemberOutline(textRef.current, memberId, outline);
+                const result = compileDocument(next);
+                if (!result.scene) return result.diagnostics.find(item => item.severity === "error")?.message ?? "Could not apply the cut.";
+                commit(next);
+                return null;
+              } catch (cause) { return (cause as Error).message; }
+            }}
             exportApiRef={exportApiRef}
             isolatedId={isolatedId}
             onEnterIsolation={enterIsolation}

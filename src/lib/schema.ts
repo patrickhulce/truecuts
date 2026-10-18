@@ -55,6 +55,8 @@ const MemberSchema = z.object({
   /** Free axes of parameterized stock, in L, W, T order. Fixed axes are omitted. */
   size: z.array(DimensionSchema).min(1).max(3).optional(),
   cuts: z.array(CutSchema).optional(),
+  /** Saw profile in local [L, W] inches, extruded through T. */
+  outline: z.array(z.tuple([z.number().finite().nonnegative(), z.number().finite().nonnegative()])).min(3).max(512).optional(),
   bores: z.array(BoreSchema).default([]),
 });
 
@@ -238,6 +240,7 @@ export type ResolvedMember = {
   /** Named feature sizes (riser, flange) from the catalog. Empty for a box. */
   features: Record<string, number>;
   cuts: ResolvedCut[];
+  outline?: [number, number][];
   bores: ResolvedBore[];
 };
 
@@ -989,6 +992,7 @@ export function validateDocument(input: unknown): {
       size,
       features,
       cuts,
+      ...(member.outline ? { outline: member.outline } : {}),
       bores: resolvedBores.bores,
     });
   }

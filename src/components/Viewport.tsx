@@ -69,6 +69,8 @@ import { MeasurementOverlay } from "./MeasurementOverlay";
 import { MemberMesh } from "./MemberMesh";
 import { RenderAlertOverlay, useRenderAlert } from "./RenderAlert";
 import { CameraToolbar, RendererToolbar } from "./RendererToolbar";
+import { SawTool } from "./SawTool";
+import type { SawPoint } from "@/lib/saw";
 import { ResizeGizmo } from "./ResizeGizmo";
 
 type DraftPose = PartPose & { key: string };
@@ -127,6 +129,7 @@ type ViewportProps = {
   onPlaceMember?: (input: NewMemberInput, position: Vec3) => void;
   members?: ResolvedMember[];
   onResizeMember?: (update: ResizeUpdate) => string | null;
+  onSawMember?: (memberId: string, outline: SawPoint[]) => string | null;
   exportApiRef?: RefObject<ViewportExportApi | null>;
   /** Occurrence shown alone, in its own frame. Null is the full build. */
   isolatedId?: string | null;
@@ -372,6 +375,7 @@ export function Viewport({
   onPlaceMember,
   members = [],
   onResizeMember,
+  onSawMember,
   exportApiRef,
   isolatedId = null,
   onEnterIsolation,
@@ -409,6 +413,7 @@ export function Viewport({
   const frameableRef = useRef(false);
   const controlsRef = useRef<ComponentRef<typeof OrbitControls>>(null);
   const [resize, setResize] = useState(false);
+  const [saw, setSaw] = useState(false);
   const [measure, setMeasure] = useState(false);
   const [activeMeasuredAxis, setActiveMeasuredAxis] = useState<0 | 1 | 2 | null>(null);
   const [resizePreview, setResizePreview] = useState<ResizePreview | null>(null);
@@ -434,8 +439,10 @@ export function Viewport({
         return;
       }
       const key = event.key.toLowerCase();
+      if (key === "escape") { setSaw(false); return; }
       if (key !== "p" && key !== "r" && key !== "m") return;
       event.preventDefault();
+      setSaw(false);
       setDragActive(false);
       setDraft(null);
       setGroupDraft(null);
@@ -943,9 +950,9 @@ export function Viewport({
       scene,
       worldOffsets,
       onMarqueeSelect,
-      enabled: !pan && !resize && !measure,
+      enabled: !pan && !resize && !measure && !saw,
     };
-  }, [measure, onMarqueeSelect, pan, resize, scene, worldOffsets]);
+  }, [measure, onMarqueeSelect, pan, resize, saw, scene, worldOffsets]);
 
   useLayoutEffect(() => {
     if (!capturing) return;
@@ -1086,6 +1093,7 @@ export function Viewport({
           gizmoPose &&
           onChangePoses &&
           !resize &&
+          !saw &&
           !measure &&
           parseInstanceKey(selected.key).componentId === component.id,
       );
@@ -1122,7 +1130,7 @@ export function Viewport({
                 (hasSelection || hoveredMemberKeys.size > 0)
               }
               offset={toLocalOffset(worldOffsets.get(part.key) ?? ZERO, qInv)}
-              interactive={!pan && !measure}
+              interactive={!pan && !measure && !saw}
               boreDiameter={boreDiameter}
               showUnattached={showUnattached}
               onSelect={selectPart}
@@ -1138,6 +1146,17 @@ export function Viewport({
             />
           ))}
           {renderOccurrence(component.children, component)}
+          {saw && !capturing && selected && onSawMember && parseInstanceKey(selected.key).componentId === component.id ? (
+            <group position={selected.position} rotation={deg(selected.rotation)}>
+              <SawTool
+                key={selected.key + JSON.stringify(selected.faces)}
+                faces={selected.faces}
+                fineSnap={fineSnap}
+                onCommit={outline => onSawMember(selected.memberId, outline)}
+                onExit={() => setSaw(false)}
+              />
+            </group>
+          ) : null}
           {showResize && resizeDefinition && selected ? (
             <group position={toLocalOffset(worldOffsets.get(selected.key) ?? ZERO, qInv)}>
               <group position={selected.position} rotation={deg(selected.rotation)}>
@@ -1217,7 +1236,7 @@ export function Viewport({
         frameloop="demand"
         camera={{ position: [90, 55, 90], fov: 35, near: 0.1, far: 4000 }}
         onPointerMissed={() => {
-          if (!pan && !measure) selectPart(null);
+          if (!pan && !measure && !saw) selectPart(null);
         }}
         gl={{ antialias: true }}
         onCreated={({ gl, camera, scene: threeScene }) => {
@@ -1259,7 +1278,7 @@ export function Viewport({
           sectionColor="#6b4a2b"
         />
         {scene ? renderOccurrence(scene.components, null) : null}
-        {groupBounds && onChangePoses && !capturing && !pan && !resize && !measure ? (
+        {groupBounds && onChangePoses && !capturing && !pan && !resize && !measure && !saw ? (
           <PartGizmo
             key={`${selectedKeys.join("|")}:${groupBounds.min.join(",")}:${groupBounds.max.join(",")}`}
             pose={{ position: groupDraft ?? ZERO, rotation: ZERO }}
@@ -1272,7 +1291,7 @@ export function Viewport({
             onCommit={commitGroup}
           />
         ) : null}
-        {componentGroupBounds && onChangeComponentPose && !capturing && !pan && !resize && !measure ? (
+        {componentGroupBounds && onChangeComponentPose && !capturing && !pan && !resize && !measure && !saw ? (
           <PartGizmo
             key={componentSelection.join("|")}
             pose={{ position: groupDraft ?? ZERO, rotation: ZERO }}
@@ -1292,6 +1311,7 @@ export function Viewport({
         !capturing &&
         !pan &&
         !resize &&
+        !saw &&
         !measure ? (
           <PartGizmo
             key={`${selectedComponent.id}:${selectedComponent.worldPosition.join(",")}:${selectedComponent.worldRotation.join(",")}`}
@@ -1338,7 +1358,7 @@ export function Viewport({
             focusedKey={focusedPatch}
             onFocus={setFocusedPatch}
             omitKeys={editedPatchKeys}
-            interactive={!pan && !measure}
+            interactive={!pan && !measure && !saw}
           />
         ) : null}
         {measure && scene && !capturing ? (
@@ -1353,8 +1373,8 @@ export function Viewport({
           ref={controlsRef}
           makeDefault
           enabled={!dragging}
+          enableRotate={!saw && !(shiftHeld && !pan && !resize && !measure)}
           // Shift+left pans inside OrbitControls, so both stay off while a marquee can start.
-          enableRotate={!(shiftHeld && !pan && !resize && !measure)}
           enablePan={!(shiftHeld && !pan && !resize && !measure)}
           screenSpacePanning
           mouseButtons={{
@@ -1399,9 +1419,24 @@ export function Viewport({
         onUndo={onUndo}
         onRedo={onRedo}
         explode={explode}
-        onExplode={setExplode}
+        onExplode={(next) => { setSaw(false); setExplode(next); }}
+        saw={saw}
+        canSaw={Boolean(selected && getCatalogPart(selected.stockId) && stockGeometry(getCatalogPart(selected.stockId)!) === "box")}
+        onSaw={(next) => {
+          setSaw(next);
+          setResize(false);
+          setMeasure(false);
+          setPan(false);
+          setExplode(0);
+          setDragActive(false);
+          setDraft(null);
+          setGroupDraft(null);
+          setComponentDraft(null);
+          setResizePreview(null);
+        }}
         resize={resize}
         onResize={(next) => {
+          setSaw(false);
           setResize(next);
           setPan(false);
           setMeasure(false);
@@ -1413,6 +1448,7 @@ export function Viewport({
         }}
         measure={measure}
         onMeasure={(next) => {
+          setSaw(false);
           setMeasure(next);
           setPan(false);
           setResize(false);
@@ -1433,6 +1469,7 @@ export function Viewport({
         canFrame={buildBounds !== null}
         onResetView={() => setResetToken((token) => token + 1)}
         onPan={(next) => {
+          setSaw(false);
           setPan(next);
           setResize(false);
           setMeasure(false);

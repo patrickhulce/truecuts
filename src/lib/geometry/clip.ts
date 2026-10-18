@@ -29,7 +29,7 @@ function orderCap(points: Vec3[], normal: Vec3): Face {
   return sorted;
 }
 
-function clipFace(face: Face, plane: Plane): { polygon: Face; intersections: Vec3[] } {
+export function clipFace(face: Face, plane: Plane): { polygon: Face; intersections: Vec3[] } {
   const polygon: Face = [];
   const intersections: Vec3[] = [];
   if (face.length === 0) return { polygon, intersections };

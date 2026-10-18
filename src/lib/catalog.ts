@@ -2,6 +2,10 @@ export type Vec3 = [number, number, number];
 
 export type CatalogKind = "lumber" | "sheet" | "hardware" | "fastener";
 
+export function canPaintStock(part: CatalogPart | undefined): boolean {
+  return part?.material === "plywood" || part?.material === "hardboard";
+}
+
 export type FastenerSubtype =
   | "screw"
   | "glue"

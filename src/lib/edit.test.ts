@@ -27,6 +27,7 @@ import {
   setComponentPose,
   setConnectionFastener,
   setMemberDimension,
+  setMemberPaint,
   setPlacementPose,
   formatDocumentYaml,
   SNAP_DEG,
@@ -91,6 +92,49 @@ components:
     members:
       - { id: a-1 }
 `;
+
+describe("member paint", () => {
+  const panel = (stock: string) => `version: 2
+name: Paint
+members:
+  - label: Panel
+    stock: ${stock}
+    cuts: [{ axis: 0, angle: 90, at: 48 }]
+components:
+  - label: Build
+    position: [0, 0, 0]
+    members: [{ id: panel-1 }]
+`;
+
+  it.each(["plywood-3/4-4x8", "hardboard-1/8-4x8"])("paints and restores %s without changing its geometry", (stock) => {
+    const text = panel(stock);
+    const before = compileDocument(text).scene!.components[0].members[0];
+    const painted = setMemberPaint(text, "panel-1", "#12ABEF");
+    const result = compileDocument(painted);
+    expect(result.diagnostics.filter((item) => item.severity === "error")).toEqual([]);
+    expect(result.document!.members[0].paint).toBe("#12abef");
+    expect(result.scene!.components[0].members[0]).toMatchObject({ color: "#12abef", paint: "#12abef", finished: before.finished });
+    const restored = compileDocument(setMemberPaint(painted, "panel-1", null));
+    expect(restored.document!.members[0].paint).toBeUndefined();
+    expect(restored.scene!.components[0].members[0].color).toBe(before.color);
+  });
+
+  it("preserves paint on independent copies", () => {
+    const painted = setMemberPaint(panel("hardboard-1/8-4x8"), "panel-1", "#336699");
+    const copied = duplicateMemberPlacement(painted, "build-1", 0, [50, 0, 0], [0, 0, 0]);
+    const next = compileDocument(setMemberPaint(copied, "panel-2", "#ffffff"));
+    expect(next.scene!.components[0].members.map((member) => member.color)).toEqual(["#336699", "#ffffff"]);
+  });
+
+  it("rejects unsupported stock and invalid colors in edits and YAML", () => {
+    expect(() => setMemberPaint(panel("osb-7/16-4x8"), "panel-1", "#ffffff")).toThrow(EditError);
+    expect(() => setMemberPaint(panel("plywood-3/4-4x8"), "panel-1", "red")).toThrow(EditError);
+    for (const [stock, color] of [["2x4x8", "#ffffff"], ["plywood-3/4-4x8", "not-a-color"]]) {
+      const result = compileDocument(panel(stock).replace(`stock: ${stock}`, `stock: ${stock}\n    paint: "${color}"`));
+      expect(result.diagnostics.some((item) => item.severity === "error" && item.path?.includes("paint"))).toBe(true);
+    }
+  });
+});
 
 describe("parseInstanceKey", () => {
   it("round-trips instanceKey", () => {

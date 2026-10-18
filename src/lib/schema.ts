@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { getCatalogPart, getFastenerSubtype, resolveStockSize, stockGeometry, type Vec3 } from "./catalog";
+import { canPaintStock, getCatalogPart, getFastenerSubtype, resolveStockSize, stockGeometry, type Vec3 } from "./catalog";
 import { FACE_IDS, placeBore, type FaceId, type PlacedBore } from "./geometry/faces";
 import { claimId, isValidId } from "./identity";
 import { parseAt, parseDimension, type DimensionInput } from "./units";
@@ -51,6 +51,7 @@ const MemberSchema = z.object({
   id: z.string().optional(),
   label: z.string().min(1),
   stock: z.string().min(1),
+  paint: z.string().regex(/^#[0-9a-fA-F]{6}$/, "Paint must be a six-digit hex color, e.g. #336699").optional(),
   /** Free axes of parameterized stock, in L, W, T order. Fixed axes are omitted. */
   size: z.array(DimensionSchema).min(1).max(3).optional(),
   cuts: z.array(CutSchema).optional(),
@@ -231,6 +232,7 @@ export type ResolvedMember = {
   id: string;
   label: string;
   stock: string;
+  paint?: string;
   /** Actual L×W×T. Catalog default when the member omits `size`. */
   size: Vec3;
   /** Named feature sizes (riser, flange) from the catalog. Empty for a box. */
@@ -949,6 +951,10 @@ export function validateDocument(input: unknown): {
     }
 
     const catalog = getCatalogPart(member.stock);
+    if (member.paint !== undefined && !canPaintStock(catalog)) {
+      issues.push({ message: "Paint is supported on plywood and hardboard", path: ["members", index, "paint"] });
+      continue;
+    }
     let size: Vec3 = [0, 0, 0];
     let features: Record<string, number> = {};
     if (catalog) {
@@ -979,6 +985,7 @@ export function validateDocument(input: unknown): {
       id: member.id,
       label: member.label,
       stock: member.stock,
+      ...(member.paint === undefined ? {} : { paint: member.paint.toLowerCase() }),
       size,
       features,
       cuts,

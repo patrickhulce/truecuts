@@ -1,5 +1,5 @@
 import { isMap, isPair, isScalar, isSeq, parseDocument, type Document, type YAMLMap } from "yaml";
-import { getCatalogPart, getFastenerSubtype, resolveStockSize, stockGeometry, type AxisName } from "./catalog";
+import { canPaintStock, getCatalogPart, getFastenerSubtype, resolveStockSize, stockGeometry, type AxisName } from "./catalog";
 import { freeAxes, sizeOverride } from "./catalog-families";
 import { parseNestedOccurrence, templateIdFromOccurrence } from "./fasteners";
 import { assignIds, claimId, type Labeled } from "./identity";
@@ -1385,6 +1385,24 @@ function writeMemberCuts(doc: Document, memberIndex: number, cuts: MemberCutInpu
 }
 
 const YAML_CUTS = "Edit cuts in YAML to change this dimension.";
+
+/** Paint a member, or remove its paint to restore the stock finish. */
+export function setMemberPaint(text: string, memberId: string, color: string | null): string {
+  const doc = parseEditDocument(text);
+  const index = identified(doc).members.findIndex((member) => member.id === memberId);
+  if (index < 0) throw new EditError(`Unknown member "${memberId}"`);
+  const stock = doc.getIn(["members", index, "stock"]);
+  if (color !== null) {
+    if (typeof stock !== "string" || !canPaintStock(getCatalogPart(stock))) {
+      throw new EditError("Paint is supported on plywood and hardboard");
+    }
+    if (!/^#[0-9a-fA-F]{6}$/.test(color)) throw new EditError("Paint must be a six-digit hex color");
+    doc.setIn(["members", index, "paint"], color.toLowerCase());
+  } else {
+    doc.deleteIn(["members", index, "paint"]);
+  }
+  return stringifyDocument(doc);
+}
 
 /**
  * Set one finished dimension (0 = L, 1 = W, 2 = T).

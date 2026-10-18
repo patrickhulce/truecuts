@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
-import { fitsTConnector, getCatalogPart } from "@/lib/catalog";
+import { canPaintStock, fitsTConnector, getCatalogPart } from "@/lib/catalog";
 import { connectionKey, connectionNailReach, detailNeighborKeys, type SceneConnection } from "@/lib/connections";
 import { fittingHardware, hardwareKindLabel, isHardwareKind } from "@/lib/hardware-fastener";
 import {
@@ -13,6 +13,7 @@ import {
   promoteExplicitFasteners,
   setConnectionFastener,
   setMemberDimension,
+  setMemberPaint,
   setPlacementPose,
 } from "@/lib/edit";
 import { parseInstanceKey } from "@/lib/fasteners";
@@ -1058,6 +1059,22 @@ function PartDetail({
             </button>
           </div>
 
+          {canPaintStock(getCatalogPart(instance.stockId)) ? (
+            <PaintEditor
+              key={`${instance.memberId}:${definition?.paint ?? "unpainted"}`}
+              color={definition?.paint}
+              stockColor={getCatalogPart(instance.stockId)!.color}
+              onSave={(color) => {
+                try {
+                  commitNext(setMemberPaint(textRef.current, instance.memberId, color));
+                  return null;
+                } catch (cause) {
+                  return cause instanceof Error ? cause.message : "Could not update paint";
+                }
+              }}
+            />
+          ) : null}
+
           <SectionLabel>Dimensions</SectionLabel>
           <div className="grid grid-cols-[auto_minmax(0,1fr)] items-center gap-x-3 gap-y-1 px-3 text-sm">
             <span className="text-[#8a7355]">L</span>
@@ -1256,6 +1273,49 @@ function PartDetail({
         </div>
       ) : null}
     </div>
+  );
+}
+
+function PaintEditor({ color, stockColor, onSave }: {
+  color?: string;
+  stockColor: string;
+  onSave: (color: string | null) => string | null;
+}) {
+  const [draft, setDraft] = useState(color ?? stockColor);
+  const [error, setError] = useState<string | null>(null);
+  return (
+    <>
+      <SectionLabel>Paint</SectionLabel>
+      <div className="px-3">
+        <div className="flex flex-wrap items-center gap-2">
+          <label className="flex items-center gap-2 text-xs text-[#d6c3a3]">
+            <input
+              type="color"
+              aria-label="Paint color"
+              value={draft}
+              onChange={(event) => { setDraft(event.target.value); setError(null); }}
+              className="h-9 w-12 cursor-pointer rounded border border-[#3d2a18] bg-[#1a120b] p-1"
+            />
+            <span className="font-mono">{draft}</span>
+          </label>
+          <button
+            type="button"
+            disabled={draft === color}
+            onClick={() => setError(onSave(draft))}
+            className="cursor-pointer rounded border border-[#3d2a18] px-2 py-1 text-xs text-[#f59e0b] hover:bg-[#2a1d12] disabled:cursor-default disabled:opacity-40"
+          >Apply paint</button>
+          {color ? (
+            <button
+              type="button"
+              onClick={() => setError(onSave(null))}
+              className="cursor-pointer rounded border border-[#3d2a18] px-2 py-1 text-xs text-[#d6c3a3] hover:text-[#f59e0b]"
+            >Remove paint</button>
+          ) : null}
+        </div>
+        {!color ? <p className="mt-1 text-[11px] text-[#8a7355]">Unpainted · original stock finish</p> : null}
+        {error ? <p role="alert" className="mt-1 text-xs text-rose-400">{error}</p> : null}
+      </div>
+    </>
   );
 }
 

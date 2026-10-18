@@ -217,7 +217,7 @@ export function MemberMesh({
       {markUnattached ? (
         <meshStandardMaterial
           key="stripes"
-          color="#ffffff"
+          color={instance.paint ?? "#ffffff"}
           roughness={dimmed ? 0.35 : 0.45}
           metalness={0.04}
           transparent

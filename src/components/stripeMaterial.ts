@@ -28,7 +28,7 @@ export function applyStripeShader(shader: THREE.WebGLProgramParametersWithUnifor
       "#include <color_fragment>",
       `#include <color_fragment>
        float stripe = step(0.5, fract((vWorldStripe.x + vWorldStripe.y) * 0.45));
-       diffuseColor.rgb = mix(vec3(1.0), vec3(0.86, 0.12, 0.12), stripe);`,
+       diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.86, 0.12, 0.12), stripe);`,
     );
 }
 

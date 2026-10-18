@@ -51,6 +51,7 @@ export type SceneMemberInstance = {
   stockLabel: string;
   material: string;
   color: string;
+  paint?: string;
   faces: Polyhedron;
   /** Bores written on the member. Connection pilots and clearance live in `derivedBores`. */
   bores: ResolvedBore[];
@@ -530,7 +531,8 @@ function buildOccurrence(
         stockId: mesh.stock.id,
         stockLabel: mesh.stock.label,
         material: mesh.stock.material,
-        color: mesh.stock.color,
+        color: mesh.member.paint ?? mesh.stock.color,
+        ...(mesh.member.paint === undefined ? {} : { paint: mesh.member.paint }),
         faces: mesh.faces,
         bores: [...mesh.member.bores],
         derivedBores: [],
